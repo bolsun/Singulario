@@ -3012,6 +3012,9 @@ public partial class NucleusLayer : Node2D
 	{
 		public List<SavedNucleus> Nuclei { get; set; } = new();
 		public List<SavedSource> Sources { get; set; } = new();
+		// Молекулы слоя 2 (см. MoleculeLayer). В старых сохранениях поля нет —
+		// остаётся пустой список из инициализатора.
+		public List<MoleculeLayer.SavedMolecule> Molecules { get; set; } = new();
 	}
 
 	private class SavedNucleus
@@ -3049,6 +3052,8 @@ public partial class NucleusLayer : Node2D
 		foreach (var layer in _energyClusterLayers)
 			foreach (var (row, col) in layer.EnumerateCells())
 				data.Sources.Add(new SavedSource { Tier = layer.Tier, Row = row, Col = col });
+
+		if (_moleculeLayer != null) data.Molecules = _moleculeLayer.ExportMolecules();
 
 		return JsonSerializer.Serialize(data, FieldJsonOptions);
 	}
@@ -3117,7 +3122,11 @@ public partial class NucleusLayer : Node2D
 			if (!found) GD.PrintErr($"[NucleusLayer] импорт: не найден слой-источник тира {ss.Tier} — клетка ({ss.Row},{ss.Col}) пропущена.");
 		}
 
-		GD.Print($"[NucleusLayer] поле загружено из JSON: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, тик сброшен в 0.");
+		// Молекулы — после слоя 1: в чанк с содержимым слоя 1 они не ставятся.
+		var moleculesList = data.Molecules ?? new List<MoleculeLayer.SavedMolecule>();
+		int moleculesPlaced = _moleculeLayer?.ImportMolecules(moleculesList) ?? 0;
+
+		GD.Print($"[NucleusLayer] поле загружено из JSON: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, молекул {moleculesPlaced}/{moleculesList.Count}, тик сброшен в 0.");
 		error = null;
 		return true;
 	}
@@ -3143,6 +3152,7 @@ public partial class NucleusLayer : Node2D
 		_claimed.Clear();
 
 		foreach (var layer in _energyClusterLayers) layer.ClearAll();
+		_moleculeLayer?.ClearAll();
 
 		// По заданию — при загрузке тик должен быть 0, а вместе с ним и все
 		// производные величины часов симуляции, чтобы не осталось дробного
