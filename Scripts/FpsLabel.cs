@@ -7,6 +7,7 @@ using Godot;
 public partial class FpsLabel : Label
 {
 	private NucleusLayer _nucleusLayer;
+	private MoleculeLayer _moleculeLayer;
 
 	public override void _Ready()
 	{
@@ -17,6 +18,7 @@ public partial class FpsLabel : Label
 		// Абсолютный путь от корня сцены — не зависит от того, где именно
 		// в дереве лежит сам HUD/Label.
 		_nucleusLayer = GetNodeOrNull<NucleusLayer>("/root/Main/NucleusLayer");
+		_moleculeLayer = GetNodeOrNull<MoleculeLayer>("/root/Main/MoleculeLayer");
 	}
 
 	public override void _Process(double delta)
@@ -26,6 +28,7 @@ public partial class FpsLabel : Label
 			+ $"\nChunks: {_nucleusLayer.VisibleChunkCount}/{_nucleusLayer.TotalChunkCount}"
 			+ $"\nЯдра: {_nucleusLayer.ActiveNucleusCount}"
 			: "";
-		Text = $"FPS: {Engine.GetFramesPerSecond()}  Слой {ViewLayer.Current}{extraInfo}";
+		string ratio = _moleculeLayer != null ? $"  k = {_moleculeLayer.L2TickRatio}" : "";
+		Text = $"FPS: {Engine.GetFramesPerSecond()}  Слой {ViewLayer.Current}{ratio}{extraInfo}";
 	}
 }

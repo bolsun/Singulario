@@ -9,8 +9,9 @@ using System.Collections.Generic;
 // 1/ChunkSize) выглядит ровно как ядро слоя 1 при зуме 1.
 //
 // Вращение — те же законы, что у ядер, но в тиках слоя 2: 1 тик слоя 2 =
-// L2TickRatio тиков слоя 1, поэтому период шага молекулы = TierTicks[tier] *
-// L2TickRatio. Фаза не хранится — чистая функция глобального тика
+// L2TickRatio (k) тиков слоя 1, поэтому период шага молекулы = TierTicks[tier] *
+// L2TickRatio. k — настройка прототипа (T001b: сравниваем k = 1 и k = 8, GDD
+// пока фиксирует k = 8), в сохранение не пишется; K переключает её на лету. Фаза не хранится — чистая функция глобального тика
 // NucleusLayer (единые часы, пауза общая), см. RingMath. Своих тиков у слоя
 // нет: переноса атомов пока нет (T002), поэтому и "сна" до фазы 0, как у
 // ядер слоя 1, у молекулы нет — она сразу крутится в общей фазе своего тира.
@@ -22,8 +23,11 @@ using System.Collections.Generic;
 // заливку L2-клеток (см. _Draw), пока детальная отрисовка слоя 1 скрыта.
 public partial class MoleculeLayer : Node2D
 {
-	// Закон GDD: 1 тик слоя 2 = 8 тиков слоя 1.
-	public const int L2TickRatio = 8;
+	// Соотношение времени слоёв k: 1 тик слоя 2 = k тиков слоя 1 — одно место
+	// истины. Допустимо 1/2/4/8 (степени двойки, чтобы периоды молекул делили
+	// периоды колец); иное значение при запуске приводится к ближайшему.
+	[Export] public int L2TickRatio = 1;
+	private static readonly int[] AllowedTickRatios = { 1, 2, 4, 8 };
 
 	[Export] public float FillAlpha = 0.35f;
 	[Export] public float BlockedAlpha = 0.35f;
@@ -108,6 +112,13 @@ public partial class MoleculeLayer : Node2D
 		_scale = _chunkSize;
 		_currentSpinDirection = _nucleusLayer.SpinDirection;
 
+		int ratio = NearestAllowedTickRatio(L2TickRatio);
+		if (ratio != L2TickRatio)
+		{
+			GD.PushWarning($"[MoleculeLayer] L2TickRatio = {L2TickRatio} недопустимо (1/2/4/8) — используется {ratio}.");
+			L2TickRatio = ratio;
+		}
+
 		_coreQuad = new QuadMesh { Size = new Vector2(_nucleusLayer.SpriteSize, _nucleusLayer.SpriteSize) };
 		_holeQuad = new QuadMesh { Size = new Vector2(_nucleusLayer.HoleSpriteSize, _nucleusLayer.HoleSpriteSize) };
 
@@ -160,6 +171,24 @@ public partial class MoleculeLayer : Node2D
 		ViewLayer.Changed -= OnViewLayerChanged;
 	}
 
+	// Ближайшее допустимое k; при равном расстоянии — меньшее.
+	private static int NearestAllowedTickRatio(int value)
+	{
+		int best = AllowedTickRatios[0];
+		foreach (int r in AllowedTickRatios)
+			if (System.Math.Abs(r - value) < System.Math.Abs(best - value)) best = r;
+		return best;
+	}
+
+	// K — следующее k по кругу 1 → 2 → 4 → 8 → 1 (сравнение темпа на лету;
+	// скачок фазы молекул при переключении допустим).
+	private void CycleTickRatio()
+	{
+		int i = System.Array.IndexOf(AllowedTickRatios, L2TickRatio);
+		L2TickRatio = AllowedTickRatios[(i + 1) % AllowedTickRatios.Length];
+		GD.Print($"[MoleculeLayer] соотношение времени слоёв k = {L2TickRatio}.");
+	}
+
 	private void OnViewLayerChanged(int layer)
 	{
 		_leftMouseHeld = false;
@@ -181,8 +210,18 @@ public partial class MoleculeLayer : Node2D
 
 	public override void _Input(InputEvent @event)
 	{
-		if (!_ready || !ViewLayer.IsLayer2) return;
+		if (!_ready) return;
 		if (@event is not InputEventKey key || !key.Pressed || key.Echo) return;
+
+		// K работает на обоих слоях — это настройка прототипа, не действие с молекулой.
+		if (key.Keycode == Key.K)
+		{
+			CycleTickRatio();
+			GetViewport().SetInputAsHandled();
+			return;
+		}
+
+		if (!ViewLayer.IsLayer2) return;
 
 		if (key.Keycode == Key.R)
 		{
