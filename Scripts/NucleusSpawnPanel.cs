@@ -25,6 +25,12 @@ public partial class NucleusSpawnPanel : Control
 	// Чёрная дыра (см. BlackHoleLayer) — терраин-объект без тиров, поэтому
 	// на панели у неё всего одна кнопка (не 3, как у ядер/скоплений частиц).
 	private BlackHoleLayer _blackHoleLayer;
+	// Слой 2 (см. MoleculeLayer): на нём панель показывает свою сетку кнопок
+	// молекул вместо кнопок слоя 1 (см. ApplyViewLayer). Выбранный инструмент
+	// каждый слой хранит у себя, поэтому при переключении он не теряется.
+	private MoleculeLayer _moleculeLayer;
+	private GridContainer _layer1Grid;
+	private GridContainer _layer2Grid;
 
 	// label — однобуквенная метка тира для подписи кнопки, tier — индекс в
 	// NucleusLayer.PalettePaths (0=синий,1=красный,2=жёлтый).
@@ -86,6 +92,8 @@ public partial class NucleusSpawnPanel : Control
 		// обычные тиры, серое ядро, поворачиватель И бросатель (см.
 		// ThrowerCoreTier в NucleusLayer.cs).
 		int totalRows = HoleCounts.Length * 4 + 1 + clusterRows;
+		// Слой 2: Ж/К/С x 2/4/8 плюс строка серых Сер2/Сер4/Сер8.
+		if (ViewLayer.IsLayer2) totalRows = HoleCounts.Length + 1;
 
 		int widthPx = ButtonSize * 3; // ровно столько колонок в GridContainer
 		int heightPx = ButtonSize * totalRows;
@@ -103,6 +111,7 @@ public partial class NucleusSpawnPanel : Control
 	{
 		var tree = GetTree();
 		if (tree?.Root != null) tree.Root.SizeChanged -= RecomputeLayout;
+		ViewLayer.Changed -= OnViewLayerChanged;
 	}
 
 	public override void _Ready()
@@ -112,6 +121,7 @@ public partial class NucleusSpawnPanel : Control
 		_nucleusLayer = GetNodeOrNull<NucleusLayer>("/root/Main/NucleusLayer");
 		_energyLayer = GetNodeOrNull<EnergyLayer>("/root/Main/TileMapLayer");
 		_blackHoleLayer = GetNodeOrNull<BlackHoleLayer>("/root/Main/BlackHoleLayer");
+		_moleculeLayer = GetNodeOrNull<MoleculeLayer>("/root/Main/MoleculeLayer");
 		_particleLayers = LoadParticleLayers();
 		_tierColors = LoadTierColors();
 
@@ -143,6 +153,7 @@ public partial class NucleusSpawnPanel : Control
 		grid.AddThemeConstantOverride("h_separation", 0);
 		grid.AddThemeConstantOverride("v_separation", 0);
 		AddChild(grid);
+		_layer1Grid = grid;
 
 		foreach (int holeCount in HoleCounts)
 		{
@@ -306,6 +317,56 @@ public partial class NucleusSpawnPanel : Control
 			button.Pressed += OnBlackHolePressed;
 			grid.AddChild(button);
 		}
+
+		BuildLayer2Grid();
+		ViewLayer.Changed += OnViewLayerChanged;
+		ApplyViewLayer();
+	}
+
+	// Кнопки молекул слоя 2: те же подписи и цвета, что у ядер слоя 1
+	// (Ж/К/С x 2/4/8 и Сер2/4/8). Поворачиватель и бросатель на слое 2 пока
+	// не поддерживаются (T001).
+	private void BuildLayer2Grid()
+	{
+		_layer2Grid = new GridContainer { Columns = 3 };
+		_layer2Grid.AddThemeConstantOverride("h_separation", 0);
+		_layer2Grid.AddThemeConstantOverride("v_separation", 0);
+		AddChild(_layer2Grid);
+
+		int grayTier = _nucleusLayer?.GrayCoreTier ?? 3;
+		foreach (int holeCount in HoleCounts)
+		{
+			foreach (var (label, tier) in Tiers)
+				AddMoleculeButton($"{label}{holeCount}", tier, holeCount);
+		}
+		foreach (int holeCount in HoleCounts)
+			AddMoleculeButton($"Сер{holeCount}", grayTier, holeCount);
+	}
+
+	private void AddMoleculeButton(string text, int tier, int holeCount)
+	{
+		var button = new Button
+		{
+			Text = text,
+			CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
+		};
+		Color c = (tier >= 0 && tier < _tierColors.Length) ? _tierColors[tier] : GrayButtonColor;
+		button.AddThemeColorOverride("font_color", c);
+		button.AddThemeColorOverride("font_hover_color", c);
+		button.AddThemeColorOverride("font_pressed_color", c);
+		button.AddThemeColorOverride("font_focus_color", c);
+		button.Pressed += () => _moleculeLayer?.SelectPreset(tier, holeCount);
+		_layer2Grid.AddChild(button);
+	}
+
+	private void OnViewLayerChanged(int layer) => ApplyViewLayer();
+
+	private void ApplyViewLayer()
+	{
+		bool layer2 = ViewLayer.IsLayer2;
+		if (_layer1Grid != null) _layer1Grid.Visible = !layer2;
+		if (_layer2Grid != null) _layer2Grid.Visible = layer2;
+		RecomputeLayout();
 	}
 
 	// Находит все узлы со скриптом EnergyClusterLayer среди детей Main (по
