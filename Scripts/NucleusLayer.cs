@@ -615,12 +615,7 @@ public partial class NucleusLayer : Node2D
 	// для этого шага, и для взаимоисключающего сброса выбора на панели спавна
 	// (та же причина, что и у _energyLayer/_energyClusterLayers).
 	private BlackHoleLayer _blackHoleLayer;
-	// Порядок специально подобран так, чтобы N штук дырок ложились симметрично:
-	// первые 2 (0,4) — противоположная пара (N/S, "напротив друг друга" для С2);
-	// первые 4 (0,4,2,6) — все 4 стороны света под 90° (С4); все 8 — просто всё
-	// кольцо (С8). Если брать по порядку {0,2,4,6,...}, для 2 штук получались бы
-	// соседние 90°-слоты, а не противоположные — было неверно, отсюда и правка.
-	private static readonly int[] HolePriority = { 0, 4, 2, 6, 1, 5, 3, 7 };
+	// Порядок гнёзд (симметричные раскладки 2/4/8) — см. RingMath.HolePriority.
 
 	public override void _Ready()
 	{
@@ -2452,9 +2447,7 @@ public partial class NucleusLayer : Node2D
 	private int DiscreteRotationOffset(NucleusEntity n)
 	{
 		int ticks = n.CoreTier < TierTicks.Length ? TierTicks[n.CoreTier] : TierTicks[TierTicks.Length - 1];
-		if (ticks <= 0) return 0;
-		long steps = (_globalTick / ticks) * n.Dir;
-		return (int)(((steps % 8) + 8) % 8);
+		return RingMath.RotationStep(_globalTick, ticks, n.Dir);
 	}
 
 	// Физический слот (индекс в Ring, он же индекс рендера), который у ЭТОГО
@@ -2618,7 +2611,7 @@ public partial class NucleusLayer : Node2D
 				continuousOffset = DiscreteRotationOffset(n);
 				if (ticks > 0)
 				{
-					float ticksSinceRotation = _globalTick % ticks;
+					float ticksSinceRotation = RingMath.TicksIntoStep(_globalTick, ticks);
 					float fraction = (ticksSinceRotation + _subTickFraction) / ticks; // 0..1 до следующего шага поворота
 					continuousOffset += fraction * n.Dir;
 				}
@@ -2838,14 +2831,12 @@ public partial class NucleusLayer : Node2D
 	// физических позиций) — и ВСЕ они дырки, частиц нет вообще. Остальные
 	// 8-holeCount позиций физически не существуют (Exists=false — не
 	// рисуются и не участвуют в передаче, см. UpdateChunkVisuals/SimTick).
-	// Позиции гнёзд берутся по HolePriority, чтобы получались симметричные
+	// Позиции гнёзд берутся по RingMath.SlotMask, чтобы получались симметричные
 	// фигуры: 2 — строго друг напротив друга, 4 — крестом по всем сторонам
 	// света, 8 — всё кольцо.
 	private static RingSlot[] BuildFixedRing(int holeCount)
 	{
-		holeCount = Mathf.Clamp(holeCount, 0, 8);
-		var exists = new bool[8];
-		for (int i = 0; i < holeCount; i++) exists[HolePriority[i]] = true;
+		var exists = RingMath.SlotMask(holeCount);
 
 		var ring = new RingSlot[8];
 		for (int k = 0; k < 8; k++)
