@@ -19,6 +19,7 @@
 [ext_resource type="Script" uid="uid://ldxrm8ytbdgt" path="res://Scripts/ClusterHoverProbe.cs" id="13_hoverprobe"]
 [ext_resource type="Script" uid="uid://m7w6whifhwgu" path="res://Scripts/BlackHoleLayer.cs" id="14_blackhole"]
 [ext_resource type="Script" path="res://Scripts/SaveLoadPanel.cs" id="16_saveload"]
+[ext_resource type="Script" path="res://Scripts/MoleculeLayer.cs" id="17_molecule"]
 [ext_resource type="Texture2D" uid="uid://deasd2pph72w6" path="res://Resources/Textures/black_hole_96px.png" id="15_blackhole_tex"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_trn2v"]
@@ -195,6 +196,9 @@ script = ExtResource("2_nucleus")
 PauseTicksAfterStep = 32
 RequireColorMatch = false
 RequireSameCoreTier = true
+
+[node name="MoleculeLayer" type="Node2D" parent="."]
+script = ExtResource("17_molecule")
 
 [node name="Camera2D" type="Camera2D" parent="." unique_id=237866169]
 script = ExtResource("4_camera")

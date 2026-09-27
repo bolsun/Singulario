@@ -90,6 +90,10 @@ public partial class BlackHoleLayer : TileMapLayer
 	}
 
 	public bool HasBlackHoleAt(int row, int col) => _cells.Contains((row, col));
+	// Выбран ли инструмент установки чёрной дыры (для подсветки запрета, см. MoleculeLayer).
+	public bool IsPlacing => _selected;
+	// Все клетки с чёрной дырой — для заливки L2-клеток на слое 2 (см. MoleculeLayer).
+	public IEnumerable<(int row, int col)> EnumerateCells() => _cells;
 
 	public override void _UnhandledInput(InputEvent @event)
 	{

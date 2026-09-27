@@ -319,6 +319,33 @@ public partial class NucleusLayer : Node2D
 	// и досрочно упираются в guard в _Process (см. цикл там же).
 	public float CurrentUPS { get; private set; }
 
+	// --- для слоя 2 (MoleculeLayer): единые часы симуляции и общие ресурсы
+	// отрисовки ядра, только чтение. Молекулы не тикают сами — их фаза
+	// считается от этого же _globalTick (см. RingMath).
+	public bool IsReady => _ready;
+	public long GlobalTick => _globalTick;
+	public float SubTickFraction => _subTickFraction;
+	public ShaderMaterial PaletteMaterial => _material;
+	public Texture2D CoreTexture => _coreTexture;
+	public Texture2D HoleTexture => _holeTexture;
+	public int TierCount => _tierCount;
+	public Color[] TierPreviewColors => _tierPreviewColors;
+	public float OrbitRadius => _orbitRadius;
+	// Выбран ли сейчас пресет ядра для установки — для подсветки запрета на
+	// слое 1 (клетка в чанке с молекулой, см. MoleculeLayer).
+	public bool HasSpawnSelection => _selectedSpawnTier.HasValue;
+
+	// Есть ли в чанке хоть одно ядро слоя 1 — правило "клетка слоя 2 — либо
+	// чанк, либо объект слоя 2" (см. MoleculeLayer).
+	public bool ChunkHasNuclei(int cx, int cy) =>
+		_chunks.TryGetValue((cx, cy), out var chunk) && chunk.Nuclei.Count > 0;
+
+	public IEnumerable<(int cx, int cy)> EnumerateOccupiedChunks()
+	{
+		foreach (var pair in _chunks)
+			if (pair.Value.Nuclei.Count > 0) yield return pair.Key;
+	}
+
 	private struct RingSlot
 	{
 		public bool Exists;   // false — физического слота тут вообще нет (не рисуется ни дыркой,

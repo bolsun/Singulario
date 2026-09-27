@@ -220,6 +220,8 @@ public partial class EnergyClusterLayer : TileMapLayer
 	}
 
 	public bool HasClusterAt(int row, int col) => _clusterOf.ContainsKey((row, col));
+	// Выбран ли инструмент установки этого тира (для подсветки запрета, см. MoleculeLayer).
+	public bool IsPlacing => _selected;
 	public int? VariantAt(int row, int col) => _variantAt.TryGetValue((row, col), out var v) ? v : null;
 	// Сколько частиц осталось в пуле кластера, которому принадлежит клетка —
 	// 0, если клетки/кластера тут нет. Только для чтения (HUD/отладка/захват
