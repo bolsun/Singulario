@@ -26,6 +26,6 @@ public partial class FpsLabel : Label
 			+ $"\nChunks: {_nucleusLayer.VisibleChunkCount}/{_nucleusLayer.TotalChunkCount}"
 			+ $"\nЯдра: {_nucleusLayer.ActiveNucleusCount}"
 			: "";
-		Text = $"FPS: {Engine.GetFramesPerSecond()}{extraInfo}";
+		Text = $"FPS: {Engine.GetFramesPerSecond()}  Слой {ViewLayer.Current}{extraInfo}";
 	}
 }

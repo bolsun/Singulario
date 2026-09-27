@@ -7,9 +7,11 @@ using Godot;
 public partial class CameraController : Camera2D
 {
 	[Export] public float ZoomStep = 1.1f;
-	[Export] public float MinZoom = 0.02f;
+	[Export] public float MinZoom = 0.004f; // глубоко внутрь слоя 2 (порог слоя — 1/ChunkSize, см. ViewLayer)
 	[Export] public float MaxZoom = 1f;
 	[Export] public float PanSpeed = 800f;
+
+	private int _chunkSize = 16;
 
 	public override void _Ready()
 	{
@@ -25,6 +27,9 @@ public partial class CameraController : Camera2D
 		// вызываться вовсе, что и объясняет "зум не работает".
 		SetProcessInput(true);
 		SetProcessUnhandledInput(true);
+
+		var nucleusLayer = GetNodeOrNull<NucleusLayer>("../NucleusLayer");
+		if (nucleusLayer != null) _chunkSize = nucleusLayer.ChunkSize;
 	}
 
 	// _Input вызывается ДО _UnhandledInput и раньше любых GUI-нод —
@@ -50,6 +55,10 @@ public partial class CameraController : Camera2D
 
 	public override void _Process(double delta)
 	{
+		// Слой пересчитывается каждый кадр от фактического Zoom — так учтено
+		// любое его изменение (колесо, стартовый зум из Main.cs и т.п.).
+		ViewLayer.UpdateFromZoom(Zoom.X, _chunkSize);
+
 		var dir = Vector2.Zero;
 		if (Input.IsKeyPressed(Key.W)) dir.Y -= 1;
 		if (Input.IsKeyPressed(Key.S)) dir.Y += 1;

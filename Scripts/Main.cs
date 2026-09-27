@@ -11,6 +11,7 @@ public partial class Main : Node2D
 
 	public override void _Ready()
 	{
+		ViewLayer.Reset();
 		var camera = GetNode<CameraController>("Camera2D");
 		camera.Position = Vector2.Zero;
 		camera.Zoom = new Vector2(InitialZoom, InitialZoom);
