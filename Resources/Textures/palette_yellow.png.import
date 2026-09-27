@@ -3,7 +3,7 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://c3ucaeopnnhag"
-path="res://.godot/imported/palette_yellow.png-4483da23fc63cc8d7004e1a328755b08.ctex"
+path="res://.godot/imported/palette_yellow.png-b80508c0b1beb3182002c1afc1b96f08.ctex"
 metadata={
 "vram_texture": false
 }
@@ -11,7 +11,7 @@ metadata={
 [deps]
 
 source_file="res://Resources/Textures/palette_yellow.png"
-dest_files=["res://.godot/imported/palette_yellow.png-4483da23fc63cc8d7004e1a328755b08.ctex"]
+dest_files=["res://.godot/imported/palette_yellow.png-b80508c0b1beb3182002c1afc1b96f08.ctex"]
 
 [params]
 

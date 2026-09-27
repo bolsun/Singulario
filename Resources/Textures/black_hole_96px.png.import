@@ -3,7 +3,7 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://deasd2pph72w6"
-path="res://.godot/imported/black_hole_96px.png-8f27aece9852e589690b5870b419d5f8.ctex"
+path="res://.godot/imported/black_hole_96px.png-cfcf075343f84f14c4ee26cd8e24e9f0.ctex"
 metadata={
 "vram_texture": false
 }
@@ -11,7 +11,7 @@ metadata={
 [deps]
 
 source_file="res://Resources/Textures/black_hole_96px.png"
-dest_files=["res://.godot/imported/black_hole_96px.png-8f27aece9852e589690b5870b419d5f8.ctex"]
+dest_files=["res://.godot/imported/black_hole_96px.png-cfcf075343f84f14c4ee26cd8e24e9f0.ctex"]
 
 [params]
 

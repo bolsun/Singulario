@@ -3,7 +3,7 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://bhin0smfj0lmu"
-path="res://.godot/imported/palette_violet.png-739686249fdb9ed74c969c8610094868.ctex"
+path="res://.godot/imported/palette_violet.png-c3c710f4544c88508defca118d8776e2.ctex"
 metadata={
 "vram_texture": false
 }
@@ -11,7 +11,7 @@ metadata={
 [deps]
 
 source_file="res://Resources/Textures/palette_violet.png"
-dest_files=["res://.godot/imported/palette_violet.png-739686249fdb9ed74c969c8610094868.ctex"]
+dest_files=["res://.godot/imported/palette_violet.png-c3c710f4544c88508defca118d8776e2.ctex"]
 
 [params]
 

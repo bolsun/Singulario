@@ -3,7 +3,7 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://4rewwgywvw6p"
-path="res://.godot/imported/particle_grаy_16px.png-cdf07a11d83263a8ddee6bc7c99125ee.ctex"
+path="res://.godot/imported/particle_gray_16px.png-73e61cba1fe7e4b66bde65a6a8f02474.ctex"
 metadata={
 "vram_texture": false
 }
@@ -11,7 +11,7 @@ metadata={
 [deps]
 
 source_file="res://Resources/Textures/particle_gray_16px.png"
-dest_files=["res://.godot/imported/particle_grаy_16px.png-cdf07a11d83263a8ddee6bc7c99125ee.ctex"]
+dest_files=["res://.godot/imported/particle_gray_16px.png-73e61cba1fe7e4b66bde65a6a8f02474.ctex"]
 
 [params]
 

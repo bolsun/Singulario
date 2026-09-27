@@ -3,7 +3,7 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cvwkr1nchs124"
-path="res://.godot/imported/particle_source_blue_96px_256x256.png-1bf927ec57d4e496ea264f708fe0f1c5.ctex"
+path="res://.godot/imported/particle_source_blue_96px_256x256.png-bfc7d9386874d94c33c0f2c6640d8fa7.ctex"
 metadata={
 "vram_texture": false
 }
@@ -11,7 +11,7 @@ metadata={
 [deps]
 
 source_file="res://Resources/Textures/particle_source_blue_96px_256x256.png"
-dest_files=["res://.godot/imported/particle_source_blue_96px_256x256.png-1bf927ec57d4e496ea264f708fe0f1c5.ctex"]
+dest_files=["res://.godot/imported/particle_source_blue_96px_256x256.png-bfc7d9386874d94c33c0f2c6640d8fa7.ctex"]
 
 [params]
 

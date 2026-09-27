@@ -3,7 +3,7 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://cd70eyj53akq4"
-path="res://.godot/imported/energy_gray_96px.png-eb8e8293764f5031bf3ac7d2c625e44a.ctex"
+path="res://.godot/imported/energy_gray_96px.png-c8ce0c21f4fbe1b79cb320c3a81234f6.ctex"
 metadata={
 "vram_texture": false
 }
@@ -11,7 +11,7 @@ metadata={
 [deps]
 
 source_file="res://Resources/Textures/energy_gray_96px.png"
-dest_files=["res://.godot/imported/energy_gray_96px.png-eb8e8293764f5031bf3ac7d2c625e44a.ctex"]
+dest_files=["res://.godot/imported/energy_gray_96px.png-c8ce0c21f4fbe1b79cb320c3a81234f6.ctex"]
 
 [params]
 

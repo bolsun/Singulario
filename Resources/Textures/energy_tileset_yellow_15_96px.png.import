@@ -3,7 +3,7 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://ya30maidgsh7"
-path="res://.godot/imported/energy_tileset_yellow_15_96px.png-7253c2a78b95f573e6136acb748dc0e2.ctex"
+path="res://.godot/imported/energy_tileset_yellow_15_96px.png-c95e98ff943f282a3b3e48b9c80c302c.ctex"
 metadata={
 "vram_texture": false
 }
@@ -11,7 +11,7 @@ metadata={
 [deps]
 
 source_file="res://Resources/Textures/energy_tileset_yellow_15_96px.png"
-dest_files=["res://.godot/imported/energy_tileset_yellow_15_96px.png-7253c2a78b95f573e6136acb748dc0e2.ctex"]
+dest_files=["res://.godot/imported/energy_tileset_yellow_15_96px.png-c95e98ff943f282a3b3e48b9c80c302c.ctex"]
 
 [params]
 
