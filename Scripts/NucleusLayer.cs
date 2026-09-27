@@ -642,6 +642,8 @@ public partial class NucleusLayer : Node2D
 	// для этого шага, и для взаимоисключающего сброса выбора на панели спавна
 	// (та же причина, что и у _energyLayer/_energyClusterLayers).
 	private BlackHoleLayer _blackHoleLayer;
+	// Слой 2 — только для правила занятости: в чанк с молекулой объекты слоя 1 не ставятся.
+	private MoleculeLayer _moleculeLayer;
 	// Порядок гнёзд (симметричные раскладки 2/4/8) — см. RingMath.HolePriority.
 
 	public override void _Ready()
@@ -696,6 +698,7 @@ public partial class NucleusLayer : Node2D
 
 		_energyLayer = GetNodeOrNull<EnergyLayer>("../TileMapLayer");
 		_blackHoleLayer = GetNodeOrNull<BlackHoleLayer>("../BlackHoleLayer");
+		_moleculeLayer = GetNodeOrNull<MoleculeLayer>("../MoleculeLayer");
 		foreach (var child in GetParent().GetChildren())
 			if (child is EnergyClusterLayer clusterLayer)
 				_energyClusterLayers.Add(clusterLayer);
@@ -1214,9 +1217,9 @@ public partial class NucleusLayer : Node2D
 		int col = Mathf.FloorToInt(worldPos.X / CellSize);
 		int row = Mathf.FloorToInt(worldPos.Y / CellSize);
 
-		if (_entAt.ContainsKey((row, col)))
+		if (_entAt.ContainsKey((row, col)) || (_moleculeLayer != null && _moleculeLayer.HasMoleculeAtCell(row, col)))
 		{
-			_placementPreview.Visible = false; // клетка занята — сюда всё равно нельзя
+			_placementPreview.Visible = false; // клетка занята (или чанк занят молекулой — красную подсветку рисует MoleculeLayer)
 			return;
 		}
 
@@ -2914,6 +2917,12 @@ public partial class NucleusLayer : Node2D
 	{
 		int col = Mathf.FloorToInt(worldPos.X / CellSize);
 		int row = Mathf.FloorToInt(worldPos.Y / CellSize);
+
+		if (_moleculeLayer != null && _moleculeLayer.HasMoleculeAtCell(row, col))
+		{
+			GD.Print($"[NucleusLayer] чанк клетки ({row},{col}) занят молекулой слоя 2 — пропуск.");
+			return;
+		}
 
 		if (_entAt.TryGetValue((row, col), out var existingNucleus))
 		{

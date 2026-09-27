@@ -166,6 +166,7 @@ public partial class EnergyClusterLayer : TileMapLayer
 	// стирает источники при своей установке — см. BlackHoleLayer.PlaceBlackHoleAt),
 	// а выбор режима кластера — сбрасывать выбор режима чёрной дыры.
 	private BlackHoleLayer _blackHoleLayer;
+	private MoleculeLayer _moleculeLayer;
 
 	private bool _leftMouseHeld;
 	private (int row, int col)? _lastPlacedCell;
@@ -186,6 +187,7 @@ public partial class EnergyClusterLayer : TileMapLayer
 		_nucleusLayer = GetNodeOrNull<NucleusLayer>("../NucleusLayer");
 		_energyLayer = GetNodeOrNull<EnergyLayer>("../TileMapLayer");
 		_blackHoleLayer = GetNodeOrNull<BlackHoleLayer>("../BlackHoleLayer");
+		_moleculeLayer = GetNodeOrNull<MoleculeLayer>("../MoleculeLayer");
 
 		var parent = GetParent();
 		if (parent != null)
@@ -289,6 +291,8 @@ public partial class EnergyClusterLayer : TileMapLayer
 		if (_lastPlacedCell.HasValue && _lastPlacedCell.Value == (row, col)) return;
 
 		_lastPlacedCell = (row, col);
+		// Чанк занят молекулой слоя 2 — сюда нельзя (см. MoleculeLayer).
+		if (_moleculeLayer != null && _moleculeLayer.HasMoleculeAtCell(row, col)) return;
 		PlaceClusterAt(row, col);
 	}
 

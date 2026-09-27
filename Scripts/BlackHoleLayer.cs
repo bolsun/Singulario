@@ -43,6 +43,7 @@ public partial class BlackHoleLayer : TileMapLayer
 
 	private bool _leftMouseHeld;
 	private (int row, int col)? _lastPlacedCell;
+	private MoleculeLayer _moleculeLayer;
 
 	public override void _Ready()
 	{
@@ -55,6 +56,7 @@ public partial class BlackHoleLayer : TileMapLayer
 
 		_nucleusLayer = GetNodeOrNull<NucleusLayer>("../NucleusLayer");
 		_energyLayer = GetNodeOrNull<EnergyLayer>("../TileMapLayer");
+		_moleculeLayer = GetNodeOrNull<MoleculeLayer>("../MoleculeLayer");
 
 		var parent = GetParent();
 		if (parent != null)
@@ -133,6 +135,8 @@ public partial class BlackHoleLayer : TileMapLayer
 		if (_lastPlacedCell.HasValue && _lastPlacedCell.Value == (row, col)) return;
 
 		_lastPlacedCell = (row, col);
+		// Чанк занят молекулой слоя 2 — сюда нельзя (см. MoleculeLayer).
+		if (_moleculeLayer != null && _moleculeLayer.HasMoleculeAtCell(row, col)) return;
 		PlaceBlackHoleAt(row, col);
 	}
 
