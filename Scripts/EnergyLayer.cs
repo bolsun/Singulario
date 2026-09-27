@@ -164,6 +164,8 @@ public partial class EnergyLayer : TileMapLayer
 	public override void _UnhandledInput(InputEvent @event)
 	{
 		if (@event is not InputEventMouseButton mb || mb.ButtonIndex != MouseButton.Left) return;
+		// На слое 2 клики обрабатывает только слой молекул (см. ViewLayer).
+		if (ViewLayer.IsLayer2) return;
 
 		if (mb.Pressed)
 		{
@@ -181,6 +183,9 @@ public partial class EnergyLayer : TileMapLayer
 
 	public override void _Process(double delta)
 	{
+		// На слое 2 слой 1 не рисуется и не ставится (см. ViewLayer).
+		Visible = !ViewLayer.IsLayer2;
+		if (ViewLayer.IsLayer2) { _leftMouseHeld = false; return; }
 		if (_leftMouseHeld) TryPlaceAtMouseIfSelected();
 	}
 

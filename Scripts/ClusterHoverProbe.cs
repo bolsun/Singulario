@@ -46,6 +46,13 @@ public partial class ClusterHoverProbe : Node2D
 	{
 		if (_label == null) return;
 
+		// На слое 2 источники слоя 1 скрыты — подсказку по ним не показываем.
+		if (ViewLayer.IsLayer2)
+		{
+			_label.Visible = false;
+			return;
+		}
+
 		var worldPos = GetGlobalMousePosition();
 		int col = Mathf.FloorToInt(worldPos.X / _cellSize);
 		int row = Mathf.FloorToInt(worldPos.Y / _cellSize);

@@ -694,7 +694,7 @@ public partial class NucleusLayer : Node2D
 				GD.Print($"[NucleusLayer] случайное заполнение новых чанков: {(RandomFillEnabled ? "включено" : "выключено")}.");
 				GetViewport().SetInputAsHandled();
 			}
-			else if (key.Keycode == Key.Q)
+			else if (key.Keycode == Key.Q && !ViewLayer.IsLayer2)
 			{
 				PickNucleusUnderMouse();
 				GetViewport().SetInputAsHandled();
@@ -704,7 +704,7 @@ public partial class NucleusLayer : Node2D
 				TogglePause();
 				GetViewport().SetInputAsHandled();
 			}
-			else if (key.Keycode == Key.R)
+			else if (key.Keycode == Key.R && !ViewLayer.IsLayer2)
 			{
 				ToggleSpinDirectionUnderMouse();
 				GetViewport().SetInputAsHandled();
@@ -833,6 +833,8 @@ public partial class NucleusLayer : Node2D
 	public override void _UnhandledInput(InputEvent @event)
 	{
 		if (@event is not InputEventMouseButton mb) return;
+		// На слое 2 клики обрабатывает только слой молекул (см. ViewLayer).
+		if (ViewLayer.IsLayer2) return;
 
 		if (mb.ButtonIndex == MouseButton.Left)
 		{
@@ -1021,6 +1023,43 @@ public partial class NucleusLayer : Node2D
 		var cam = GetViewport().GetCamera2D();
 		if (cam == null) return;
 
+		// Слой 2 (см. ViewLayer): детальная отрисовка слоя 1 скрыта целиком
+		// (Visible узла гасит все чанки разом), обход видимых чанков не
+		// делается вовсе — на дальнем зуме это были бы десятки тысяч пустых
+		// чанков с MultiMesh. Симуляция (SimTick ниже) при этом тикает как
+		// обычно — скрывается только рендер.
+		bool layer1 = !ViewLayer.IsLayer2;
+		Visible = layer1;
+		if (layer1) UpdateVisibleChunks(cam);
+		else
+		{
+			_leftMouseHeld = false;
+			_rightMouseHeld = false;
+		}
+
+		RunSimulationClock(delta);
+
+		if (!layer1) return;
+
+		foreach (var coord in _visible)
+		{
+			if (!_chunks.TryGetValue(coord, out var chunk)) continue;
+			// Зум мог измениться и без смены набора видимых чанков — держим
+			// Visible в актуальном состоянии для уже показанных чанков тоже.
+			chunk.HoleNode.Visible = _holesVisible;
+			chunk.ParticleNode.Visible = _particlesVisible;
+			UpdateChunkVisuals(chunk);
+		}
+
+		if (_leftMouseHeld) TryPlaceAtMouseIfSelected();
+		if (_rightMouseHeld) TryRemoveAtMouse();
+		UpdatePlacementPreview();
+	}
+
+	// Какие чанки попадают в кадр камеры — только рендер, к симуляции не
+	// относится (см. комментарий внутри).
+	private void UpdateVisibleChunks(Camera2D cam)
+	{
 		var viewportSize = GetViewport().GetVisibleRect().Size;
 		var visibleSize = viewportSize / cam.Zoom;
 		var visiblePos = cam.GetScreenCenterPosition() - visibleSize / 2f;
@@ -1080,7 +1119,10 @@ public partial class NucleusLayer : Node2D
 
 		_visible.Clear();
 		foreach (var c in newVisible) _visible.Add(c);
+	}
 
+	private void RunSimulationClock(double delta)
+	{
 		// Глобальные часы симуляции — фиксированный шаг, не зависящий от FPS.
 		// Ограничиваем число "догоняющих" тиков за кадр, чтобы просадка FPS
 		// не превратилась в спираль смерти. На паузе (_paused) весь этот блок
@@ -1127,20 +1169,6 @@ public partial class NucleusLayer : Node2D
 			_upsWindowTimer = 0.0;
 			_upsWindowTicks = 0;
 		}
-
-		foreach (var coord in newVisible)
-		{
-			if (!_chunks.TryGetValue(coord, out var chunk)) continue;
-			// Зум мог измениться и без смены набора видимых чанков — держим
-			// Visible в актуальном состоянии для уже показанных чанков тоже.
-			chunk.HoleNode.Visible = _holesVisible;
-			chunk.ParticleNode.Visible = _particlesVisible;
-			UpdateChunkVisuals(chunk);
-		}
-
-		if (_leftMouseHeld) TryPlaceAtMouseIfSelected();
-		if (_rightMouseHeld) TryRemoveAtMouse();
-		UpdatePlacementPreview();
 	}
 
 	// Полупрозрачная "призрачная" копия выбранного ядра в клетке под
