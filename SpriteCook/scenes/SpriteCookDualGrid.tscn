@@ -1,0 +1,19 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="../scripts/spritecook_dual_grid.gd" id="1_script"]
+[ext_resource type="TileSet" path="../73c91aaf-dd04-4be1-ae2e-c1c533fbe660.tres" id="2_tileset"]
+
+[node name="SpriteCookDualGrid" type="Node2D"]
+script = ExtResource("1_script")
+display_tile_set = ExtResource("2_tileset")
+source_id = 0
+filled_atlas_coords = Vector2i(2, 1)
+
+[node name="Data" type="TileMapLayer" parent="."]
+modulate = Color(1, 1, 1, 0)
+tile_set = ExtResource("2_tileset")
+
+[node name="Display" type="TileMapLayer" parent="."]
+position = Vector2(-32, -32)
+z_index = 1
+tile_set = ExtResource("2_tileset")
