@@ -67,6 +67,20 @@ public partial class EnergyClusterLayer : TileMapLayer
 	// Terrain (этот слой Terrain вообще не использует).
 	[Export] public int AtlasSourceId = 0;
 
+	// Дополнительные тайлы "по мере исчерпания" — каждый из них ОДИН тайл
+	// (не сетка вариантов, как VariantCount/AtlasColumns у полного кластера),
+	// который подставляется сразу во ВСЕ клетки кластера, когда его текущий
+	// остаток (Amount) падает ниже соответствующего порога от исторического
+	// максимума пула (см. ParticleCluster.MaxAmount и DepletionStage) — это
+	// не "ещё один случайный узор", а общий индикатор уровня всего пула.
+	// Настраивается в инспекторе на этом же узле, так же как AtlasSourceId —
+	// отдельным TileSetAtlasSource в общем TileSet узла (см. "sources/N" в
+	// Main.tscn). -1 (по умолчанию) — стадия не настроена на этом узле, тогда
+	// переход через этот порог просто не меняет картинку.
+	[Export] public int AtlasSourceId75 = -1;
+	[Export] public int AtlasSourceId50 = -1;
+	[Export] public int AtlasSourceId25 = -1;
+
 	// Какой тир частиц представляет именно этот узел/экземпляр скрипта —
 	// значение выставляется в инспекторе на каждом из узлов-тиров в сцене
 	// (сейчас 0 = жёлтый, 1 = красный, 2 = синий — своя, отдельная нумерация,
@@ -101,6 +115,17 @@ public partial class EnergyClusterLayer : TileMapLayer
 	private class ParticleCluster
 	{
 		public long Amount;
+		// Сумма InitialAmount по ВСЕМ клеткам, когда-либо добавленным в этот
+		// кластер (напрямую или через слияние) — в отличие от Amount, только
+		// растёт и никогда не уменьшается тратой (см. ConsumeAt). Служит
+		// неизменным "знаменателем" для процента остатка (см. DepletionStage),
+		// иначе он бы плавал при каждой новой клетке/слиянии кластеров.
+		public long MaxAmount;
+		// Текущая стадия истощения (0..3, см. DepletionStage) — запоминается,
+		// чтобы ApplyStageTiles перекрашивала клетки только при ФАКТИЧЕСКОЙ
+		// смене стадии, а не на каждый вызов ConsumeAt (который может быть
+		// каждый тик симуляции — см. NucleusLayer.SimTick).
+		public int Stage;
 		public readonly HashSet<(int row, int col)> Cells = new();
 	}
 
@@ -205,6 +230,25 @@ public partial class EnergyClusterLayer : TileMapLayer
 	// мышью — ClusterHoverProbe), саму кластеризацию не затрагивает.
 	public int CellCountAt(int row, int col) => _clusterOf.TryGetValue((row, col), out var c) ? c.Cells.Count : 0;
 
+	// --- сохранение/загрузка поля (см. NucleusLayer.ExportFieldJson/
+	// ImportFieldJson) --- по заданию клиента запас (Amount/MaxAmount) НЕ
+	// сохраняется — при загрузке источник просто ставится заново, как обычной
+	// ручной установкой (PlaceClusterAt), и копит свежий бак с нуля. Поэтому
+	// экспорту достаточно списка клеток этого тира — кластеризация сама
+	// пересоберётся из тех же клеток при повторной установке (RegisterNewCell
+	// не зависит от порядка вставки, см. её комментарий).
+	public IEnumerable<(int row, int col)> EnumerateCells() => _variantAt.Keys;
+
+	// Стирает ВСЕ клетки этого тир-слоя разом — используется при загрузке
+	// поля из JSON (см. NucleusLayer.ClearFieldForImport) перед тем, как
+	// расставить заново клетки из сохранённых данных. Копия ключей нужна,
+	// т.к. EraseClusterAt изменяет сам _variantAt по ходу перебора.
+	public void ClearAll()
+	{
+		var keys = new List<(int row, int col)>(_variantAt.Keys);
+		foreach (var key in keys) EraseClusterAt(key.row, key.col);
+	}
+
 	public override void _UnhandledInput(InputEvent @event)
 	{
 		if (@event is not InputEventMouseButton mb || mb.ButtonIndex != MouseButton.Left) return;
@@ -281,6 +325,17 @@ public partial class EnergyClusterLayer : TileMapLayer
 		}
 
 		if (!alreadyOurs) RegisterNewCell(key);
+
+		// Добавление клетки (новой или через слияние кластеров) могло
+		// изменить процент остатка кластера — вырос знаменатель (MaxAmount)
+		// и/или сам кластер "подлили" новой порцией — поэтому стадию всегда
+		// пересчитываем заново и красим ВЕСЬ кластер целиком, а не только
+		// эту клетку (см. DepletionStage/ApplyStageTiles).
+		if (_clusterOf.TryGetValue(key, out var clusterAfter))
+		{
+			clusterAfter.Stage = DepletionStage(clusterAfter);
+			ApplyStageTiles(clusterAfter, clusterAfter.Stage);
+		}
 	}
 
 	// Заводит новую клетку в кластеризацию: ищет среди соседей (см.
@@ -324,13 +379,62 @@ public partial class EnergyClusterLayer : TileMapLayer
 					_clusterOf[cellKey] = survivor;
 				survivor.Cells.UnionWith(c.Cells);
 				survivor.Amount += c.Amount;
+				survivor.MaxAmount += c.MaxAmount;
 				c.Cells.Clear();
 			}
 		}
 
 		survivor.Cells.Add(key);
 		survivor.Amount += InitialAmount;
+		survivor.MaxAmount += InitialAmount;
 		_clusterOf[key] = survivor;
+	}
+
+	// Стадия истощения кластера: 0 = полный (>75% от MaxAmount — обычные
+	// случайные варианты, см. _variantAt), 1/2/3 = ниже порога 75/50/25%
+	// (см. AtlasSourceId75/50/25 и ApplyStageTiles). MaxAmount — накопленная
+	// сумма InitialAmount по всем клеткам кластера за всё время (см. её
+	// комментарий у ParticleCluster), а не текущее число клеток, поэтому
+	// процент не "плавает" сам по себе от одной лишь кластеризации.
+	private static int DepletionStage(ParticleCluster cluster)
+	{
+		if (cluster.MaxAmount <= 0) return 0;
+		double pct = (double)cluster.Amount / cluster.MaxAmount * 100.0;
+		if (pct > 75.0) return 0;
+		if (pct > 50.0) return 1;
+		if (pct > 25.0) return 2;
+		return 3;
+	}
+
+	// Перекрашивает ВСЕ клетки кластера под текущую стадию истощения — меняет
+	// только ИСТОЧНИК (AtlasSourceId/75/50/25), atlas-координата остаётся той
+	// же, что и всегда была у клетки (её собственный случайный вариант, см.
+	// _variantAt/PlaceClusterAt). Наборы 75/50/25% раскроены в TileSet той же
+	// сеткой VariantCount x AtlasColumns, что и полный набор (см. Main.tscn —
+	// у каждого нового TileSetAtlasSource те же 4 позиции 0:0/1:0/0:1/1:1),
+	// поэтому у каждой клетки должен сохраняться свой узор при смене стадии,
+	// а не одна и та же картинка на весь кластер (раньше здесь стоял (0,0) —
+	// отсюда и был баг "все тайлы одинаковые"). Если нужный AtlasSourceId не
+	// настроен на этом узле (-1), картинка на этой стадии просто не меняется
+	// (см. комментарий у полей).
+	private void ApplyStageTiles(ParticleCluster cluster, int stage)
+	{
+		int sourceId = stage switch
+		{
+			1 => AtlasSourceId75,
+			2 => AtlasSourceId50,
+			3 => AtlasSourceId25,
+			_ => AtlasSourceId,
+		};
+		if (stage != 0 && sourceId < 0) return; // стадия не настроена — оставляем как есть
+
+		foreach (var cellKey in cluster.Cells)
+		{
+			var cell = new Vector2I(cellKey.col, cellKey.row);
+			int variant = _variantAt.TryGetValue(cellKey, out var v) ? v : 0;
+			var atlasCoords = new Vector2I(variant % AtlasColumns, variant / AtlasColumns);
+			SetCell(cell, sourceId, atlasCoords);
+		}
 	}
 
 	private IEnumerable<(int dr, int dc)> NeighborOffsets => DiagonalClustering ? Neighbors8 : Neighbors4;
@@ -350,7 +454,24 @@ public partial class EnergyClusterLayer : TileMapLayer
 		long consumed = System.Math.Min(amount, cluster.Amount);
 		cluster.Amount -= consumed;
 
-		if (cluster.Amount <= 0) RemoveCluster(cluster);
+		if (cluster.Amount <= 0)
+		{
+			RemoveCluster(cluster);
+		}
+		else
+		{
+			// Перекрашиваем весь кластер, только если трата реально перевела
+			// его через порог 75/50/25% (см. DepletionStage) — иначе пришлось
+			// бы вызывать SetCell на каждую клетку кластера при каждом
+			// захвате энергии ядром, а ConsumeAt может дёргаться каждый тик
+			// симуляции (см. NucleusLayer.SimTick, шаг 3).
+			int newStage = DepletionStage(cluster);
+			if (newStage != cluster.Stage)
+			{
+				cluster.Stage = newStage;
+				ApplyStageTiles(cluster, newStage);
+			}
+		}
 
 		return consumed;
 	}

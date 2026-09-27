@@ -18,7 +18,6 @@
 [ext_resource type="Texture2D" uid="uid://5bjnylen83cd" path="res://particle_source_yellow_25_96px.png" id="13_devvj"]
 [ext_resource type="Script" uid="uid://ldxrm8ytbdgt" path="res://ClusterHoverProbe.cs" id="13_hoverprobe"]
 [ext_resource type="Script" uid="uid://m7w6whifhwgu" path="res://BlackHoleLayer.cs" id="14_blackhole"]
-[ext_resource type="Script" path="res://SaveLoadPanel.cs" id="16_saveload"]
 [ext_resource type="Texture2D" uid="uid://deasd2pph72w6" path="res://black_hole_96px.png" id="15_blackhole_tex"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_trn2v"]
@@ -192,9 +191,7 @@ script = ExtResource("1_grid")
 
 [node name="NucleusLayer" type="Node2D" parent="." unique_id=398998017]
 script = ExtResource("2_nucleus")
-PauseTicksAfterStep = 32
 RequireColorMatch = false
-RequireSameCoreTier = true
 
 [node name="Camera2D" type="Camera2D" parent="." unique_id=237866169]
 script = ExtResource("4_camera")
@@ -218,11 +215,6 @@ script = ExtResource("6_spawn")
 [node name="ClusterHoverLabel" type="Label" parent="HUD" unique_id=997790339]
 script = ExtResource("12_hoverlabel")
 
-[node name="SaveLoadPanel" type="Control" parent="HUD" unique_id=3489217654]
-layout_mode = 3
-anchors_preset = 0
-script = ExtResource("16_saveload")
-
 [node name="TileMapLayer" type="TileMapLayer" parent="." unique_id=377289630]
 tile_set = SubResource("TileSet_8tf48")
 script = ExtResource("8_energy")
@@ -230,9 +222,6 @@ script = ExtResource("8_energy")
 [node name="ParticlesSoruces0" type="TileMapLayer" parent="." unique_id=1787631678]
 tile_set = SubResource("TileSet_yellow")
 script = ExtResource("9_cluster")
-AtlasSourceId75 = 1
-AtlasSourceId50 = 2
-AtlasSourceId25 = 3
 
 [node name="ParticlesSoruces1" type="TileMapLayer" parent="." unique_id=1116556915]
 tile_set = SubResource("TileSet_red")

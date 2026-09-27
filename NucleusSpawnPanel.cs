@@ -50,6 +50,61 @@ public partial class NucleusSpawnPanel : Control
 	// так цвет кнопки будет совпадать с тем, что игрок увидит на поле.
 	private Color[] _tierColors;
 
+	// Пересчитывает геометрию панели — вызывается один раз из _Ready и затем
+	// каждый раз при изменении размера окна (см. подписку на
+	// GetTree().Root.SizeChanged в _Ready). TopRight — угловой (точечный)
+	// анкор, а не анкор на весь прямоугольник, так что Position/Size у
+	// Control в этом случае ведут себя неочевидно — задаём геометрию через
+	// однозначные Offset* (пиксельный отступ ОТ анкорной точки), тот же
+	// приём, что уже используется у FpsLabel в сцене.
+	//
+	// ВАЖНО: прямоугольник — widthPx x heightPx, а НЕ квадрат. Раньше здесь
+	// по ошибке ширина считалась равной высоте (обеим — "side" = ButtonSize *
+	// totalRows), хотя грид на самом деле узкий (Columns=3, т.е. реальная
+	// ширина = ButtonSize*3), а не квадратный. Из-за этого прямоугольник
+	// панели был в разы шире, чем видимые кнопки, а лишняя (невидимая) часть
+	// слева всё равно ловила клики мышью (обычный Control блокирует мышь по
+	// всему своему Rect, а не только там, где есть дочерний элемент) —
+	// отсюда и жалоба "нельзя ставить/копировать ядра рядом с панелью на
+	// каком-то расстоянии". См. также MouseFilter=Ignore в _Ready — вторая,
+	// независимая подстраховка от той же проблемы.
+	private void RecomputeLayout()
+	{
+		SetAnchorsPreset(LayoutPreset.TopRight);
+
+		// Строк: HoleCounts.Length (комбинации ядер) + HoleCounts.Length (та
+		// же линейка для серого ядра) + HoleCounts.Length (линейка для
+		// поворачивателя, см. RotatorCoreTier) + 1 (типы энергии основного
+		// слоя) + сколько нужно строк под кнопки тиров скопления частиц И
+		// кнопку чёрной дыры — считаем по факту найденных узлов (см.
+		// LoadParticleLayers), а не жёстко "1", чтобы панель не обрезала
+		// кнопки, если тиров вдруг станет больше 3 (GridContainer при этом
+		// сам переносит лишние кнопки на новую строку).
+		int extraButtons = _particleLayers.Count + (_blackHoleLayer != null ? 1 : 0);
+		int clusterRows = extraButtons > 0 ? Mathf.CeilToInt(extraButtons / 3f) : 0;
+		// HoleCounts.Length * 4 — линейка "количество дырок" повторена 4 раза:
+		// обычные тиры, серое ядро, поворачиватель И бросатель (см.
+		// ThrowerCoreTier в NucleusLayer.cs).
+		int totalRows = HoleCounts.Length * 4 + 1 + clusterRows;
+
+		int widthPx = ButtonSize * 3; // ровно столько колонок в GridContainer
+		int heightPx = ButtonSize * totalRows;
+		const int margin = 16;
+		OffsetLeft = -widthPx - margin;
+		OffsetTop = margin;
+		OffsetRight = -margin;
+		OffsetBottom = margin + heightPx;
+	}
+
+	// Отписка от сигнала окна — без неё при выгрузке сцены (например, при
+	// смене сцены или выходе из игры) подписка осталась бы висеть на
+	// уничтоженном узле.
+	public override void _ExitTree()
+	{
+		var tree = GetTree();
+		if (tree?.Root != null) tree.Root.SizeChanged -= RecomputeLayout;
+	}
+
 	public override void _Ready()
 	{
 		// Абсолютный путь от корня сцены — не зависит от того, где именно
@@ -60,29 +115,29 @@ public partial class NucleusSpawnPanel : Control
 		_particleLayers = LoadParticleLayers();
 		_tierColors = LoadTierColors();
 
-		// TopRight — это угловой (точечный) анкор, а не анкор на весь
-		// прямоугольник, так что Position/Size у Control в этом случае ведут
-		// себя неочевидно и панель может уехать за пределы экрана. Задаём
-		// геометрию через однозначные Offset* (пиксельный отступ ОТ анкорной
-		// точки) — тот же приём, что уже используется у FpsLabel в сцене.
-		SetAnchorsPreset(LayoutPreset.TopRight);
-		// Строк снизу: HoleCounts.Length (комбинации ядер) + HoleCounts.Length
-		// (та же линейка для серого ядра, своя строка) + 1 (типы энергии
-		// основного слоя) + сколько нужно строк под кнопки тиров скопления
-		// частиц И кнопку чёрной дыры (она без тиров, всего одна, но кладём в
-		// ту же секцию/сетку) — считаем по факту найденных узлов (см.
-		// LoadParticleLayers), а не жёстко "1", чтобы панель не обрезала
-		// кнопки, если тиров вдруг станет больше 3 (GridContainer при этом сам
-		// переносит лишние кнопки на новую строку).
-		int extraButtons = _particleLayers.Count + (_blackHoleLayer != null ? 1 : 0);
-		int clusterRows = extraButtons > 0 ? Mathf.CeilToInt(extraButtons / 3f) : 0;
-		int totalRows = HoleCounts.Length + HoleCounts.Length + 1 + clusterRows;
-		int side = ButtonSize * totalRows;
-		const int margin = 16;
-		OffsetLeft = -side - margin;
-		OffsetTop = margin;
-		OffsetRight = -margin;
-		OffsetBottom = margin + side;
+		// ВАЖНО (было багом): панель сама (этот Control) — обычный Control с
+		// mouse_filter по умолчанию Stop, а он "съедает" клики по ВСЕМУ своему
+		// прямоугольнику, а не только там, где реально есть кнопка. Ниже был
+		// баг, из-за которого этот прямоугольник получался квадратным (сторона
+		// = высота грида в ButtonSize*totalRows), хотя грид на самом деле узкий
+		// (3 колонки), а не квадратный, — то есть добрая половина мнимого
+		// "квадрата" была невидимой мёртвой зоной, блокирующей ЛКМ/ПКМ/пипетку
+		// по игровому полю рядом с панелью (см. RecomputeLayout — там же
+		// исправлен сам размер). Плюс, отдельно от размера, Ignore тут —
+		// подстраховка на будущее: даже если размер опять посчитается неверно
+		// (например, добавят ещё кнопок), сама панель больше не будет
+		// блокировать клики там, где нет кнопки — их продолжат ловить только
+		// дочерние Button (у них свой mouse_filter=Stop, не трогаем).
+		MouseFilter = MouseFilterEnum.Ignore;
+
+		RecomputeLayout();
+		// TopRight (см. RecomputeLayout) — угловой (точечный) анкор, поэтому
+		// сам по себе должен переезжать при изменении размера окна. На деле
+		// (см. баг-репорт) через анкоры одни это не всегда происходит
+		// надёжно — например, при разворачивании/сворачивании окна панель
+		// оставалась на прежнем месте. Поэтому пересчитываем офсеты явно при
+		// каждом изменении размера окна, а не полагаемся только на анкоры.
+		GetTree().Root.SizeChanged += RecomputeLayout;
 
 		var grid = new GridContainer { Columns = 3 };
 		grid.AddThemeConstantOverride("h_separation", 0);
@@ -135,6 +190,50 @@ public partial class NucleusSpawnPanel : Control
 			button.AddThemeColorOverride("font_focus_color", grayColor);
 			int capturedHoles = holeCount;
 			button.Pressed += () => OnGraySpawnPressed(capturedHoles);
+			grid.AddChild(button);
+		}
+
+		// Ещё одна строка — экспериментальный "поворачиватель" (клеточный
+		// автомат, см. NucleusLayer.RotatorCoreTier/TriggerRotatorRotation):
+		// тоже просто ещё один тир со своей палитрой (palette_green.png), цвет
+		// подписи сэмплируется точно так же, как у остальных.
+		int rotatorTier = _nucleusLayer?.RotatorCoreTier ?? 4;
+		Color rotatorColor = (rotatorTier >= 0 && rotatorTier < _tierColors.Length) ? _tierColors[rotatorTier] : Colors.White;
+		foreach (int holeCount in HoleCounts)
+		{
+			var button = new Button
+			{
+				Text = $"Пов{holeCount}",
+				CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
+			};
+			button.AddThemeColorOverride("font_color", rotatorColor);
+			button.AddThemeColorOverride("font_hover_color", rotatorColor);
+			button.AddThemeColorOverride("font_pressed_color", rotatorColor);
+			button.AddThemeColorOverride("font_focus_color", rotatorColor);
+			int capturedHoles = holeCount;
+			button.Pressed += () => OnRotatorSpawnPressed(capturedHoles);
+			grid.AddChild(button);
+		}
+
+		// Ещё одна строка — экспериментальный "бросатель" (см.
+		// NucleusLayer.ThrowerCoreTier/EvaluateFlightStep): тоже просто ещё
+		// один тир со своей палитрой (palette_violet.png), цвет подписи
+		// сэмплируется точно так же, как у остальных.
+		int throwerTier = _nucleusLayer?.ThrowerCoreTier ?? 5;
+		Color throwerColor = (throwerTier >= 0 && throwerTier < _tierColors.Length) ? _tierColors[throwerTier] : Colors.White;
+		foreach (int holeCount in HoleCounts)
+		{
+			var button = new Button
+			{
+				Text = $"Бр{holeCount}",
+				CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
+			};
+			button.AddThemeColorOverride("font_color", throwerColor);
+			button.AddThemeColorOverride("font_hover_color", throwerColor);
+			button.AddThemeColorOverride("font_pressed_color", throwerColor);
+			button.AddThemeColorOverride("font_focus_color", throwerColor);
+			int capturedHoles = holeCount;
+			button.Pressed += () => OnThrowerSpawnPressed(capturedHoles);
 			grid.AddChild(button);
 		}
 
@@ -299,6 +398,33 @@ public partial class NucleusSpawnPanel : Control
 			return;
 		}
 		_nucleusLayer.SelectSpawnPreset(_nucleusLayer.GrayCoreTier, holeCount);
+	}
+
+	private void OnRotatorSpawnPressed(int holeCount)
+	{
+		// Аналогично OnGraySpawnPressed — поворачиватель тоже просто ещё один
+		// тир (RotatorCoreTier), особое поведение (проворачивает соседей по
+		// часовой стрелке) живёт в NucleusLayer.SimTick/TriggerRotatorRotation.
+		if (_nucleusLayer == null)
+		{
+			GD.PrintErr("[NucleusSpawnPanel] не найден NucleusLayer — выбор пресета невозможен.");
+			return;
+		}
+		_nucleusLayer.SelectSpawnPreset(_nucleusLayer.RotatorCoreTier, holeCount);
+	}
+
+	private void OnThrowerSpawnPressed(int holeCount)
+	{
+		// Аналогично OnRotatorSpawnPressed — бросатель тоже просто ещё один
+		// тир (ThrowerCoreTier), особое поведение (толкает соседей и потом
+		// ещё запускает их в полёт) живёт в NucleusLayer.SimTick/
+		// TriggerRotatorRotation/EvaluateFlightStep.
+		if (_nucleusLayer == null)
+		{
+			GD.PrintErr("[NucleusSpawnPanel] не найден NucleusLayer — выбор пресета невозможен.");
+			return;
+		}
+		_nucleusLayer.SelectSpawnPreset(_nucleusLayer.ThrowerCoreTier, holeCount);
 	}
 
 	private void OnEnergyPressed(int tier)

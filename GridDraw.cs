@@ -31,6 +31,13 @@ public partial class GridDraw : Node2D
     [Export] public float ChunkGridZoomThreshold = 0.1f; // ниже этого зума — сетка чанков вместо клеток
 
     private static readonly Color LineColor = new Color(0.35f, 0.35f, 0.4f);
+    // По заданию клиента: на близком зуме, когда рисуется сетка КЛЕТОК (шаг
+    // CellSize), линии, совпадающие с границей чанка, должны быть заметно
+    // светлее обычных — иначе на частой сетке клеток границу чанка не видно
+    // вообще. На дальнем зуме, когда сетка уже сама ЧАНКОВ (шаг
+    // CellSize*ChunkSize, см. _Process), разделять нечего — там и так каждая
+    // линия это граница чанка, красится как раньше, одним LineColor.
+    private static readonly Color ChunkLineColor = new Color(0.62f, 0.62f, 0.7f);
 
     private int _chunkSize = 16;
     private int _minCol, _maxCol, _minRow, _maxRow;
@@ -100,12 +107,21 @@ public partial class GridDraw : Node2D
     {
         if (!_haveRange) return;
 
+        // Сетка клеток и сетка чанков (см. _Process) — одна и та же отрисовка,
+        // разница только в шаге (_step) и, теперь, в подсветке границ чанка:
+        // в режиме клеток (_step == CellSize) индекс линии c/r — это реальный
+        // мировой номер столбца/строки, поэтому можно спросить, кратен ли он
+        // ChunkSize (см. IsChunkBoundary); в режиме чанков индекс уже сам по
+        // себе номер чанка — разделять там нечего, весь частокол как раньше.
+        bool cellGridMode = _step == CellSize;
+
         float top = _minRow * _step;
         float bottom = _maxRow * _step;
         for (int c = _minCol; c <= _maxCol; c++)
         {
             float x = c * _step;
-            DrawLine(new Vector2(x, top), new Vector2(x, bottom), LineColor, _lineWidth);
+            var color = cellGridMode && IsChunkBoundary(c) ? ChunkLineColor : LineColor;
+            DrawLine(new Vector2(x, top), new Vector2(x, bottom), color, _lineWidth);
         }
 
         float left = _minCol * _step;
@@ -113,7 +129,26 @@ public partial class GridDraw : Node2D
         for (int r = _minRow; r <= _maxRow; r++)
         {
             float y = r * _step;
-            DrawLine(new Vector2(left, y), new Vector2(right, y), LineColor, _lineWidth);
+            var color = cellGridMode && IsChunkBoundary(r) ? ChunkLineColor : LineColor;
+            DrawLine(new Vector2(left, y), new Vector2(right, y), color, _lineWidth);
         }
+    }
+
+    // true, если номер клетки cellIndex лежит РОВНО на границе чанка — то
+    // есть на той же линии, где NucleusLayer.GetOrCreateChunk проводит
+    // границу между чанками (cx = floor(col / ChunkSize), см. её комментарий):
+    // такое floor-деление даёт границы на каждом кратном ChunkSize числе в
+    // ОБЕ стороны от нуля, включая отрицательные (мир не ограничен началом
+    // координат — камеру можно свободно увести в минус). Обычный "%" в C# для
+    // отрицательного cellIndex вернёт отрицательный остаток (например,
+    // -1 % 16 == -1, а не 15) — поэтому остаток приводится к настоящему
+    // математическому модулю вручную, иначе часть границ на отрицательных
+    // координатах осталась бы неподсвеченной.
+    private bool IsChunkBoundary(int cellIndex)
+    {
+        if (_chunkSize <= 0) return false;
+        int m = cellIndex % _chunkSize;
+        if (m < 0) m += _chunkSize;
+        return m == 0;
     }
 }
