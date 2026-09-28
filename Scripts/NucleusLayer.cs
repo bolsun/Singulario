@@ -3043,6 +3043,29 @@ public partial class NucleusLayer : Node2D
 		public List<MoleculeLayer.SavedMolecule> Molecules { get; set; } = new();
 		// Порты чанков (T002): режим и содержимое. В старых сохранениях поля нет.
 		public List<SavedPort> Ports { get; set; } = new();
+		// Чёрные дыры (T003): клетки слоя 2 и счётчики поглощённого. В старых
+		// сохранениях полей нет; ЧД слоя 1 раньше не сохранялись вовсе.
+		public List<SavedBlackHole> BlackHoles { get; set; } = new();
+		public SavedAbsorbed Absorbed { get; set; }
+	}
+
+	private class SavedBlackHole
+	{
+		public int Cx { get; set; }
+		public int Cy { get; set; }
+	}
+
+	private class SavedAbsorbed
+	{
+		public long Atoms { get; set; }
+		// Частицы по цветам: пары (цвет, количество), только ненулевые.
+		public List<SavedColorCount> Particles { get; set; } = new();
+	}
+
+	private class SavedColorCount
+	{
+		public int Color { get; set; }
+		public long Count { get; set; }
 	}
 
 	private class SavedPort
@@ -3092,6 +3115,16 @@ public partial class NucleusLayer : Node2D
 
 		if (_moleculeLayer != null) data.Molecules = _moleculeLayer.ExportMolecules();
 
+		if (BlackHoles != null)
+		{
+			foreach (var hole in BlackHoles.Enumerate())
+				data.BlackHoles.Add(new SavedBlackHole { Cx = hole.Cx, Cy = hole.Cy });
+			data.Absorbed = new SavedAbsorbed { Atoms = BlackHoles.AtomsAbsorbed };
+			for (int c = 0; c < BlackHoleSet.ColorCount; c++)
+				if (BlackHoles.ParticlesAbsorbed[c] != 0)
+					data.Absorbed.Particles.Add(new SavedColorCount { Color = c, Count = BlackHoles.ParticlesAbsorbed[c] });
+		}
+
 		if (Ports != null)
 			foreach (var pair in Ports.Enumerate())
 				data.Ports.Add(new SavedPort
@@ -3117,9 +3150,9 @@ public partial class NucleusLayer : Node2D
 		return new SavedNucleus { Row = n.Row, Col = n.Col, CoreTier = n.CoreTier, Dir = n.Dir, HoleCount = holeCount };
 	}
 
-	// Разбирает JSON и полностью заменяет им текущее поле (ядра + источники
-	// частиц — чёрная дыра и старый EnergyLayer НЕ трогаются, они и не
-	// сохранялись). При успехе возвращает true; при любой ошибке разбора —
+	// Разбирает JSON и полностью заменяет им текущее поле (ядра, источники
+	// частиц, порты, чёрные дыры, молекулы — старый EnergyLayer НЕ трогается,
+	// он и не сохранялся). При успехе возвращает true; при любой ошибке разбора —
 	// false и текст ошибки в error, а поле остаётся НЕТРОНУТЫМ (сам разбор
 	// JSON целиком происходит ДО очистки текущего поля).
 	public bool ImportFieldJson(string json, out string error)
@@ -3187,18 +3220,35 @@ public partial class NucleusLayer : Node2D
 			portsPlaced++;
 		}
 
+		// Чёрные дыры — после слоя 1 и портов, до молекул: правило занятости то
+		// же, что при установке инструментом (MoleculeLayer.TryPlaceBlackHole).
+		int holesPlaced = 0;
+		var holesList = data.BlackHoles ?? new List<SavedBlackHole>();
+		foreach (var sh in holesList)
+		{
+			bool ok = _moleculeLayer != null ? _moleculeLayer.TryPlaceBlackHole(sh.Cx, sh.Cy, log: false) : BlackHoles.Add(sh.Cx, sh.Cy);
+			if (ok) holesPlaced++;
+			else GD.PushWarning($"[NucleusLayer] импорт: L2-клетка ({sh.Cx},{sh.Cy}) занята — чёрная дыра пропущена.");
+		}
+		if (data.Absorbed != null)
+		{
+			BlackHoles.AtomsAbsorbed = data.Absorbed.Atoms;
+			foreach (var pc in data.Absorbed.Particles ?? new List<SavedColorCount>())
+				if (pc.Color >= 0 && pc.Color < BlackHoleSet.ColorCount) BlackHoles.ParticlesAbsorbed[pc.Color] = pc.Count;
+		}
+
 		// Молекулы — после слоя 1: в чанк с содержимым слоя 1 они не ставятся.
 		var moleculesList = data.Molecules ?? new List<MoleculeLayer.SavedMolecule>();
 		int moleculesPlaced = _moleculeLayer?.ImportMolecules(moleculesList) ?? 0;
 
-		GD.Print($"[NucleusLayer] поле загружено из JSON: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, портов {portsPlaced}/{portsList.Count}, молекул {moleculesPlaced}/{moleculesList.Count}, тик сброшен в 0.");
+		GD.Print($"[NucleusLayer] поле загружено из JSON: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, портов {portsPlaced}/{portsList.Count}, ЧД {holesPlaced}/{holesList.Count}, молекул {moleculesPlaced}/{moleculesList.Count}, тик сброшен в 0.");
 		error = null;
 		return true;
 	}
 
 	// Очищает ВСЁ текущее поле ядер и источников частиц перед загрузкой новых
-	// (см. ImportFieldJson) — чёрную дыру и старый EnergyLayer намеренно не
-	// трогает (они по заданию не участвуют в сохранении/загрузке). Ядра
+	// (см. ImportFieldJson) — старый EnergyLayer намеренно не трогает (он по
+	// заданию не участвует в сохранении/загрузке). Ядра
 	// удаляются не через RemoveNucleusEntity по одному (это пересобирало бы
 	// меши чанка на каждое отдельное удаление — дорого при большом поле), а
 	// разом: чанк просто получает пустой список и одну пересборку мешей.
@@ -3219,6 +3269,7 @@ public partial class NucleusLayer : Node2D
 		foreach (var layer in _energyClusterLayers) layer.ClearAll();
 		_moleculeLayer?.ClearAll();
 		Ports?.Clear();
+		BlackHoles?.Clear();
 
 		// По заданию — при загрузке тик должен быть 0, а вместе с ним и все
 		// производные величины часов симуляции, чтобы не осталось дробного
