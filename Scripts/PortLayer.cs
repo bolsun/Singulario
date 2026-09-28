@@ -61,9 +61,9 @@ public partial class PortLayer : Node2D
 		if (!ports.TryGetPortAtCell(row, col, out var key)) return;
 
 		GetViewport().SetInputAsHandled();
-		if (_moleculeLayer != null && _moleculeLayer.HasMoleculeAtChunk(key.Cx, key.Cy))
+		if (_moleculeLayer != null && _moleculeLayer.IsChunkTakenByLayer2(key.Cx, key.Cy))
 		{
-			GD.Print($"[PortLayer] чанк ({key.Cx},{key.Cy}) занят молекулой слоя 2 — порт не открыть.");
+			GD.Print($"[PortLayer] чанк ({key.Cx},{key.Cy}) занят объектом слоя 2 (молекула или ЧД) — порт не открыть.");
 			return;
 		}
 
@@ -102,6 +102,7 @@ public partial class PortLayer : Node2D
 		int maxCy = Mathf.FloorToInt((topLeft.Y + size.Y) / _chunkWorldSize);
 
 		var ports = _nucleusLayer.Ports;
+		var holes = _nucleusLayer.BlackHoles;
 		var colors = _nucleusLayer.TierPreviewColors;
 		long chunkCount = (long)(maxCx - minCx + 1) * (maxCy - minCy + 1);
 
@@ -109,11 +110,14 @@ public partial class PortLayer : Node2D
 		{
 			for (int cy = minCy; cy <= maxCy; cy++)
 				for (int cx = minCx; cx <= maxCx; cx++)
+				{
+					if (holes.Contains(cx, cy)) continue; // дырки ЧД рисует BlackHoleLayer
 					for (int side = 0; side < PortSet.SideCount; side++)
 					{
 						var key = new PortKey(cx, cy, side);
 						DrawPortHalf(this, PortCenter(key, _chunkWorldSize), _cellSize, side, ports.Get(key), colors, 1f);
 					}
+				}
 		}
 		else
 		{

@@ -160,12 +160,6 @@ public partial class EnergyClusterLayer : TileMapLayer
 	// добавлению новых тиров в сцене). Нужны для двух вещей: взаимный сброс
 	// выбора на панели спавна и защита клетки от двух тиров одновременно.
 	private List<EnergyClusterLayer> _siblingLayers = new();
-	// Чёрная дыра (см. BlackHoleLayer) — клетка не может одновременно быть и
-	// источником, и поглотителем, поэтому установка кластера должна стирать
-	// чёрную дыру в той же клетке (симметрично тому, как BlackHoleLayer сама
-	// стирает источники при своей установке — см. BlackHoleLayer.PlaceBlackHoleAt),
-	// а выбор режима кластера — сбрасывать выбор режима чёрной дыры.
-	private BlackHoleLayer _blackHoleLayer;
 	private MoleculeLayer _moleculeLayer;
 
 	private bool _leftMouseHeld;
@@ -186,7 +180,6 @@ public partial class EnergyClusterLayer : TileMapLayer
 
 		_nucleusLayer = GetNodeOrNull<NucleusLayer>("../NucleusLayer");
 		_energyLayer = GetNodeOrNull<EnergyLayer>("../TileMapLayer");
-		_blackHoleLayer = GetNodeOrNull<BlackHoleLayer>("../BlackHoleLayer");
 		_moleculeLayer = GetNodeOrNull<MoleculeLayer>("../MoleculeLayer");
 
 		var parent = GetParent();
@@ -209,7 +202,6 @@ public partial class EnergyClusterLayer : TileMapLayer
 		_lastPlacedCell = null;
 		_nucleusLayer?.ClearSelection();
 		_energyLayer?.ClearSelection();
-		_blackHoleLayer?.ClearSelection();
 		foreach (var sibling in _siblingLayers) sibling.ClearSelection();
 		GD.Print($"[EnergyClusterLayer] выбран тир {Tier} (скопление частиц). Клик (или удержание ЛКМ) по полю — поставить.");
 	}
@@ -291,8 +283,8 @@ public partial class EnergyClusterLayer : TileMapLayer
 		if (_lastPlacedCell.HasValue && _lastPlacedCell.Value == (row, col)) return;
 
 		_lastPlacedCell = (row, col);
-		// Чанк занят молекулой слоя 2 — сюда нельзя (см. MoleculeLayer).
-		if (_moleculeLayer != null && _moleculeLayer.HasMoleculeAtCell(row, col)) return;
+		// Чанк занят объектом слоя 2 (молекула, ЧД) — сюда нельзя (см. MoleculeLayer).
+		if (_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col)) return;
 		// Клетка порта чанка — не для источников (см. PortSet).
 		if (_nucleusLayer?.Ports != null && _nucleusLayer.Ports.IsPortCell(row, col)) return;
 		PlaceClusterAt(row, col);
@@ -314,9 +306,6 @@ public partial class EnergyClusterLayer : TileMapLayer
 		// просто перекрытая нашим тайлом сверху (и вернувшаяся бы обратно на
 		// вид, если позже стереть текущий тир).
 		foreach (var sibling in _siblingLayers) sibling.EraseClusterAt(row, col);
-		// Клетка не может одновременно быть источником и чёрной дырой (см.
-		// комментарий у _blackHoleLayer/BlackHoleLayer.PlaceBlackHoleAt).
-		_blackHoleLayer?.EraseBlackHoleAt(row, col);
 
 		bool alreadyOurs = _clusterOf.ContainsKey(key);
 

@@ -20,7 +20,6 @@
 [ext_resource type="Script" uid="uid://m7w6whifhwgu" path="res://Scripts/BlackHoleLayer.cs" id="14_blackhole"]
 [ext_resource type="Script" path="res://Scripts/SaveLoadPanel.cs" id="16_saveload"]
 [ext_resource type="Script" path="res://Scripts/MoleculeLayer.cs" id="17_molecule"]
-[ext_resource type="Texture2D" uid="uid://deasd2pph72w6" path="res://Resources/Textures/black_hole_96px.png" id="15_blackhole_tex"]
 [ext_resource type="Script" uid="uid://dt55kgmbck18b" path="res://Scripts/PortLayer.cs" id="18_port"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_trn2v"]
@@ -177,15 +176,6 @@ terrain_set_0/terrain_0/name = "Terrain 0"
 terrain_set_0/terrain_0/color = Color(0.59623784, 0.09441046, 0.6667496, 1)
 sources/0 = SubResource("TileSetAtlasSource_20pc6")
 
-[sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_blackhole"]
-texture = ExtResource("15_blackhole_tex")
-texture_region_size = Vector2i(96, 96)
-0:0/0 = 0
-
-[sub_resource type="TileSet" id="TileSet_blackhole"]
-tile_size = Vector2i(96, 96)
-sources/0 = SubResource("TileSetAtlasSource_blackhole")
-
 [node name="Main" type="Node2D" unique_id=11295892]
 script = ExtResource("3_main")
 
@@ -255,6 +245,5 @@ Tier = 2
 [node name="ClusterHoverProbe" type="Node2D" parent="." unique_id=475651449]
 script = ExtResource("13_hoverprobe")
 
-[node name="BlackHoleLayer" type="TileMapLayer" parent="." unique_id=2075888489]
-tile_set = SubResource("TileSet_blackhole")
+[node name="BlackHoleLayer" type="Node2D" parent="." unique_id=2075888489]
 script = ExtResource("14_blackhole")

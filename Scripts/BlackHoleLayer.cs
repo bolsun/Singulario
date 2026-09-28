@@ -1,166 +1,95 @@
 using Godot;
 using System.Collections.Generic;
 
-// Чёрная дыра — терраин-объект, как и источники энергии (EnergyClusterLayer),
-// а НЕ ядро: своего чанкования/колец/MultiMesh у неё нет, она просто живёт в
-// собственном разреженном множестве клеток на этом TileMapLayer (тот же
-// принцип, что и у "источников" — сначала физическая клетка на карте, потом
-// побочный эффект, который эта клетка производит на ядра рядом).
-//
-// Единственная функция чёрной дыры — уничтожать частицу, попавшую в
-// кольцевой слот СОСЕДНЕГО ядра, если этот слот ориентирован на клетку с
-// чёрной дырой (см. отдельный шаг поглощения в NucleusLayer.SimTick). Сама
-// чёрная дыра ничего не хранит и не накапливает — ни ёмкости, ни
-// кластеризации, ни вариантов тайла (спрайт один и тот же для любой клетки,
-// см. black_hole_96px.png).
-//
-// CellSize — тот же принцип единственного источника истины через GridDraw,
-// что и у NucleusLayer/EnergyLayer/EnergyClusterLayer.
-public partial class BlackHoleLayer : TileMapLayer
+// Чёрная дыра (ЧД, T003) — встроенный объект слоя 2 на всю клетку (= чанк
+// слоя 1). Данные и правила — BlackHoleSet (NucleusLayer.BlackHoles), этот
+// узел только:
+//   - на тех же часах после слоя 2 забирает готовые атомы из выходных портов
+//     соседних чанков, стоящих против сторон ЧД (SimTick);
+//   - рисует ЧД на обоих слоях в мировых координатах (одна камера): спрайт на
+//     весь чанк без вращения и 4 неподвижные дырки-входа (PortLayer.DrawPortHalf).
+// Установка/удаление — инструмент слоя 2 в MoleculeLayer (там же правило
+// занятости клетки). С ядрами слоя 1 ЧД напрямую не взаимодействует.
+public partial class BlackHoleLayer : Node2D
 {
-	public int CellSize { get; private set; }
+	public const string TexturePath = "res://Resources/Textures/black_hole_96px.png";
 
-	// Индекс TileSetAtlasSource внутри TileSet этого узла (см. "sources/N" в
-	// Main.tscn) — как и у EnergyClusterLayer.AtlasSourceId, Terrain тут не
-	// используется, обычная нумерация источников атласа.
-	[Export] public int AtlasSourceId = 0;
-
-	// Клетки, где стоит чёрная дыра — просто множество, без доп. данных:
-	// в отличие от EnergyClusterLayer тут нет ни количества частиц, ни
-	// кластеризации соседних клеток — каждая клетка с чёрной дырой действует
-	// независимо и вечно (поглощает, пока стоит на карте).
-	private readonly HashSet<(int row, int col)> _cells = new();
-
-	private bool _selected;
 	private NucleusLayer _nucleusLayer;
-	private EnergyLayer _energyLayer;
-	// Тир-слои источников частиц — нужны для взаимного исключения: клетка не
-	// может одновременно быть и источником, и поглотителем (см.
-	// PlaceBlackHoleAt), а также для сброса их выбора на панели спавна при
-	// выборе режима чёрной дыры (тот же принцип, что и у
-	// EnergyClusterLayer._siblingLayers, только между разными типами слоёв).
-	private readonly List<EnergyClusterLayer> _clusterLayers = new();
+	private BlackHoleSet _holes;
+	private PortSet _ports;
+	private Texture2D _texture;
+	private float _cellSize;
+	private float _chunkWorldSize;
+	private bool _ready;
 
-	private bool _leftMouseHeld;
-	private (int row, int col)? _lastPlacedCell;
-	private MoleculeLayer _moleculeLayer;
+	private readonly List<PortAbsorb> _portEvents = new();
+	private Rect2 _viewRect;
+
+	public Texture2D Texture => _texture;
 
 	public override void _Ready()
 	{
-		var gridDraw = GetNode<GridDraw>("../GridLayer");
-		CellSize = gridDraw.CellSize;
-
-		// Тот же порядок отрисовки, что и у остальных терраин-слоёв — ниже
-		// ядер, независимо от порядка узлов в дереве сцены.
-		ZIndex = -1;
-
 		_nucleusLayer = GetNodeOrNull<NucleusLayer>("../NucleusLayer");
-		_energyLayer = GetNodeOrNull<EnergyLayer>("../TileMapLayer");
-		_moleculeLayer = GetNodeOrNull<MoleculeLayer>("../MoleculeLayer");
-
-		var parent = GetParent();
-		if (parent != null)
+		if (_nucleusLayer == null || !_nucleusLayer.IsReady || _nucleusLayer.BlackHoles == null)
 		{
-			foreach (var child in parent.GetChildren())
-				if (child is EnergyClusterLayer layer)
-					_clusterLayers.Add(layer);
+			GD.PrintErr("[BlackHoleLayer] NucleusLayer не найден или не инициализирован — ЧД не работают.");
+			return;
 		}
+		_texture = GD.Load<Texture2D>(TexturePath);
+		if (_texture == null) GD.PrintErr($"[BlackHoleLayer] не загрузился спрайт {TexturePath}.");
 
-		SetProcessUnhandledInput(true);
+		_holes = _nucleusLayer.BlackHoles;
+		_ports = _nucleusLayer.Ports;
+		_cellSize = _nucleusLayer.CellSize;
+		_chunkWorldSize = _cellSize * _nucleusLayer.ChunkSize;
+		TextureFilter = TextureFilterEnum.Nearest;
+		_ready = true;
 	}
 
-	// Вызывается с панели спавна — включает режим установки чёрной дыры и
-	// сбрасывает выбор у всех остальных способов расстановки (тот же принцип
-	// взаимоисключающего выбора, что и у EnergyClusterLayer.SelectClusterMode/
-	// NucleusLayer.SelectSpawnPreset) — иначе ЛКМ было бы не ясно, что именно
-	// ставить.
-	public void SelectBlackHoleMode()
+	// Вызывается NucleusLayer после тика слоя 1 и слоя 2 (общие часы и пауза).
+	public void SimTick(long tick)
 	{
-		_selected = true;
-		_lastPlacedCell = null;
-		_nucleusLayer?.ClearSelection();
-		_energyLayer?.ClearSelection();
-		foreach (var layer in _clusterLayers) layer.ClearSelection();
-		GD.Print("[BlackHoleLayer] выбрана чёрная дыра. Клик (или удержание ЛКМ) по полю — поставить.");
+		if (!_ready || _holes.Count == 0) return;
+		_portEvents.Clear();
+		_holes.AbsorbFromPorts(_ports, _portEvents);
 	}
 
-	// Вызывается NucleusLayer/EnergyLayer/EnergyClusterLayer при выборе своего
-	// пресета — сбрасывает выбор здесь (см. комментарий у SelectBlackHoleMode).
-	public void ClearSelection()
+	public Vector2 HoleCenter(int cx, int cy) =>
+		new Vector2((cx + 0.5f) * _chunkWorldSize, (cy + 0.5f) * _chunkWorldSize);
+
+	private Rect2 HoleRect(int cx, int cy) =>
+		new Rect2(cx * _chunkWorldSize, cy * _chunkWorldSize, _chunkWorldSize, _chunkWorldSize);
+
+	private void UpdateViewRect()
 	{
-		_selected = false;
-	}
-
-	public bool HasBlackHoleAt(int row, int col) => _cells.Contains((row, col));
-	// Выбран ли инструмент установки чёрной дыры (для подсветки запрета, см. MoleculeLayer).
-	public bool IsPlacing => _selected;
-	// Все клетки с чёрной дырой — для заливки L2-клеток на слое 2 (см. MoleculeLayer).
-	public IEnumerable<(int row, int col)> EnumerateCells() => _cells;
-
-	public override void _UnhandledInput(InputEvent @event)
-	{
-		if (@event is not InputEventMouseButton mb || mb.ButtonIndex != MouseButton.Left) return;
-		// На слое 2 клики обрабатывает только слой молекул (см. ViewLayer).
-		if (ViewLayer.IsLayer2) return;
-
-		if (mb.Pressed)
-		{
-			if (!_selected) return;
-			_leftMouseHeld = true;
-			_lastPlacedCell = null;
-			TryPlaceAtMouseIfSelected();
-			GetViewport().SetInputAsHandled();
-		}
-		else
-		{
-			_leftMouseHeld = false;
-		}
+		var cam = GetViewport().GetCamera2D();
+		if (cam == null) { _viewRect = new Rect2(); return; }
+		var size = GetViewportRect().Size / cam.Zoom;
+		_viewRect = new Rect2(cam.GetScreenCenterPosition() - size / 2f, size);
 	}
 
 	public override void _Process(double delta)
 	{
-		// На слое 2 слой 1 не рисуется и не ставится (см. ViewLayer).
-		Visible = !ViewLayer.IsLayer2;
-		if (ViewLayer.IsLayer2) { _leftMouseHeld = false; return; }
-		if (_leftMouseHeld) TryPlaceAtMouseIfSelected();
+		if (!_ready) return;
+		UpdateViewRect();
+		QueueRedraw();
 	}
 
-	private void TryPlaceAtMouseIfSelected()
+	public override void _Draw()
 	{
-		if (!_selected) return;
-
-		var worldPos = GetGlobalMousePosition();
-		int col = Mathf.FloorToInt(worldPos.X / CellSize);
-		int row = Mathf.FloorToInt(worldPos.Y / CellSize);
-		if (_lastPlacedCell.HasValue && _lastPlacedCell.Value == (row, col)) return;
-
-		_lastPlacedCell = (row, col);
-		// Чанк занят молекулой слоя 2 — сюда нельзя (см. MoleculeLayer).
-		if (_moleculeLayer != null && _moleculeLayer.HasMoleculeAtCell(row, col)) return;
-		PlaceBlackHoleAt(row, col);
-	}
-
-	// Ставит чёрную дыру в клетку (row, col) — один и тот же тайл всегда, без
-	// вариантов (в отличие от EnergyClusterLayer.PlaceClusterAt). Стирает в
-	// этой же клетке источник частиц на всех тир-слоях, если он там был —
-	// клетка не может одновременно быть и источником, и поглотителем
-	// (симметрично тому, как сами тир-слои стирают друг друга при взаимном
-	// перехвате клетки — см. EnergyClusterLayer.PlaceClusterAt/_siblingLayers).
-	// Повторная установка в ту же клетку безвредна (HashSet, SetCell идемпотентны).
-	public void PlaceBlackHoleAt(int row, int col)
-	{
-		foreach (var layer in _clusterLayers) layer.EraseClusterAt(row, col);
-
-		_cells.Add((row, col));
-		SetCell(new Vector2I(col, row), AtlasSourceId, Vector2I.Zero);
-	}
-
-	// Убирает чёрную дыру из клетки — публичный симметричный метод на случай
-	// будущего инструмента стирания (сейчас в UI кнопки на это нет, как и у
-	// EnergyClusterLayer.EraseClusterAt для соответствующего случая).
-	public void EraseBlackHoleAt(int row, int col)
-	{
-		if (!_cells.Remove((row, col))) return;
-		EraseCell(new Vector2I(col, row));
+		if (!_ready || _holes.Count == 0) return;
+		var colors = _nucleusLayer.TierPreviewColors;
+		var inputPort = new PortState { Mode = PortMode.Input };
+		foreach (var hole in _holes.Enumerate())
+		{
+			var rect = HoleRect(hole.Cx, hole.Cy);
+			if (!_viewRect.Intersects(rect)) continue;
+			if (_texture != null) DrawTextureRect(_texture, rect, false);
+			for (int side = 0; side < PortSet.SideCount; side++)
+			{
+				var key = new PortKey(hole.Cx, hole.Cy, side);
+				PortLayer.DrawPortHalf(this, PortLayer.PortCenter(key, _chunkWorldSize), _cellSize, side, inputPort, colors, 1f);
+			}
+		}
 	}
 }
