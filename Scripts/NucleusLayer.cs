@@ -1178,6 +1178,9 @@ public partial class NucleusLayer : Node2D
 				_tickAccumulatorMs -= PrototypeTickMs;
 				_globalTick++;
 				SimTick();
+				// Слой 2 (перенос атомов молекулами) — на тех же часах, после
+				// слоя 1: порты уже обменялись частицами на этом тике.
+				_moleculeLayer?.SimTick(_globalTick);
 				guard++;
 				_upsWindowTicks++;
 
