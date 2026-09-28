@@ -27,10 +27,16 @@ public partial class MoleculeLayer : Node2D
 	// истины. Допустимо 1/2/4/8 (степени двойки, чтобы периоды молекул делили
 	// периоды колец); иное значение при запуске приводится к ближайшему.
 	[Export] public int L2TickRatio = 1;
-	private static readonly int[] AllowedTickRatios = { 1, 2, 4, 8 };
+	private static readonly int[] AllowedTickRatios = { 1, 2, 4, 8, 16 };
 
 	[Export] public float FillAlpha = 0.35f;
 	[Export] public float BlockedAlpha = 0.35f;
+	// Затухание гнёзд молекул на слое 1: от перехода со слоя 2 до зума, на
+	// котором появляются дырки ядер слоя 1 (NucleusLayer.HoleHideZoom).
+	// Прогресс t считается по логарифму зума (колесо меняет зум умножением),
+	// прозрачность = HoleOpacity * (1 - t)^HoleFadeExponent — при показателе
+	// > 1 гнёзда быстро бледнеют сразу после перехода, затем хвост уходит в 0.
+	[Export] public float HoleFadeExponent = 2f;
 
 	private static readonly Color NucleiFillColor = new Color(0.8f, 0.8f, 0.85f);
 	private static readonly Color BlackHoleFillColor = new Color(0.45f, 0.2f, 0.6f);
@@ -517,7 +523,10 @@ public partial class MoleculeLayer : Node2D
 	{
 		if (!_ready) return;
 
-		UpdateHoles();
+		float holeAlpha = HoleAlpha();
+		_holeNode.Visible = holeAlpha > 0f;
+		_holeNode.Modulate = new Color(1f, 1f, 1f, holeAlpha);
+		if (_holeNode.Visible) UpdateHoles();
 
 		if (ViewLayer.IsLayer2)
 		{
@@ -532,6 +541,23 @@ public partial class MoleculeLayer : Node2D
 			_preview.Visible = false;
 			UpdateLayer1Hover();
 		}
+	}
+
+	private float HoleAlpha()
+	{
+		float full = _nucleusLayer.HoleOpacity;
+		if (ViewLayer.IsLayer2) return full;
+
+		var cam = GetViewport().GetCamera2D();
+		if (cam == null) return full;
+
+		float start = ViewLayer.ExitFactor / _chunkSize; // зум возврата на слой 1
+		float end = _nucleusLayer.HoleHideZoom;
+		if (end <= start) return 0f;
+
+		float t = Mathf.Log(cam.Zoom.X / start) / Mathf.Log(end / start);
+		t = Mathf.Clamp(t, 0f, 1f);
+		return full * Mathf.Pow(1f - t, HoleFadeExponent);
 	}
 
 	// Слой 2: превью молекулы в свободной клетке или красная клетка, если нельзя.
