@@ -28,6 +28,7 @@ public partial class FpsLabel : Label
 			+ $"\nChunks: {_nucleusLayer.VisibleChunkCount}/{_nucleusLayer.TotalChunkCount}"
 			+ $"\nЯдра: {_nucleusLayer.ActiveNucleusCount}"
 			+ PortCounters(_nucleusLayer.Ports)
+			+ BlackHoleCounters(_nucleusLayer.BlackHoles)
 			: "";
 		string ratio = _moleculeLayer != null ? $"  k = {_moleculeLayer.L2TickRatio}" : "";
 		Text = $"FPS: {Engine.GetFramesPerSecond()}  Слой {ViewLayer.Current}{ratio}{extraInfo}";
@@ -42,5 +43,23 @@ public partial class FpsLabel : Label
 		string dropped = ports.ParticlesDiscarded > 0 ? $"  сброшено {ports.ParticlesDiscarded}" : "";
 		return $"\nПорты: упак. {ports.ParticlesPacked}  атомов {ports.AtomsCreated}"
 			+ $"  распак. {ports.AtomsUnpacked}  выдано {ports.ParticlesEmitted}{dropped}";
+	}
+
+	private static readonly string[] ColorLabels = { "Ж", "К", "С", "Сер" };
+	private readonly System.Text.StringBuilder _sb = new();
+
+	// Поглощено чёрными дырами (T003): атомов всего и частиц по цветам.
+	private string BlackHoleCounters(BlackHoleSet holes)
+	{
+		if (holes == null || (holes.Count == 0 && holes.AtomsAbsorbed == 0)) return "";
+		_sb.Clear();
+		_sb.Append("\nЧД (").Append(holes.Count).Append("): атомов ").Append(holes.AtomsAbsorbed);
+		for (int c = 0; c < BlackHoleSet.ColorCount; c++)
+		{
+			long n = holes.ParticlesAbsorbed[c];
+			if (n == 0) continue;
+			_sb.Append("  ").Append(c < ColorLabels.Length ? ColorLabels[c] : "#" + c).Append(' ').Append(n);
+		}
+		return _sb.ToString();
 	}
 }

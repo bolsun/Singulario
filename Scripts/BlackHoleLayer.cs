@@ -52,6 +52,14 @@ public partial class BlackHoleLayer : Node2D
 		if (!_ready || _holes.Count == 0) return;
 		_portEvents.Clear();
 		_holes.AbsorbFromPorts(_ports, _portEvents);
+		foreach (var e in _portEvents)
+			OnAtomAbsorbed(e.Hole.Cx, e.Hole.Cy, e.Atom, PortLayer.PortCenter(e.From, _chunkWorldSize));
+	}
+
+	// Атом засчитан ЧД (cx, cy); from — мировая точка, откуда он пришёл
+	// (центр порта или гнездо молекулы). Только визуал, на симуляцию не влияет.
+	public void OnAtomAbsorbed(int cx, int cy, Atom atom, Vector2 from)
+	{
 	}
 
 	public Vector2 HoleCenter(int cx, int cy) =>

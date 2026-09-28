@@ -663,7 +663,8 @@ public partial class MoleculeLayer : Node2D
 	// правила TransferRules с флагами слоя 1; принятый атом блокируется до
 	// следующего поворота принявшей молекулы. Блок — неподвижный серый объект
 	// без спина: молекула забирает готовый атом с выходной стороны и отдаёт атом
-	// во входную. Порядок обхода — _list (порядок установки), детерминирован.
+	// во входную. ЧД (T003) — такой же объект, у которого все стороны — входы
+	// без буфера. Порядок обхода — _list (порядок установки), детерминирован.
 
 	private static readonly (int dx, int dy)[] Compass4 = { (0, -1), (1, 0), (0, 1), (-1, 0) }; // N, E, S, W
 	private readonly HashSet<(Molecule m, int slot)> _claimed = new();
@@ -739,9 +740,10 @@ public partial class MoleculeLayer : Node2D
 			}
 		}
 
-		// Молекула ↔ блок. На одну сторону блока смотрит ровно одна L2-клетка,
-		// поэтому спора за порт между молекулами нет.
+		// Молекула ↔ блок и молекула → ЧД. На одну сторону блока/ЧД смотрит
+		// ровно одна L2-клетка, поэтому спора за порт между молекулами нет.
 		var ports = _nucleusLayer.Ports;
+		var holes = _nucleusLayer.BlackHoles;
 		if (ports == null) return;
 		int gray = _nucleusLayer.GrayCoreTier;
 		foreach (var m in _list)
@@ -753,6 +755,23 @@ public partial class MoleculeLayer : Node2D
 				int p = PhysicalSlot(m, k, tick);
 				if (!m.Slots[p] || _claimed.Contains((m, p))) continue;
 				var (dx, dy) = Compass4[side];
+
+				// ЧД (T003): все её порты — входы, ведёт себя как серое без
+				// спина; атом засчитывается сразу, дырка ЧД тут же свободна.
+				if (holes != null && holes.Contains(m.Cx + dx, m.Cy + dy))
+				{
+					var held = m.Content[p];
+					if (held.HasAtom && !held.Locked
+						&& _nucleusLayer.TierSpinAllowed(gray, TransferRules.NoSpin, m.Tier, m.Dir))
+					{
+						holes.Absorb(held.Atom);
+						_blackHoleLayer?.OnAtomAbsorbed(m.Cx + dx, m.Cy + dy, held.Atom, SlotPosition(m, p, RenderOffset(m)));
+						m.Content[p] = default;
+						_claimed.Add((m, p));
+					}
+					continue;
+				}
+
 				var key = new PortKey(m.Cx + dx, m.Cy + dy, PortSet.OppositeSide(side));
 				var mode = ports.ModeOf(key);
 				if (mode == PortMode.Closed) continue;
