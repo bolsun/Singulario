@@ -27,8 +27,20 @@ public partial class FpsLabel : Label
 			? $"\nUPS: {_nucleusLayer.CurrentUPS:0}"
 			+ $"\nChunks: {_nucleusLayer.VisibleChunkCount}/{_nucleusLayer.TotalChunkCount}"
 			+ $"\nЯдра: {_nucleusLayer.ActiveNucleusCount}"
+			+ PortCounters(_nucleusLayer.Ports)
 			: "";
 		string ratio = _moleculeLayer != null ? $"  k = {_moleculeLayer.L2TickRatio}" : "";
 		Text = $"FPS: {Engine.GetFramesPerSecond()}  Слой {ViewLayer.Current}{ratio}{extraInfo}";
+	}
+
+	// Отладка портов (T002): упаковано частиц / атомов создано / атомов
+	// распаковано / частиц выдано (+ сброшено при смене режима). На замкнутой
+	// схеме: упаковано = 8 × создано, выдано ≤ 8 × распаковано.
+	private static string PortCounters(PortSet ports)
+	{
+		if (ports == null) return "";
+		string dropped = ports.ParticlesDiscarded > 0 ? $"  сброшено {ports.ParticlesDiscarded}" : "";
+		return $"\nПорты: упак. {ports.ParticlesPacked}  атомов {ports.AtomsCreated}"
+			+ $"  распак. {ports.AtomsUnpacked}  выдано {ports.ParticlesEmitted}{dropped}";
 	}
 }
