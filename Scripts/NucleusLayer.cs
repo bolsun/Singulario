@@ -2522,24 +2522,22 @@ public partial class NucleusLayer : Node2D
 	// задумано этим правилом изначально.
 	private bool TransferAllowed(NucleusEntity receiver, NucleusEntity giver, int giverColor)
 	{
-		// См. [Export] GrayAcceptsAnySpin выше — обычная проверка совпадения
-		// спина (Dir) не применяется, когда ПОЛУЧАТЕЛЬ — серое ядро: оно
-		// принимает от кого угодно. Когда получатель — НЕ серое (в т.ч. когда
-		// именно серое сейчас отдаёт), проверка спина действует как обычно.
-		bool skipSpinCheck = GrayAcceptsAnySpin && receiver.CoreTier == GrayCoreTier;
-		if (!skipSpinCheck && receiver.Dir != giver.Dir) return false;
-
-		// См. [Export] RequireSameCoreTier выше — сравниваем тир ДАВАТЕЛЯ и
-		// ПОЛУЧАТЕЛЯ напрямую (не цвет частицы), серое ядро с любой стороны —
-		// исключение, взаимодействует со всеми как и раньше.
-		if (RequireSameCoreTier
-			&& giver.CoreTier != GrayCoreTier
-			&& receiver.CoreTier != GrayCoreTier
-			&& giver.CoreTier != receiver.CoreTier)
+		// Тир и спин — общие законы слоёв 1 и 2 (см. TransferRules): серый
+		// получатель при GrayAcceptsAnySpin не проверяет спин; при
+		// RequireSameCoreTier разные цветные тиры не взаимодействуют, серое с
+		// любой стороны — исключение. Dir у ядер всегда ±1.
+		if (!TransferRules.TierSpinAllowed(
+				receiver.CoreTier, receiver.Dir, giver.CoreTier, giver.Dir,
+				GrayCoreTier, GrayAcceptsAnySpin, RequireSameCoreTier))
 			return false;
 
 		return ColorAccepted(receiver, giverColor);
 	}
+
+	// Для MoleculeLayer: те же флаги законов тира/спина, что у ядер слоя 1.
+	public bool TierSpinAllowed(int receiverTier, int receiverDir, int giverTier, int giverDir) =>
+		TransferRules.TierSpinAllowed(receiverTier, receiverDir, giverTier, giverDir,
+			GrayCoreTier, GrayAcceptsAnySpin, RequireSameCoreTier);
 
 	// Общая проверка "может ли receiver принять частицу цвета color" —
 	// используется и при передаче между ядрами (TransferAllowed), и при
