@@ -61,9 +61,9 @@ public partial class PortLayer : Node2D
 		if (!ports.TryGetPortAtCell(row, col, out var key)) return;
 
 		GetViewport().SetInputAsHandled();
-		if (_moleculeLayer != null && _moleculeLayer.HasMoleculeAtChunk(key.Cx, key.Cy))
+		if (_moleculeLayer != null && _moleculeLayer.IsChunkTakenByLayer2(key.Cx, key.Cy))
 		{
-			GD.Print($"[PortLayer] чанк ({key.Cx},{key.Cy}) занят молекулой слоя 2 — порт не открыть.");
+			GD.Print($"[PortLayer] чанк ({key.Cx},{key.Cy}) занят объектом слоя 2 (молекула или ЧД) — порт не открыть.");
 			return;
 		}
 
@@ -102,6 +102,7 @@ public partial class PortLayer : Node2D
 		int maxCy = Mathf.FloorToInt((topLeft.Y + size.Y) / _chunkWorldSize);
 
 		var ports = _nucleusLayer.Ports;
+		var holes = _nucleusLayer.BlackHoles;
 		var colors = _nucleusLayer.TierPreviewColors;
 		long chunkCount = (long)(maxCx - minCx + 1) * (maxCy - minCy + 1);
 
@@ -109,11 +110,14 @@ public partial class PortLayer : Node2D
 		{
 			for (int cy = minCy; cy <= maxCy; cy++)
 				for (int cx = minCx; cx <= maxCx; cx++)
+				{
+					if (holes.Contains(cx, cy)) continue; // дырки ЧД рисует BlackHoleLayer
 					for (int side = 0; side < PortSet.SideCount; side++)
 					{
 						var key = new PortKey(cx, cy, side);
 						DrawPortHalf(this, PortCenter(key, _chunkWorldSize), _cellSize, side, ports.Get(key), colors, 1f);
 					}
+				}
 		}
 		else
 		{
@@ -146,8 +150,9 @@ public partial class PortLayer : Node2D
 
 	// Половина дырки порта / дырка блока: полукруг внутрь чанка, обод по режиму,
 	// 8 точек частиц по полукругу, полный атом — белое кольцо. alpha — общая
-	// прозрачность (закрытые стороны дополнительно приглушены).
-	public static void DrawPortHalf(CanvasItem ci, Vector2 center, float radius, int side, PortState state, Color[] tierColors, float alpha)
+	// прозрачность (закрытые стороны дополнительно приглушены). showSlots =
+	// false — только дырка и обод (дырки ЧД: буфера нет, точки не нужны).
+	public static void DrawPortHalf(CanvasItem ci, Vector2 center, float radius, int side, PortState state, Color[] tierColors, float alpha, bool showSlots = true)
 	{
 		const int ArcSegments = 16;
 		float a0 = InwardAngle(side) - Mathf.Pi / 2f;
@@ -166,7 +171,7 @@ public partial class PortLayer : Node2D
 		var rim = state.Mode switch { PortMode.Output => OutputColor, PortMode.Input => InputColor, _ => ClosedColor };
 		ci.DrawArc(center, radius, a0, a0 + Mathf.Pi, ArcSegments, new Color(rim, alpha * k), radius * 0.12f);
 
-		if (closed) return;
+		if (closed || !showSlots) return;
 
 		float dotR = radius * 0.1f;
 		for (int i = 0; i < Atom.Size; i++)

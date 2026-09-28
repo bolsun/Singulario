@@ -17,7 +17,8 @@ using System.Collections.Generic;
 // ядер слоя 1, у молекулы нет — она сразу крутится в общей фазе своего тира.
 //
 // Правило занятости: L2-клетка — либо чанк с содержимым слоя 1 (ядра,
-// источники, чёрные дыры), либо молекула, но не то и другое сразу.
+// источники, открытые порты), либо объект слоя 2 (молекула или чёрная дыра,
+// см. BlackHoleLayer), но не то и другое сразу.
 //
 // Ещё этот узел рисует на слое 2 упрощённый вид содержимого слоя 1 —
 // заливку L2-клеток (см. _Draw), пока детальная отрисовка слоя 1 скрыта.
@@ -39,7 +40,6 @@ public partial class MoleculeLayer : Node2D
 	[Export] public float HoleFadeExponent = 2f;
 
 	private static readonly Color NucleiFillColor = new Color(0.8f, 0.8f, 0.85f);
-	private static readonly Color BlackHoleFillColor = new Color(0.45f, 0.2f, 0.6f);
 	private static readonly Color BlockFillColor = new Color(0.55f, 0.55f, 0.6f);
 	[Export] public float BlockAlpha = 0.45f;
 	private static readonly Color BlockedColor = new Color(1f, 0.15f, 0.15f);
@@ -107,6 +107,8 @@ public partial class MoleculeLayer : Node2D
 
 	private int? _selectedTier;
 	private int _selectedHoleCount;
+	// Инструмент «чёрная дыра» (T003) — взаимоисключающий с пресетом молекулы.
+	private bool _blackHoleTool;
 	private int _currentSpinDirection = 1;
 
 	private bool _leftMouseHeld;
@@ -234,11 +236,22 @@ public partial class MoleculeLayer : Node2D
 
 	public void SelectPreset(int tier, int holeCount)
 	{
+		_blackHoleTool = false;
 		_selectedTier = tier;
 		_selectedHoleCount = holeCount;
 		_lastPlacedCell = null;
 		GD.Print($"[MoleculeLayer] выбрана молекула: тир {tier}, гнёзд {holeCount}/8, направление {(_currentSpinDirection > 0 ? "по часовой" : "против часовой")} (R — переключить).");
 	}
+
+	public void SelectBlackHoleTool()
+	{
+		_selectedTier = null;
+		_blackHoleTool = true;
+		_lastPlacedCell = null;
+		GD.Print("[MoleculeLayer] выбрана чёрная дыра: ЛКМ — поставить, ПКМ — удалить.");
+	}
+
+	private bool HasTool => _selectedTier.HasValue || _blackHoleTool;
 
 	// --- ввод (только на слое 2) ---
 
@@ -279,7 +292,7 @@ public partial class MoleculeLayer : Node2D
 		{
 			if (mb.Pressed)
 			{
-				if (!_selectedTier.HasValue) return;
+				if (!HasTool) return;
 				_leftMouseHeld = true;
 				_lastPlacedCell = null;
 				TryPlaceAtMouse();
@@ -308,10 +321,15 @@ public partial class MoleculeLayer : Node2D
 
 	private void TryPlaceAtMouse()
 	{
-		if (!_selectedTier.HasValue) return;
+		if (!HasTool) return;
 		var cell = ChunkUnderMouse();
 		if (_lastPlacedCell.HasValue && _lastPlacedCell.Value == cell) return;
 		_lastPlacedCell = cell;
+		if (_blackHoleTool)
+		{
+			TryPlaceBlackHole(cell.cx, cell.cy, log: true);
+			return;
+		}
 		TryPlace(cell.cx, cell.cy, _selectedTier.Value, _selectedHoleCount, _currentSpinDirection, log: true);
 	}
 
@@ -322,6 +340,8 @@ public partial class MoleculeLayer : Node2D
 		_lastRemovedCell = cell;
 		if (Remove(cell.cx, cell.cy))
 			GD.Print($"[MoleculeLayer] удалена молекула из L2-клетки ({cell.cx},{cell.cy}).");
+		else if (_nucleusLayer.BlackHoles.Remove(cell.cx, cell.cy))
+			GD.Print($"[MoleculeLayer] удалена чёрная дыра из L2-клетки ({cell.cx},{cell.cy}).");
 	}
 
 	private void ToggleSpinDirectionUnderMouse()
@@ -340,6 +360,11 @@ public partial class MoleculeLayer : Node2D
 	private void PickUnderMouse()
 	{
 		var cell = ChunkUnderMouse();
+		if (HasBlackHoleAtChunk(cell.cx, cell.cy))
+		{
+			SelectBlackHoleTool();
+			return;
+		}
 		if (!_at.TryGetValue(cell, out var m))
 		{
 			GD.Print($"[MoleculeLayer] пипетка: в L2-клетке ({cell.cx},{cell.cy}) нет молекулы.");
@@ -351,8 +376,8 @@ public partial class MoleculeLayer : Node2D
 
 	// --- правило занятости ---
 
-	// Есть ли в чанке (cx, cy) что-то из слоя 1: ядра, источники, чёрные дыры,
-	// открытый порт (такой чанк — блок слоя 2).
+	// Есть ли в чанке (cx, cy) что-то из слоя 1: ядра, источники, открытый
+	// порт (такой чанк — блок слоя 2).
 	public bool ChunkHasLayer1Content(int cx, int cy)
 	{
 		if (_nucleusLayer.ChunkHasNuclei(cx, cy)) return true;
@@ -364,7 +389,6 @@ public partial class MoleculeLayer : Node2D
 		{
 			for (int c = col0; c < col0 + _chunkSize; c++)
 			{
-				if (_blackHoleLayer != null && _blackHoleLayer.HasBlackHoleAt(r, c)) return true;
 				foreach (var layer in _clusterLayers)
 					if (layer.HasClusterAt(r, c)) return true;
 			}
@@ -372,14 +396,19 @@ public partial class MoleculeLayer : Node2D
 		return false;
 	}
 
-	public bool HasMoleculeAtChunk(int cx, int cy) => _at.ContainsKey((cx, cy));
+	private bool HasBlackHoleAtChunk(int cx, int cy) =>
+		_nucleusLayer.BlackHoles != null && _nucleusLayer.BlackHoles.Contains(cx, cy);
+
+	// Клетка слоя 2 занята объектом слоя 2 — молекулой или ЧД.
+	public bool IsChunkTakenByLayer2(int cx, int cy) =>
+		_at.ContainsKey((cx, cy)) || HasBlackHoleAtChunk(cx, cy);
 
 	// Для слоёв слоя 1: можно ли ставить объект в клетку (row, col) — нельзя,
-	// если её чанк занят молекулой.
-	public bool HasMoleculeAtCell(int row, int col)
+	// если её чанк занят объектом слоя 2.
+	public bool IsCellTakenByLayer2(int row, int col)
 	{
 		if (_chunkSize <= 0) return false;
-		return _at.ContainsKey((FloorDiv(col, _chunkSize), FloorDiv(row, _chunkSize)));
+		return IsChunkTakenByLayer2(FloorDiv(col, _chunkSize), FloorDiv(row, _chunkSize));
 	}
 
 	private static int FloorDiv(int a, int b) => a >= 0 ? a / b : -((-a + b - 1) / b);
@@ -391,6 +420,7 @@ public partial class MoleculeLayer : Node2D
 	private string PlaceBlockReason(int cx, int cy, int tier)
 	{
 		if (ChunkHasLayer1Content(cx, cy)) return "в чанке есть объекты слоя 1";
+		if (HasBlackHoleAtChunk(cx, cy)) return "клетка занята чёрной дырой";
 		if (_at.TryGetValue((cx, cy), out var existing) && (!IsNormalTier(tier) || !IsNormalTier(existing.Tier)))
 			return "клетка уже занята";
 		return null;
@@ -422,6 +452,30 @@ public partial class MoleculeLayer : Node2D
 		RebuildMeshes();
 
 		if (log) GD.Print($"[MoleculeLayer] установлена молекула тира {tier}, гнёзд {holeCount}/8 в L2-клетке ({cx},{cy}).");
+		return true;
+	}
+
+	// Причина, по которой ЧД нельзя поставить в клетку, или null.
+	private string BlackHoleBlockReason(int cx, int cy)
+	{
+		if (ChunkHasLayer1Content(cx, cy)) return "в чанке есть объекты слоя 1";
+		if (_at.ContainsKey((cx, cy))) return "клетка занята молекулой";
+		if (HasBlackHoleAtChunk(cx, cy)) return "здесь уже чёрная дыра";
+		return null;
+	}
+
+	// Установка ЧД (инструмент слоя 2 и загрузка сохранения).
+	public bool TryPlaceBlackHole(int cx, int cy, bool log)
+	{
+		if (!_ready) return false;
+		string reason = BlackHoleBlockReason(cx, cy);
+		if (reason != null)
+		{
+			if (log) GD.Print($"[MoleculeLayer] ЧД в L2-клетку ({cx},{cy}): {reason} — пропуск.");
+			return false;
+		}
+		_nucleusLayer.BlackHoles.Add(cx, cy);
+		if (log) GD.Print($"[MoleculeLayer] установлена чёрная дыра в L2-клетке ({cx},{cy}).");
 		return true;
 	}
 
@@ -609,7 +663,8 @@ public partial class MoleculeLayer : Node2D
 	// правила TransferRules с флагами слоя 1; принятый атом блокируется до
 	// следующего поворота принявшей молекулы. Блок — неподвижный серый объект
 	// без спина: молекула забирает готовый атом с выходной стороны и отдаёт атом
-	// во входную. Порядок обхода — _list (порядок установки), детерминирован.
+	// во входную. ЧД (T003) — такой же объект, у которого все стороны — входы
+	// без буфера. Порядок обхода — _list (порядок установки), детерминирован.
 
 	private static readonly (int dx, int dy)[] Compass4 = { (0, -1), (1, 0), (0, 1), (-1, 0) }; // N, E, S, W
 	private readonly HashSet<(Molecule m, int slot)> _claimed = new();
@@ -685,9 +740,10 @@ public partial class MoleculeLayer : Node2D
 			}
 		}
 
-		// Молекула ↔ блок. На одну сторону блока смотрит ровно одна L2-клетка,
-		// поэтому спора за порт между молекулами нет.
+		// Молекула ↔ блок и молекула → ЧД. На одну сторону блока/ЧД смотрит
+		// ровно одна L2-клетка, поэтому спора за порт между молекулами нет.
 		var ports = _nucleusLayer.Ports;
+		var holes = _nucleusLayer.BlackHoles;
 		if (ports == null) return;
 		int gray = _nucleusLayer.GrayCoreTier;
 		foreach (var m in _list)
@@ -699,6 +755,23 @@ public partial class MoleculeLayer : Node2D
 				int p = PhysicalSlot(m, k, tick);
 				if (!m.Slots[p] || _claimed.Contains((m, p))) continue;
 				var (dx, dy) = Compass4[side];
+
+				// ЧД (T003): все её порты — входы, ведёт себя как серое без
+				// спина; атом засчитывается сразу, дырка ЧД тут же свободна.
+				if (holes != null && holes.Contains(m.Cx + dx, m.Cy + dy))
+				{
+					var held = m.Content[p];
+					if (held.HasAtom && !held.Locked
+						&& _nucleusLayer.TierSpinAllowed(gray, TransferRules.NoSpin, m.Tier, m.Dir))
+					{
+						holes.Absorb(held.Atom);
+						_blackHoleLayer?.OnAtomAbsorbed(m.Cx + dx, m.Cy + dy, held.Atom, SlotPosition(m, p, RenderOffset(m)));
+						m.Content[p] = default;
+						_claimed.Add((m, p));
+					}
+					continue;
+				}
+
 				var key = new PortKey(m.Cx + dx, m.Cy + dy, PortSet.OppositeSide(side));
 				var mode = ports.ModeOf(key);
 				if (mode == PortMode.Closed) continue;
@@ -768,18 +841,37 @@ public partial class MoleculeLayer : Node2D
 	{
 		_blockedMarker.Visible = false;
 		_preview.Visible = false;
-		if (!_selectedTier.HasValue) return;
+		if (!HasTool) return;
 
 		var (cx, cy) = ChunkUnderMouse();
-		int tier = _selectedTier.Value;
 		var origin = new Vector2(cx * _chunkWorldSize, cy * _chunkWorldSize);
 
+		if (_blackHoleTool)
+		{
+			if (BlackHoleBlockReason(cx, cy) != null)
+			{
+				ShowBlocked(origin, _chunkWorldSize);
+				return;
+			}
+			var tex = _blackHoleLayer?.Texture;
+			if (tex == null) return;
+			_preview.Texture = tex;
+			_preview.Scale = Vector2.One * (_chunkWorldSize / tex.GetWidth());
+			_preview.Position = origin + new Vector2(_chunkWorldSize / 2f, _chunkWorldSize / 2f);
+			_preview.Modulate = new Color(1f, 1f, 1f, 0.5f);
+			_preview.Visible = true;
+			return;
+		}
+
+		int tier = _selectedTier.Value;
 		if (PlaceBlockReason(cx, cy, tier) != null)
 		{
 			ShowBlocked(origin, _chunkWorldSize);
 			return;
 		}
 
+		_preview.Texture = _nucleusLayer.CoreTexture;
+		_preview.Scale = new Vector2(_scale, _scale);
 		var colors = _nucleusLayer.TierPreviewColors;
 		var baseColor = (colors != null && tier >= 0 && tier < colors.Length) ? colors[tier] : Colors.White;
 		_preview.Position = origin + new Vector2(_chunkWorldSize / 2f, _chunkWorldSize / 2f);
@@ -788,18 +880,18 @@ public partial class MoleculeLayer : Node2D
 	}
 
 	// Слой 1: если выбран инструмент установки, а клетка под курсором в чанке
-	// с молекулой — красная клетка (ставить туда нельзя).
+	// с объектом слоя 2 — красная клетка (ставить туда нельзя).
 	private void UpdateLayer1Hover()
 	{
 		_blockedMarker.Visible = false;
-		bool placing = _nucleusLayer.HasSpawnSelection || (_blackHoleLayer?.IsPlacing ?? false);
+		bool placing = _nucleusLayer.HasSpawnSelection;
 		foreach (var layer in _clusterLayers) placing |= layer.IsPlacing;
 		if (!placing) return;
 
 		var p = GetGlobalMousePosition();
 		int col = Mathf.FloorToInt(p.X / _cellSize);
 		int row = Mathf.FloorToInt(p.Y / _cellSize);
-		if (!HasMoleculeAtCell(row, col)) return;
+		if (!IsCellTakenByLayer2(row, col)) return;
 
 		ShowBlocked(new Vector2(col * _cellSize, row * _cellSize), _cellSize);
 	}
@@ -812,8 +904,9 @@ public partial class MoleculeLayer : Node2D
 	}
 
 	// Упрощённый вид содержимого слоя 1 на слое 2: одна заливка на L2-клетку.
-	// Приоритет тона: источник (цвет его тира) > чёрная дыра > ядра. Блоки
-	// (чанки с открытым портом) не заливаются — их рисует DrawBlocks.
+	// Приоритет тона: источник (цвет его тира) > ядра. Блоки (чанки с
+	// открытым портом) не заливаются — их рисует DrawBlocks, чёрные дыры —
+	// BlackHoleLayer.
 	private void RebuildFills()
 	{
 		_fills.Clear();
@@ -824,13 +917,6 @@ public partial class MoleculeLayer : Node2D
 		var nucleiColor = new Color(NucleiFillColor.R, NucleiFillColor.G, NucleiFillColor.B, FillAlpha);
 		foreach (var chunk in _nucleusLayer.EnumerateOccupiedChunks())
 			_fills[chunk] = nucleiColor;
-
-		if (_blackHoleLayer != null)
-		{
-			var holeColor = new Color(BlackHoleFillColor.R, BlackHoleFillColor.G, BlackHoleFillColor.B, FillAlpha);
-			foreach (var (row, col) in _blackHoleLayer.EnumerateCells())
-				_fills[(FloorDiv(col, _chunkSize), FloorDiv(row, _chunkSize))] = holeColor;
-		}
 
 		var colors = _nucleusLayer.TierPreviewColors;
 		foreach (var layer in _clusterLayers)

@@ -132,8 +132,7 @@ public partial class NucleusLayer : Node2D
 	[Export] public int ThrowTicksPerCell = 8;
 
 	// Максимальная дистанция полёта в клетках (по заданию — 16), после
-	// которой ядро исчезает само, даже если ни во что не врезалось и не
-	// улетело в чёрную дыру раньше.
+	// которой ядро исчезает само, если ни во что не врезалось раньше.
 	[Export] public int ThrowMaxDistance = 16;
 
 	// Пауза (в тиках) после того, как вращатель/бросатель довернул соседа на
@@ -339,6 +338,10 @@ public partial class NucleusLayer : Node2D
 	// Порты чанков (T002) — одно место истины для слоя 1 (обмен частицами в
 	// SimTick, PortLayer) и слоя 2 (блоки и атомы, MoleculeLayer).
 	public PortSet Ports { get; private set; }
+	// Чёрные дыры (T003): клетки слоя 2 и счётчики поглощённого — одно место
+	// истины для MoleculeLayer (приём от молекул) и BlackHoleLayer (приём из
+	// портов, отрисовка).
+	public BlackHoleSet BlackHoles { get; private set; }
 	// Выбран ли сейчас пресет ядра для установки — для подсветки запрета на
 	// слое 1 (клетка в чанке с молекулой, см. MoleculeLayer).
 	public bool HasSpawnSelection => _selectedSpawnTier.HasValue;
@@ -411,7 +414,7 @@ public partial class NucleusLayer : Node2D
 		// СТАРУЮ клетку (обновляются только в момент прибытия, см.
 		// FinishArrivedMoves) — и на время переезда ядро полностью изъято из
 		// _entAt (см. StartMove), поэтому автоматически невидимо как сосед ни
-		// для передачи частиц, ни для захвата, ни для чёрной дыры, ни для ПКМ
+		// для передачи частиц, ни для захвата, ни для порта, ни для ПКМ
 		// удаления — что и требуется ("не взаимодействует ни с кем на время
 		// переезда"), без отдельных проверок в каждом месте, которое ходит
 		// через _entAt.
@@ -459,8 +462,8 @@ public partial class NucleusLayer : Node2D
 		// прямолинейного полёта (после того как PendingFlightDir уже
 		// подхвачен): едет по клетке за ThrowTicksPerCell тиков в направлении
 		// FlightDir, пока не сработает одно из условий окончания полёта (см.
-		// EvaluateFlightStep) — чёрная дыра/обычное ядро по соседству,
-		// исчерпанная дистанция или занятая следующая клетка. Технически всё
+		// EvaluateFlightStep) — обычное ядро по соседству, исчерпанная
+		// дистанция или занятая следующая клетка. Технически всё
 		// то же самое перемещение (IsMoving/StartMove/EffectiveCenter), что и у
 		// обычного толчка — IsFlying лишь помечает, что после прибытия в
 		// FinishArrivedMoves нужно снова вызвать EvaluateFlightStep, а не
@@ -515,7 +518,7 @@ public partial class NucleusLayer : Node2D
 	// нужно для поиска соседей при передаче частиц (независимо от чанков).
 	private readonly Dictionary<(int row, int col), NucleusEntity> _entAt = new();
 	// ВСЕ живые ядра — участвуют в симуляции (SimTick: поворот, передача,
-	// захват энергии, поглощение чёрной дырой) независимо от того, виден ли
+	// захват энергии, обмен с портами) независимо от того, виден ли
 	// их чанк камере. Раньше это множество наполнялось/чистилось по
 	// видимости чанка в _Process (ядра за кадром экрана были полностью
 	// "заморожены") — по факту это был баг, а не намеренное поведение:
@@ -644,11 +647,10 @@ public partial class NucleusLayer : Node2D
 	// список, а не одна ссылка; находится автоматически по типу скрипта среди
 	// узлов того же родителя, а не по жёстко зашитым именам.
 	private List<EnergyClusterLayer> _energyClusterLayers = new();
-	// Чёрная дыра (см. BlackHoleLayer) — терраин-объект, не ядро: уничтожает
-	// частицу в кольцевом слоте ядра, ориентированном на соседнюю клетку с
-	// чёрной дырой (см. отдельный шаг поглощения в SimTick). Ссылка нужна и
-	// для этого шага, и для взаимоисключающего сброса выбора на панели спавна
-	// (та же причина, что и у _energyLayer/_energyClusterLayers).
+	// Чёрные дыры (T003) — объекты слоя 2, с ядрами напрямую не
+	// взаимодействуют, только через порты. Узел нужен, чтобы на тех же часах
+	// после слоя 2 забрать готовые атомы из выходных портов, смотрящих на ЧД
+	// (см. BlackHoleLayer.SimTick), данные — BlackHoles.
 	private BlackHoleLayer _blackHoleLayer;
 	// Слой 2 — только для правила занятости: в чанк с молекулой объекты слоя 1 не ставятся.
 	private MoleculeLayer _moleculeLayer;
@@ -713,6 +715,7 @@ public partial class NucleusLayer : Node2D
 
 		_currentSpinDirection = SpinDirection;
 		Ports = new PortSet(ChunkSize);
+		BlackHoles = new BlackHoleSet();
 
 		_ready = true;
 		GD.Print($"[NucleusLayer] инициализирован. FillDensity={FillDensity}, ParticleFillChance={ParticleFillChance}.");
@@ -866,7 +869,7 @@ public partial class NucleusLayer : Node2D
 	// самой кнопки не ставит ещё и ядро под курсором заодно. ЛКМ — установка
 	// (не только по мгновенному клику, но и всё время, пока зажата, см.
 	// _leftMouseHeld/TryPlaceAtMouseIfSelected). ПКМ — удаление ЛЮБОГО объекта
-	// под курсором (ядро, источник частиц, чёрная дыра — см. RemoveAllAtMouse),
+	// под курсором (ядро, источник частиц — см. RemoveAllAtMouse),
 	// тем же принципом удержания (см. _rightMouseHeld/TryRemoveAtMouse), и НЕ
 	// требует выбранного пресета на панели.
 	public override void _UnhandledInput(InputEvent @event)
@@ -919,7 +922,6 @@ public partial class NucleusLayer : Node2D
 		_selectedSpawnHoleCount = holeCount;
 		_lastPlacedCell = null;
 		_energyLayer?.ClearSelection();
-		_blackHoleLayer?.ClearSelection();
 		foreach (var clusterLayer in _energyClusterLayers) clusterLayer.ClearSelection();
 		GD.Print($"[NucleusLayer] выбрано для установки: тир {tier}, дырок {holeCount}/8, направление {(_currentSpinDirection > 0 ? "по часовой" : "против часовой")} (R — переключить). Клик (или удержание ЛКМ) по полю — поставить.");
 	}
@@ -979,15 +981,13 @@ public partial class NucleusLayer : Node2D
 	// ПКМ убирает ЛЮБОЙ объект под курсором, а не только ядро — источники
 	// частиц (EnergyClusterLayer, любой тир сразу, на случай если клетка
 	// почему-то оказалась занята сразу на нескольких — штатно такого не
-	// бывает, но лишняя проверка безвредна) и чёрную дыру (BlackHoleLayer)
-	// тоже. Старый TileMapLayer/EnergyLayer сюда намеренно НЕ включён — он по
+	// бывает, но лишняя проверка безвредна). Старый TileMapLayer/EnergyLayer сюда намеренно НЕ включён — он по
 	// условиям задачи не используется и не трогается.
 	//
 	// row/col для ядра уже посчитаны вызывающей стороной в системе координат
 	// NucleusLayer (this.CellSize); для остальных слоёв пересчитываем их
 	// заново из worldPos СОБСТВЕННЫМ CellSize каждого слоя — тот же защитный
-	// приём, что и в SimTick (шаги 3/4, мост к EnergyClusterLayer/
-	// BlackHoleLayer), на случай если чей-то CellSize когда-нибудь разъедется
+	// приём, что и в SimTick (шаг 3, мост к EnergyClusterLayer), на случай если чей-то CellSize когда-нибудь разъедется
 	// с остальными, хотя сейчас все они читают одно и то же значение из
 	// GridDraw.
 	private void RemoveAllAtMouse(Vector2 worldPos, int row, int col)
@@ -1001,12 +1001,6 @@ public partial class NucleusLayer : Node2D
 			layer.EraseClusterAt(srcRow, srcCol);
 		}
 
-		if (_blackHoleLayer != null)
-		{
-			int bhCol = Mathf.FloorToInt(worldPos.X / _blackHoleLayer.CellSize);
-			int bhRow = Mathf.FloorToInt(worldPos.Y / _blackHoleLayer.CellSize);
-			_blackHoleLayer.EraseBlackHoleAt(bhRow, bhCol);
-		}
 	}
 
 	// Удаляет ядро (если оно там есть) из клетки (row, col): убирает из
@@ -1028,8 +1022,7 @@ public partial class NucleusLayer : Node2D
 	// RemoveNucleusAt (которая ищет ядро по клетке — годится для ПКМ, где
 	// клетка и так уже под курсором) в отдельный переиспользуемый метод по
 	// прямой ссылке на сущность — понадобился для бросателя (см.
-	// ThrowerCoreTier/EvaluateFlightStep): долетевшее до чёрной дыры или
-	// исчерпавшее дистанцию ядро нужно удалить, а вызывающий код уже держит
+	// ThrowerCoreTier/EvaluateFlightStep): исчерпавшее дистанцию ядро нужно удалить, а вызывающий код уже держит
 	// ссылку на саму сущность, а не координаты клетки под курсором.
 	private void RemoveNucleusEntity(NucleusEntity nucleus)
 	{
@@ -1128,7 +1121,7 @@ public partial class NucleusLayer : Node2D
 		// (ядро добавлялось/убиралось из симуляции при входе/выходе чанка из
 		// поля зрения камеры) — из-за этого ядра вне экрана полностью
 		// переставали тикать (не вращались, не передавали частицы, не
-		// захватывали энергию, не поглощались чёрной дырой), пока камера не
+		// захватывали энергию), пока камера не
 		// возвращала их чанк в кадр. Теперь _activeSet — это ВСЕ живые ядра
 		// (наполняется/чистится в PlaceNucleusAt/RemoveNucleusAt/генерации
 		// чанка, см. комментарий у поля), а видимость чанка решает только,
@@ -1181,6 +1174,8 @@ public partial class NucleusLayer : Node2D
 				// Слой 2 (перенос атомов молекулами) — на тех же часах, после
 				// слоя 1: порты уже обменялись частицами на этом тике.
 				_moleculeLayer?.SimTick(_globalTick);
+				// ЧД забирает готовые атомы из выходных портов, смотрящих на неё.
+				_blackHoleLayer?.SimTick(_globalTick);
 				guard++;
 				_upsWindowTicks++;
 
@@ -1229,9 +1224,9 @@ public partial class NucleusLayer : Node2D
 		int col = Mathf.FloorToInt(worldPos.X / CellSize);
 		int row = Mathf.FloorToInt(worldPos.Y / CellSize);
 
-		if (_entAt.ContainsKey((row, col)) || (_moleculeLayer != null && _moleculeLayer.HasMoleculeAtCell(row, col)))
+		if (_entAt.ContainsKey((row, col)) || (_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col)))
 		{
-			_placementPreview.Visible = false; // клетка занята (или чанк занят молекулой — красную подсветку рисует MoleculeLayer)
+			_placementPreview.Visible = false; // клетка занята (или чанк занят объектом слоя 2 — красную подсветку рисует MoleculeLayer)
 			return;
 		}
 
@@ -1497,9 +1492,9 @@ public partial class NucleusLayer : Node2D
 		}
 
 		// Шаг 2в: обмен частицами с портами чанков (см. PortSet/PortLayer).
-		// Порт — неподвижное серое ядро без спина (TransferRules.NoSpin): тот же
-		// подход, что у чёрной дыры в шаге 4 (объект в соседней клетке, учёт
-		// _claimed), но обход идёт от портов в порядке PortSet, чтобы спор
+		// Порт — неподвижное серое ядро без спина (TransferRules.NoSpin): объект
+		// в соседней клетке, с учётом _claimed; обход идёт от портов в порядке
+		// PortSet, чтобы спор
 		// нескольких ядер за один порт решался детерминированно.
 		if (Ports != null && PortTicksPerParticle > 0 && _globalTick % PortTicksPerParticle == 0)
 			ExchangeWithPorts();
@@ -1581,46 +1576,6 @@ public partial class NucleusLayer : Node2D
 						break; // клетка не может нести два тира сразу — как нашли, дальше не ищем
 					}
 					if (captured) break; // одна попытка захвата на ядро за тик — дальше направления не перебираем
-				}
-			}
-		}
-
-		// Шаг 4: поглощение частиц чёрной дырой (BlackHoleLayer) — зеркально
-		// Шагу 3, но наоборот по направлению эффекта: там дырка ТЯНЕТ частицу
-		// из источника, здесь заполненный слот, обращённый к чёрной дыре,
-		// просто уничтожается (превращается в пустую дырку), без какого-либо
-		// начисления. У чёрной дыры нет ни ёмкости, ни кулдауна — в отличие от
-		// источников её нечем исчерпать, поэтому шаг выполняется КАЖДЫЙ тик,
-		// без индивидуального NextCaptureTick на ядро (см. Шаг 3). Работает
-		// как ещё один "giver" наравне с проходом B шага 2 — поэтому проверяет
-		// _claimed, чтобы не забрать то, что этот же тик уже отдано соседнему
-		// ядру шагом 2.
-		if (_blackHoleLayer != null)
-		{
-			foreach (var n in _activeSet)
-			{
-				// Пропускаем только летящее (IsFlying) — см. комментарий у
-				// Шага 1.
-				if (n.IsMoving && n.IsFlying) continue;
-				for (int idx = 0; idx < OrthogonalSlots.Length; idx++)
-				{
-					int k = OrthogonalSlots[idx];
-					int p = PhysicalSlotForCompass(n, k);
-					var slot = n.Ring[p];
-					if (!slot.Exists || slot.IsHole || slot.Locked) continue;
-					if (_claimed.Contains((n, p))) continue;
-
-					// Тот же мост через мировые пиксели, что и в шаге 3 —
-					// на случай, если CellSize чёрной дыры когда-нибудь
-					// разойдётся с CellSize ядра.
-					var (dr, dc) = Adj8[k];
-					Vector2 neighborWorld = n.Center + new Vector2(dc, dr) * CellSize;
-					int bhCol = Mathf.FloorToInt(neighborWorld.X / _blackHoleLayer.CellSize);
-					int bhRow = Mathf.FloorToInt(neighborWorld.Y / _blackHoleLayer.CellSize);
-					if (!_blackHoleLayer.HasBlackHoleAt(bhRow, bhCol)) continue;
-
-					n.Ring[p] = new RingSlot { Exists = true, IsHole = true };
-					_claimed.Add((n, p));
 				}
 			}
 		}
@@ -2398,7 +2353,7 @@ public partial class NucleusLayer : Node2D
 			// EvaluateFlightStep) --- ПОСЛЕ того, как переезд физически
 			// завершён и ядро гарантированно уже в _entAt и в правильном
 			// чанке, чтобы соседские проверки внутри EvaluateFlightStep
-			// (чёрная дыра/обычное ядро рядом, занятость следующей клетки)
+			// (обычное ядро рядом, занятость следующей клетки)
 			// видели консистентное состояние поля, а не промежуточное.
 			if (n.PendingFlightDir.HasValue)
 			{
@@ -2443,41 +2398,23 @@ public partial class NucleusLayer : Node2D
 	// Вызывается сразу по прибытии летящего ядра в новую клетку (как сразу
 	// после толчка бросателем, так и после каждого следующего перелётного
 	// шага) — решает, что дальше, строго в этом порядке (по заданию):
-	// 1) чёрная дыра в любой из 8 соседних клеток (включая диагонали) —
-	//    уничтожает летящее ядро целиком;
+	// 1) (раньше здесь была чёрная дыра по соседству — с T003 ЧД объект
+	//    слоя 2 и с ядрами напрямую не взаимодействует);
 	// 2) любое ОБЫЧНОЕ ядро (Ж/К/С/Сер — явно НЕ вращатель/бросатель) СТРОГО
 	//    ПОД ПРЯМЫМ УГЛОМ (см. OrthogonalSlots — только 4 ортогонали, БЕЗ
 	//    диагоналей, по заданию) — "прилипание": полёт останавливается прямо
 	//    тут, ядро остаётся на месте и продолжает работать как обычное;
 	// 3) дистанция исчерпана (FlightCellsRemaining<=0) — исчезает;
-	// 4) следующая клетка по курсу чем-либо занята — во что бы то ни было не
-	//    влетаем, тот же исход, что и (2) — прилипаем на текущем месте;
+	// 4) следующая клетка по курсу чем-либо занята (в том числе её чанк —
+	//    объект слоя 2: молекула или ЧД) — не влетаем, тот же исход, что и
+	//    (2) — прилипаем на текущем месте;
 	// 5) иначе — летим ещё на одну клетку в том же направлении.
 	private void EvaluateFlightStep(NucleusEntity n)
 	{
-		if (_blackHoleLayer != null)
-		{
-			for (int k = 0; k < 8; k++)
-			{
-				var (dr, dc) = Adj8[k];
-				// Тот же мост через мировые пиксели, что и в SimTick (шаги 3/4)
-				// — на случай, если CellSize чёрной дыры когда-нибудь разойдётся
-				// с CellSize ядра (сейчас оба читают один и тот же GridDraw).
-				Vector2 neighborWorld = n.Center + new Vector2(dc, dr) * CellSize;
-				int bhCol = Mathf.FloorToInt(neighborWorld.X / _blackHoleLayer.CellSize);
-				int bhRow = Mathf.FloorToInt(neighborWorld.Y / _blackHoleLayer.CellSize);
-				if (_blackHoleLayer.HasBlackHoleAt(bhRow, bhCol))
-				{
-					RemoveNucleusEntity(n);
-					return;
-				}
-			}
-		}
-
 		// Только 4 ортогонали (см. OrthogonalSlots — N/E/S/W, без диагоналей)
 		// — по заданию, "приклеивание" к обычному ядру должно срабатывать
 		// строго под прямым углом, по диагонали НЕ прилипает (раньше тут
-		// перебирались все 8 направлений Adj8, как у чёрной дыры выше).
+		// перебирались все 8 направлений Adj8).
 		for (int idx = 0; idx < OrthogonalSlots.Length; idx++)
 		{
 			int k = OrthogonalSlots[idx];
@@ -2499,7 +2436,8 @@ public partial class NucleusLayer : Node2D
 		var (fdr, fdc) = Adj8[n.FlightDir];
 		int nextRow = n.Row + fdr;
 		int nextCol = n.Col + fdc;
-		if (_entAt.ContainsKey((nextRow, nextCol)))
+		if (_entAt.ContainsKey((nextRow, nextCol))
+			|| (_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(nextRow, nextCol)))
 		{
 			AttachFlyingNucleus(n);
 			return;
@@ -3000,9 +2938,9 @@ public partial class NucleusLayer : Node2D
 		int col = Mathf.FloorToInt(worldPos.X / CellSize);
 		int row = Mathf.FloorToInt(worldPos.Y / CellSize);
 
-		if (_moleculeLayer != null && _moleculeLayer.HasMoleculeAtCell(row, col))
+		if (_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col))
 		{
-			GD.Print($"[NucleusLayer] чанк клетки ({row},{col}) занят молекулой слоя 2 — пропуск.");
+			GD.Print($"[NucleusLayer] чанк клетки ({row},{col}) занят объектом слоя 2 (молекула или ЧД) — пропуск.");
 			return;
 		}
 
@@ -3088,8 +3026,8 @@ public partial class NucleusLayer : Node2D
 	// (_globalTick, тир) — см. DiscreteRotationOffset — поэтому сама собой
 	// "обнуляется" вместе со сбросом _globalTick), количество частиц в
 	// источниках (Amount/MaxAmount — источник при загрузке ставится заново,
-	// как обычной ручной установкой, и копит свежий бак с нуля). Чёрная дыра
-	// и старый EnergyLayer (Terrain) в сохранение/загрузку не входят вовсе.
+	// как обычной ручной установкой, и копит свежий бак с нуля). Старый
+	// EnergyLayer (Terrain) в сохранение/загрузку не входит вовсе.
 	private static readonly JsonSerializerOptions FieldJsonOptions = new()
 	{
 		WriteIndented = true,
@@ -3105,6 +3043,29 @@ public partial class NucleusLayer : Node2D
 		public List<MoleculeLayer.SavedMolecule> Molecules { get; set; } = new();
 		// Порты чанков (T002): режим и содержимое. В старых сохранениях поля нет.
 		public List<SavedPort> Ports { get; set; } = new();
+		// Чёрные дыры (T003): клетки слоя 2 и счётчики поглощённого. В старых
+		// сохранениях полей нет; ЧД слоя 1 раньше не сохранялись вовсе.
+		public List<SavedBlackHole> BlackHoles { get; set; } = new();
+		public SavedAbsorbed Absorbed { get; set; }
+	}
+
+	private class SavedBlackHole
+	{
+		public int Cx { get; set; }
+		public int Cy { get; set; }
+	}
+
+	private class SavedAbsorbed
+	{
+		public long Atoms { get; set; }
+		// Частицы по цветам: пары (цвет, количество), только ненулевые.
+		public List<SavedColorCount> Particles { get; set; } = new();
+	}
+
+	private class SavedColorCount
+	{
+		public int Color { get; set; }
+		public long Count { get; set; }
 	}
 
 	private class SavedPort
@@ -3154,6 +3115,16 @@ public partial class NucleusLayer : Node2D
 
 		if (_moleculeLayer != null) data.Molecules = _moleculeLayer.ExportMolecules();
 
+		if (BlackHoles != null)
+		{
+			foreach (var hole in BlackHoles.Enumerate())
+				data.BlackHoles.Add(new SavedBlackHole { Cx = hole.Cx, Cy = hole.Cy });
+			data.Absorbed = new SavedAbsorbed { Atoms = BlackHoles.AtomsAbsorbed };
+			for (int c = 0; c < BlackHoleSet.ColorCount; c++)
+				if (BlackHoles.ParticlesAbsorbed[c] != 0)
+					data.Absorbed.Particles.Add(new SavedColorCount { Color = c, Count = BlackHoles.ParticlesAbsorbed[c] });
+		}
+
 		if (Ports != null)
 			foreach (var pair in Ports.Enumerate())
 				data.Ports.Add(new SavedPort
@@ -3179,9 +3150,9 @@ public partial class NucleusLayer : Node2D
 		return new SavedNucleus { Row = n.Row, Col = n.Col, CoreTier = n.CoreTier, Dir = n.Dir, HoleCount = holeCount };
 	}
 
-	// Разбирает JSON и полностью заменяет им текущее поле (ядра + источники
-	// частиц — чёрная дыра и старый EnergyLayer НЕ трогаются, они и не
-	// сохранялись). При успехе возвращает true; при любой ошибке разбора —
+	// Разбирает JSON и полностью заменяет им текущее поле (ядра, источники
+	// частиц, порты, чёрные дыры, молекулы — старый EnergyLayer НЕ трогается,
+	// он и не сохранялся). При успехе возвращает true; при любой ошибке разбора —
 	// false и текст ошибки в error, а поле остаётся НЕТРОНУТЫМ (сам разбор
 	// JSON целиком происходит ДО очистки текущего поля).
 	public bool ImportFieldJson(string json, out string error)
@@ -3249,18 +3220,35 @@ public partial class NucleusLayer : Node2D
 			portsPlaced++;
 		}
 
+		// Чёрные дыры — после слоя 1 и портов, до молекул: правило занятости то
+		// же, что при установке инструментом (MoleculeLayer.TryPlaceBlackHole).
+		int holesPlaced = 0;
+		var holesList = data.BlackHoles ?? new List<SavedBlackHole>();
+		foreach (var sh in holesList)
+		{
+			bool ok = _moleculeLayer != null ? _moleculeLayer.TryPlaceBlackHole(sh.Cx, sh.Cy, log: false) : BlackHoles.Add(sh.Cx, sh.Cy);
+			if (ok) holesPlaced++;
+			else GD.PushWarning($"[NucleusLayer] импорт: L2-клетка ({sh.Cx},{sh.Cy}) занята — чёрная дыра пропущена.");
+		}
+		if (data.Absorbed != null)
+		{
+			BlackHoles.AtomsAbsorbed = data.Absorbed.Atoms;
+			foreach (var pc in data.Absorbed.Particles ?? new List<SavedColorCount>())
+				if (pc.Color >= 0 && pc.Color < BlackHoleSet.ColorCount) BlackHoles.ParticlesAbsorbed[pc.Color] = pc.Count;
+		}
+
 		// Молекулы — после слоя 1: в чанк с содержимым слоя 1 они не ставятся.
 		var moleculesList = data.Molecules ?? new List<MoleculeLayer.SavedMolecule>();
 		int moleculesPlaced = _moleculeLayer?.ImportMolecules(moleculesList) ?? 0;
 
-		GD.Print($"[NucleusLayer] поле загружено из JSON: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, портов {portsPlaced}/{portsList.Count}, молекул {moleculesPlaced}/{moleculesList.Count}, тик сброшен в 0.");
+		GD.Print($"[NucleusLayer] поле загружено из JSON: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, портов {portsPlaced}/{portsList.Count}, ЧД {holesPlaced}/{holesList.Count}, молекул {moleculesPlaced}/{moleculesList.Count}, тик сброшен в 0.");
 		error = null;
 		return true;
 	}
 
 	// Очищает ВСЁ текущее поле ядер и источников частиц перед загрузкой новых
-	// (см. ImportFieldJson) — чёрную дыру и старый EnergyLayer намеренно не
-	// трогает (они по заданию не участвуют в сохранении/загрузке). Ядра
+	// (см. ImportFieldJson) — старый EnergyLayer намеренно не трогает (он по
+	// заданию не участвует в сохранении/загрузке). Ядра
 	// удаляются не через RemoveNucleusEntity по одному (это пересобирало бы
 	// меши чанка на каждое отдельное удаление — дорого при большом поле), а
 	// разом: чанк просто получает пустой список и одну пересборку мешей.
@@ -3281,6 +3269,7 @@ public partial class NucleusLayer : Node2D
 		foreach (var layer in _energyClusterLayers) layer.ClearAll();
 		_moleculeLayer?.ClearAll();
 		Ports?.Clear();
+		BlackHoles?.Clear();
 
 		// По заданию — при загрузке тик должен быть 0, а вместе с ним и все
 		// производные величины часов симуляции, чтобы не осталось дробного

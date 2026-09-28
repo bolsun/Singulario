@@ -22,9 +22,6 @@ public partial class NucleusSpawnPanel : Control
 	// и сортируем по Tier, чтобы порядок кнопок не зависел от порядка узлов
 	// в дереве сцены.
 	private List<EnergyClusterLayer> _particleLayers = new();
-	// Чёрная дыра (см. BlackHoleLayer) — терраин-объект без тиров, поэтому
-	// на панели у неё всего одна кнопка (не 3, как у ядер/скоплений частиц).
-	private BlackHoleLayer _blackHoleLayer;
 	// Слой 2 (см. MoleculeLayer): на нём панель показывает свою сетку кнопок
 	// молекул вместо кнопок слоя 1 (см. ApplyViewLayer). Выбранный инструмент
 	// каждый слой хранит у себя, поэтому при переключении он не теряется.
@@ -81,19 +78,19 @@ public partial class NucleusSpawnPanel : Control
 		// Строк: HoleCounts.Length (комбинации ядер) + HoleCounts.Length (та
 		// же линейка для серого ядра) + HoleCounts.Length (линейка для
 		// поворачивателя, см. RotatorCoreTier) + 1 (типы энергии основного
-		// слоя) + сколько нужно строк под кнопки тиров скопления частиц И
-		// кнопку чёрной дыры — считаем по факту найденных узлов (см.
+		// слоя) + сколько нужно строк под кнопки тиров скопления частиц —
+		// считаем по факту найденных узлов (см.
 		// LoadParticleLayers), а не жёстко "1", чтобы панель не обрезала
 		// кнопки, если тиров вдруг станет больше 3 (GridContainer при этом
 		// сам переносит лишние кнопки на новую строку).
-		int extraButtons = _particleLayers.Count + (_blackHoleLayer != null ? 1 : 0);
+		int extraButtons = _particleLayers.Count;
 		int clusterRows = extraButtons > 0 ? Mathf.CeilToInt(extraButtons / 3f) : 0;
 		// HoleCounts.Length * 4 — линейка "количество дырок" повторена 4 раза:
 		// обычные тиры, серое ядро, поворачиватель И бросатель (см.
 		// ThrowerCoreTier в NucleusLayer.cs).
 		int totalRows = HoleCounts.Length * 4 + 1 + clusterRows;
-		// Слой 2: Ж/К/С x 2/4/8 плюс строка серых Сер2/Сер4/Сер8.
-		if (ViewLayer.IsLayer2) totalRows = HoleCounts.Length + 1;
+		// Слой 2: Ж/К/С x 2/4/8, строка серых Сер2/Сер4/Сер8 и строка с ЧД.
+		if (ViewLayer.IsLayer2) totalRows = HoleCounts.Length + 2;
 
 		int widthPx = ButtonSize * 3; // ровно столько колонок в GridContainer
 		int heightPx = ButtonSize * totalRows;
@@ -120,7 +117,6 @@ public partial class NucleusSpawnPanel : Control
 		// в дереве лежит сама панель (см. тот же приём в FpsLabel).
 		_nucleusLayer = GetNodeOrNull<NucleusLayer>("/root/Main/NucleusLayer");
 		_energyLayer = GetNodeOrNull<EnergyLayer>("/root/Main/TileMapLayer");
-		_blackHoleLayer = GetNodeOrNull<BlackHoleLayer>("/root/Main/BlackHoleLayer");
 		_moleculeLayer = GetNodeOrNull<MoleculeLayer>("/root/Main/MoleculeLayer");
 		_particleLayers = LoadParticleLayers();
 		_tierColors = LoadTierColors();
@@ -303,29 +299,14 @@ public partial class NucleusSpawnPanel : Control
 			grid.AddChild(button);
 		}
 
-		// Последняя кнопка — чёрная дыра (см. BlackHoleLayer): в отличие от
-		// ядер и скоплений частиц у неё нет тиров, поэтому кнопка всего одна,
-		// без цикла по Tiers. Показываем только если узел реально найден в
-		// сцене (см. _Ready) — иначе кнопка ничего не могла бы сделать.
-		if (_blackHoleLayer != null)
-		{
-			var button = new Button
-			{
-				Text = "ЧД",
-				CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
-			};
-			button.Pressed += OnBlackHolePressed;
-			grid.AddChild(button);
-		}
-
 		BuildLayer2Grid();
 		ViewLayer.Changed += OnViewLayerChanged;
 		ApplyViewLayer();
 	}
 
 	// Кнопки молекул слоя 2: те же подписи и цвета, что у ядер слоя 1
-	// (Ж/К/С x 2/4/8 и Сер2/4/8). Поворачиватель и бросатель на слое 2 пока
-	// не поддерживаются (T001).
+	// (Ж/К/С x 2/4/8 и Сер2/4/8), и кнопка чёрной дыры. Поворачиватель и
+	// бросатель на слое 2 пока не поддерживаются (T001).
 	private void BuildLayer2Grid()
 	{
 		_layer2Grid = new GridContainer { Columns = 3 };
@@ -341,6 +322,15 @@ public partial class NucleusSpawnPanel : Control
 		}
 		foreach (int holeCount in HoleCounts)
 			AddMoleculeButton($"Сер{holeCount}", grayTier, holeCount);
+
+		// Чёрная дыра (T003) — встроенный объект слоя 2, ставится только здесь.
+		var holeButton = new Button
+		{
+			Text = "ЧД",
+			CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
+		};
+		holeButton.Pressed += () => _moleculeLayer?.SelectBlackHoleTool();
+		_layer2Grid.AddChild(holeButton);
 	}
 
 	private void AddMoleculeButton(string text, int tier, int holeCount)
@@ -509,18 +499,5 @@ public partial class NucleusSpawnPanel : Control
 		// Ссылка на layer гарантированно не null — кнопка создаётся только
 		// для уже найденных узлов (см. LoadParticleLayers).
 		layer.SelectClusterMode();
-	}
-
-	private void OnBlackHolePressed()
-	{
-		// Аналогично OnClusterPressed — сама установка на поле в
-		// BlackHoleLayer, эта кнопка только включает его режим (см.
-		// BlackHoleLayer._UnhandledInput/TryPlaceAtMouseIfSelected).
-		if (_blackHoleLayer == null)
-		{
-			GD.PrintErr("[NucleusSpawnPanel] не найден BlackHoleLayer — установка чёрной дыры недоступна.");
-			return;
-		}
-		_blackHoleLayer.SelectBlackHoleMode();
 	}
 }
