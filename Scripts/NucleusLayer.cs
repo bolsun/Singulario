@@ -149,6 +149,11 @@ public partial class NucleusLayer : Node2D
 	[Export] public int PauseTicksAfterStep = 0;
 
 	[Export] public float PrototypeTickMs = 16f;
+	// Потолок скорости порта чанка (T002): порт обменивается частицей с ядрами
+	// только на тиках, кратных этому числу — не чаще одной частицы за столько
+	// тиков. По GDD порт не быстрее серой линии (серое: 1 частица за 4 тика).
+	// Фаза — чистая функция глобального тика, как у поворота колец.
+	[Export] public int PortTicksPerParticle = 4;
 	// Дырки менее информативны, чем частицы, и их визуально намного больше —
 	// поэтому свой порог отключения: слой дырок гаснет раньше (при более
 	// сильном отдалении камеры), чем слой частиц (см. ParticleHideZoom).
@@ -331,6 +336,9 @@ public partial class NucleusLayer : Node2D
 	public int TierCount => _tierCount;
 	public Color[] TierPreviewColors => _tierPreviewColors;
 	public float OrbitRadius => _orbitRadius;
+	// Порты чанков (T002) — одно место истины для слоя 1 (обмен частицами в
+	// SimTick, PortLayer) и слоя 2 (блоки и атомы, MoleculeLayer).
+	public PortSet Ports { get; private set; }
 	// Выбран ли сейчас пресет ядра для установки — для подсветки запрета на
 	// слое 1 (клетка в чанке с молекулой, см. MoleculeLayer).
 	public bool HasSpawnSelection => _selectedSpawnTier.HasValue;
@@ -704,6 +712,7 @@ public partial class NucleusLayer : Node2D
 				_energyClusterLayers.Add(clusterLayer);
 
 		_currentSpinDirection = SpinDirection;
+		Ports = new PortSet(ChunkSize);
 
 		_ready = true;
 		GD.Print($"[NucleusLayer] инициализирован. FillDensity={FillDensity}, ParticleFillChance={ParticleFillChance}.");
@@ -1169,6 +1178,9 @@ public partial class NucleusLayer : Node2D
 				_tickAccumulatorMs -= PrototypeTickMs;
 				_globalTick++;
 				SimTick();
+				// Слой 2 (перенос атомов молекулами) — на тех же часах, после
+				// слоя 1: порты уже обменялись частицами на этом тике.
+				_moleculeLayer?.SimTick(_globalTick);
 				guard++;
 				_upsWindowTicks++;
 
@@ -1484,6 +1496,14 @@ public partial class NucleusLayer : Node2D
 			}
 		}
 
+		// Шаг 2в: обмен частицами с портами чанков (см. PortSet/PortLayer).
+		// Порт — неподвижное серое ядро без спина (TransferRules.NoSpin): тот же
+		// подход, что у чёрной дыры в шаге 4 (объект в соседней клетке, учёт
+		// _claimed), но обход идёт от портов в порядке PortSet, чтобы спор
+		// нескольких ядер за один порт решался детерминированно.
+		if (Ports != null && PortTicksPerParticle > 0 && _globalTick % PortTicksPerParticle == 0)
+			ExchangeWithPorts();
+
 		// Шаг 3: захват энергии из источников частиц (EnergyClusterLayer).
 		// ВАЖНО: раньше здесь была одна общая проверка на ВСЮ симуляцию сразу —
 		// "_globalTick % _energyCaptureTicks == 0" — в надежде, что она будет
@@ -1601,6 +1621,69 @@ public partial class NucleusLayer : Node2D
 
 					n.Ring[p] = new RingSlot { Exists = true, IsHole = true };
 					_claimed.Add((n, p));
+				}
+			}
+		}
+	}
+
+	private readonly List<PortKey> _portKeys = new();
+
+	// Один обмен на порт за вызов (потолок скорости — PortTicksPerParticle).
+	// Выход забирает незаблокированную частицу из гнезда соседнего ядра,
+	// смотрящего на клетку порта; вход кладёт следующую частицу своего атома в
+	// пустое гнездо, частица блокируется до поворота ядра, как при обычной
+	// передаче. Соседи — только внутри своего чанка (сосед через границу —
+	// половина порта другого чанка, блок ↔ блок в T002 не передают).
+	private void ExchangeWithPorts()
+	{
+		_portKeys.Clear();
+		foreach (var pair in Ports.Enumerate())
+			if (pair.Value.Mode != PortMode.Closed) _portKeys.Add(pair.Key);
+
+		foreach (var key in _portKeys)
+		{
+			var mode = Ports.ModeOf(key);
+			if (mode == PortMode.Output && !Ports.CanAcceptParticle(key)) continue;
+			int emitColor = mode == PortMode.Input ? Ports.PeekParticle(key) : -1;
+			if (mode == PortMode.Input && emitColor < 0) continue;
+
+			bool done = false;
+			for (int i = 0; i < 2 && !done; i++)
+			{
+				var (row, col) = Ports.Cell(key, i);
+				for (int idx = 0; idx < OrthogonalSlots.Length && !done; idx++)
+				{
+					int k = OrthogonalSlots[idx];
+					var (dr, dc) = Adj8[k];
+					int nr = row + dr, nc = col + dc;
+					if (!Ports.SameChunk(key, nr, nc) || Ports.IsPortCell(nr, nc)) continue;
+					if (!_entAt.TryGetValue((nr, nc), out var n) || !_activeSet.Contains(n)) continue;
+					if (n.IsMoving && n.IsFlying) continue;
+
+					int p = PhysicalSlotForCompass(n, Opposite(k));
+					if (_claimed.Contains((n, p))) continue;
+					var slot = n.Ring[p];
+					if (!slot.Exists) continue;
+
+					if (mode == PortMode.Output)
+					{
+						if (slot.IsHole || slot.Locked) continue;
+						if (!TransferRules.TierSpinAllowed(GrayCoreTier, TransferRules.NoSpin, n.CoreTier, n.Dir,
+								GrayCoreTier, GrayAcceptsAnySpin, RequireSameCoreTier)) continue;
+						Ports.AcceptParticle(key, slot.ColorTier);
+						n.Ring[p] = new RingSlot { Exists = true, IsHole = true };
+					}
+					else
+					{
+						if (!slot.IsHole) continue;
+						if (!TransferRules.TierSpinAllowed(n.CoreTier, n.Dir, GrayCoreTier, TransferRules.NoSpin,
+								GrayCoreTier, GrayAcceptsAnySpin, RequireSameCoreTier)) continue;
+						if (!ColorAccepted(n, emitColor)) continue;
+						Ports.EmitParticle(key);
+						n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = emitColor, Locked = true };
+					}
+					_claimed.Add((n, p));
+					done = true;
 				}
 			}
 		}
@@ -2522,24 +2605,22 @@ public partial class NucleusLayer : Node2D
 	// задумано этим правилом изначально.
 	private bool TransferAllowed(NucleusEntity receiver, NucleusEntity giver, int giverColor)
 	{
-		// См. [Export] GrayAcceptsAnySpin выше — обычная проверка совпадения
-		// спина (Dir) не применяется, когда ПОЛУЧАТЕЛЬ — серое ядро: оно
-		// принимает от кого угодно. Когда получатель — НЕ серое (в т.ч. когда
-		// именно серое сейчас отдаёт), проверка спина действует как обычно.
-		bool skipSpinCheck = GrayAcceptsAnySpin && receiver.CoreTier == GrayCoreTier;
-		if (!skipSpinCheck && receiver.Dir != giver.Dir) return false;
-
-		// См. [Export] RequireSameCoreTier выше — сравниваем тир ДАВАТЕЛЯ и
-		// ПОЛУЧАТЕЛЯ напрямую (не цвет частицы), серое ядро с любой стороны —
-		// исключение, взаимодействует со всеми как и раньше.
-		if (RequireSameCoreTier
-			&& giver.CoreTier != GrayCoreTier
-			&& receiver.CoreTier != GrayCoreTier
-			&& giver.CoreTier != receiver.CoreTier)
+		// Тир и спин — общие законы слоёв 1 и 2 (см. TransferRules): серый
+		// получатель при GrayAcceptsAnySpin не проверяет спин; при
+		// RequireSameCoreTier разные цветные тиры не взаимодействуют, серое с
+		// любой стороны — исключение. Dir у ядер всегда ±1.
+		if (!TransferRules.TierSpinAllowed(
+				receiver.CoreTier, receiver.Dir, giver.CoreTier, giver.Dir,
+				GrayCoreTier, GrayAcceptsAnySpin, RequireSameCoreTier))
 			return false;
 
 		return ColorAccepted(receiver, giverColor);
 	}
+
+	// Для MoleculeLayer: те же флаги законов тира/спина, что у ядер слоя 1.
+	public bool TierSpinAllowed(int receiverTier, int receiverDir, int giverTier, int giverDir) =>
+		TransferRules.TierSpinAllowed(receiverTier, receiverDir, giverTier, giverDir,
+			GrayCoreTier, GrayAcceptsAnySpin, RequireSameCoreTier);
 
 	// Общая проверка "может ли receiver принять частицу цвета color" —
 	// используется и при передаче между ядрами (TransferAllowed), и при
@@ -2731,6 +2812,7 @@ public partial class NucleusLayer : Node2D
 
 					int worldRow = cellRowStart + r;
 					int worldCol = cellColStart + c;
+					if (Ports != null && Ports.IsPortCell(worldRow, worldCol)) continue; // клетки портов — не для ядер (см. PortSet)
 					var center = new Vector2(
 						worldCol * CellSize + CellSize / 2f,
 						worldRow * CellSize + CellSize / 2f);
@@ -2924,6 +3006,12 @@ public partial class NucleusLayer : Node2D
 			return;
 		}
 
+		if (Ports != null && Ports.IsPortCell(row, col))
+		{
+			GD.Print($"[NucleusLayer] клетка ({row},{col}) — порт чанка, ядро сюда не ставится.");
+			return;
+		}
+
 		if (_entAt.TryGetValue((row, col), out var existingNucleus))
 		{
 			if (!IsNormalTier(tier) || !IsNormalTier(existingNucleus.CoreTier))
@@ -3015,6 +3103,17 @@ public partial class NucleusLayer : Node2D
 		// Молекулы слоя 2 (см. MoleculeLayer). В старых сохранениях поля нет —
 		// остаётся пустой список из инициализатора.
 		public List<MoleculeLayer.SavedMolecule> Molecules { get; set; } = new();
+		// Порты чанков (T002): режим и содержимое. В старых сохранениях поля нет.
+		public List<SavedPort> Ports { get; set; } = new();
+	}
+
+	private class SavedPort
+	{
+		public int Cx { get; set; }
+		public int Cy { get; set; }
+		public int Side { get; set; }  // PortSide: 0=N, 1=E, 2=S, 3=W
+		public int Mode { get; set; }  // PortMode: 0=закрыт, 1=выход, 2=вход
+		public List<int> Colors { get; set; } = new(); // частицы в порту по порядку (8 — готовый атом)
 	}
 
 	private class SavedNucleus
@@ -3054,6 +3153,14 @@ public partial class NucleusLayer : Node2D
 				data.Sources.Add(new SavedSource { Tier = layer.Tier, Row = row, Col = col });
 
 		if (_moleculeLayer != null) data.Molecules = _moleculeLayer.ExportMolecules();
+
+		if (Ports != null)
+			foreach (var pair in Ports.Enumerate())
+				data.Ports.Add(new SavedPort
+				{
+					Cx = pair.Key.Cx, Cy = pair.Key.Cy, Side = pair.Key.Side,
+					Mode = (int)pair.Value.Mode, Colors = pair.Value.Atom.ToColorList(),
+				});
 
 		return JsonSerializer.Serialize(data, FieldJsonOptions);
 	}
@@ -3102,6 +3209,11 @@ public partial class NucleusLayer : Node2D
 		var nucleiList = data.Nuclei ?? new List<SavedNucleus>();
 		foreach (var sn in nucleiList)
 		{
+			if (Ports != null && Ports.IsPortCell(sn.Row, sn.Col))
+			{
+				GD.PrintErr($"[NucleusLayer] импорт: клетка ({sn.Row},{sn.Col}) — порт чанка, ядро пропущено.");
+				continue;
+			}
 			if (PlaceNucleusForImport(sn.Row, sn.Col, sn.CoreTier, sn.Dir, sn.HoleCount)) placed++;
 			else GD.PrintErr($"[NucleusLayer] импорт: клетка ({sn.Row},{sn.Col}) уже занята — ядро пропущено.");
 		}
@@ -3122,11 +3234,26 @@ public partial class NucleusLayer : Node2D
 			if (!found) GD.PrintErr($"[NucleusLayer] импорт: не найден слой-источник тира {ss.Tier} — клетка ({ss.Row},{ss.Col}) пропущена.");
 		}
 
+		// Порты — до молекул: чанк с открытым портом — блок, молекула туда не ставится.
+		int portsPlaced = 0;
+		var portsList = data.Ports ?? new List<SavedPort>();
+		foreach (var sp in portsList)
+		{
+			if (sp.Side < 0 || sp.Side >= PortSet.SideCount || sp.Mode < 0 || sp.Mode > (int)PortMode.Input)
+			{
+				GD.PrintErr($"[NucleusLayer] импорт: порт чанка ({sp.Cx},{sp.Cy}) с неверной стороной/режимом ({sp.Side}/{sp.Mode}) — пропущен.");
+				continue;
+			}
+			var atom = sp.Mode == (int)PortMode.Closed ? default : Atom.FromColors(sp.Colors);
+			Ports.Restore(new PortKey(sp.Cx, sp.Cy, sp.Side), (PortMode)sp.Mode, atom);
+			portsPlaced++;
+		}
+
 		// Молекулы — после слоя 1: в чанк с содержимым слоя 1 они не ставятся.
 		var moleculesList = data.Molecules ?? new List<MoleculeLayer.SavedMolecule>();
 		int moleculesPlaced = _moleculeLayer?.ImportMolecules(moleculesList) ?? 0;
 
-		GD.Print($"[NucleusLayer] поле загружено из JSON: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, молекул {moleculesPlaced}/{moleculesList.Count}, тик сброшен в 0.");
+		GD.Print($"[NucleusLayer] поле загружено из JSON: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, портов {portsPlaced}/{portsList.Count}, молекул {moleculesPlaced}/{moleculesList.Count}, тик сброшен в 0.");
 		error = null;
 		return true;
 	}
@@ -3153,6 +3280,7 @@ public partial class NucleusLayer : Node2D
 
 		foreach (var layer in _energyClusterLayers) layer.ClearAll();
 		_moleculeLayer?.ClearAll();
+		Ports?.Clear();
 
 		// По заданию — при загрузке тик должен быть 0, а вместе с ним и все
 		// производные величины часов симуляции, чтобы не осталось дробного

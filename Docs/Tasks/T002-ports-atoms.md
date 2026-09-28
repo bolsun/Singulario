@@ -1,6 +1,6 @@
 # T002 — Порты чанка, атомы и их перенос молекулами
 
-Статус: поставлена.
+Статус: выполнена в `feature/ports-atoms`, ждёт проверки пользователем.
 
 Ветка: `feature/ports-atoms` от `experimental` (`git checkout -b feature/ports-atoms experimental`).
 В `main` не пушить. По завершении ветку в `experimental` вливает пользователь.

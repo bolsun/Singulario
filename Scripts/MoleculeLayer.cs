@@ -40,6 +40,8 @@ public partial class MoleculeLayer : Node2D
 
 	private static readonly Color NucleiFillColor = new Color(0.8f, 0.8f, 0.85f);
 	private static readonly Color BlackHoleFillColor = new Color(0.45f, 0.2f, 0.6f);
+	private static readonly Color BlockFillColor = new Color(0.55f, 0.55f, 0.6f);
+	[Export] public float BlockAlpha = 0.45f;
 	private static readonly Color BlockedColor = new Color(1f, 0.15f, 0.15f);
 	private static readonly Transform2D HiddenTransform = new Transform2D(Vector2.Zero, Vector2.Zero, Vector2.Zero);
 
@@ -50,6 +52,17 @@ public partial class MoleculeLayer : Node2D
 		public int Dir;
 		public int HoleCount;
 		public bool[] Slots; // RingMath.SlotMask(HoleCount)
+		public MoleculeSlot[] Content = new MoleculeSlot[RingMath.Positions]; // содержимое гнёзд (T002)
+	}
+
+	// Содержимое гнезда молекулы: пусто / атом. Locked — только что принятый
+	// атом, отдать дальше можно после следующего поворота этой молекулы (тот же
+	// закон, что у частиц в гнёздах ядер слоя 1).
+	private struct MoleculeSlot
+	{
+		public bool HasAtom;
+		public Atom Atom;
+		public bool Locked;
 	}
 
 	// Для сохранения (см. NucleusLayer.ExportFieldJson/ImportFieldJson).
@@ -60,6 +73,14 @@ public partial class MoleculeLayer : Node2D
 		public int Tier { get; set; }
 		public int Dir { get; set; }
 		public int HoleCount { get; set; }
+		// Атомы в гнёздах (T002). В старых сохранениях поля нет — пустой список.
+		public List<SavedAtom> Atoms { get; set; } = new();
+	}
+
+	public class SavedAtom
+	{
+		public int Slot { get; set; } // физический индекс гнезда 0..7
+		public List<int> Colors { get; set; } = new();
 	}
 
 	private NucleusLayer _nucleusLayer;
@@ -73,6 +94,7 @@ public partial class MoleculeLayer : Node2D
 
 	private MultiMeshInstance2D _bodyNode;
 	private MultiMeshInstance2D _holeNode;
+	private Node2D _atomNode;
 	private QuadMesh _coreQuad;
 	private QuadMesh _holeQuad;
 	private Sprite2D _preview;
@@ -94,6 +116,7 @@ public partial class MoleculeLayer : Node2D
 
 	// Заливка L2-клеток на слое 2 (см. RebuildFills/_Draw).
 	private readonly Dictionary<(int cx, int cy), Color> _fills = new();
+	private readonly List<(int cx, int cy)> _blocks = new();
 	private bool _ready;
 
 	public int MoleculeCount => _list.Count;
@@ -145,6 +168,11 @@ public partial class MoleculeLayer : Node2D
 			Modulate = new Color(1f, 1f, 1f, _nucleusLayer.HoleOpacity),
 		};
 		AddChild(_holeNode);
+
+		// Атомы в гнёздах — поверх полупрозрачных дырок (см. DrawAtoms).
+		_atomNode = new Node2D { Name = "MoleculeAtoms" };
+		_atomNode.Draw += DrawAtoms;
+		AddChild(_atomNode);
 
 		_preview = new Sprite2D
 		{
@@ -323,10 +351,12 @@ public partial class MoleculeLayer : Node2D
 
 	// --- правило занятости ---
 
-	// Есть ли в чанке (cx, cy) что-то из слоя 1: ядра, источники, чёрные дыры.
+	// Есть ли в чанке (cx, cy) что-то из слоя 1: ядра, источники, чёрные дыры,
+	// открытый порт (такой чанк — блок слоя 2).
 	public bool ChunkHasLayer1Content(int cx, int cy)
 	{
 		if (_nucleusLayer.ChunkHasNuclei(cx, cy)) return true;
+		if (_nucleusLayer.Ports != null && _nucleusLayer.Ports.IsBlock(cx, cy)) return true;
 
 		int row0 = cy * _chunkSize;
 		int col0 = cx * _chunkSize;
@@ -415,7 +445,13 @@ public partial class MoleculeLayer : Node2D
 	{
 		var result = new List<SavedMolecule>(_list.Count);
 		foreach (var m in _list)
-			result.Add(new SavedMolecule { Cx = m.Cx, Cy = m.Cy, Tier = m.Tier, Dir = m.Dir, HoleCount = m.HoleCount });
+		{
+			var sm = new SavedMolecule { Cx = m.Cx, Cy = m.Cy, Tier = m.Tier, Dir = m.Dir, HoleCount = m.HoleCount };
+			for (int k = 0; k < RingMath.Positions; k++)
+				if (m.Content[k].HasAtom)
+					sm.Atoms.Add(new SavedAtom { Slot = k, Colors = m.Content[k].Atom.ToColorList() });
+			result.Add(sm);
+		}
 		return result;
 	}
 
@@ -437,7 +473,16 @@ public partial class MoleculeLayer : Node2D
 			int dir = sm.Dir >= 0 ? 1 : -1;
 			if (_at.ContainsKey((sm.Cx, sm.Cy)) || !TryPlace(sm.Cx, sm.Cy, sm.Tier, sm.HoleCount, dir, log: false))
 				GD.PrintErr($"[MoleculeLayer] импорт: L2-клетка ({sm.Cx},{sm.Cy}) занята — молекула пропущена.");
-			else placed++;
+			else
+			{
+				placed++;
+				var m = _at[(sm.Cx, sm.Cy)];
+				foreach (var sa in sm.Atoms ?? new List<SavedAtom>())
+				{
+					if (sa.Slot < 0 || sa.Slot >= RingMath.Positions || !m.Slots[sa.Slot]) continue;
+					m.Content[sa.Slot] = new MoleculeSlot { HasAtom = true, Atom = Atom.FromColors(sa.Colors) };
+				}
+			}
 		}
 		return placed;
 	}
@@ -490,20 +535,12 @@ public partial class MoleculeLayer : Node2D
 		var holeMM = _holeNode.Multimesh;
 		if (holeMM == null) return;
 
-		long tick = _nucleusLayer.GlobalTick;
-		float sub = _nucleusLayer.SubTickFraction;
-		float orbit = _nucleusLayer.OrbitRadius * _scale;
 		var scale = new Vector2(_scale, _scale);
 
 		for (int i = 0; i < _list.Count; i++)
 		{
 			var m = _list[i];
-			int period = PeriodTicks(m.Tier);
-			float offset = RingMath.RotationStep(tick, period, m.Dir);
-			if (period > 0)
-				offset += (RingMath.TicksIntoStep(tick, period) + sub) / period * m.Dir;
-
-			var center = CenterOf(m);
+			float offset = RenderOffset(m);
 			for (int k = 0; k < RingMath.Positions; k++)
 			{
 				int idx = i * RingMath.Positions + k;
@@ -512,9 +549,174 @@ public partial class MoleculeLayer : Node2D
 					holeMM.SetInstanceTransform2D(idx, HiddenTransform);
 					continue;
 				}
-				float angle = (k + offset) * (Mathf.Pi / 4f) - (Mathf.Pi / 2f);
-				var pos = center + orbit * new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
-				holeMM.SetInstanceTransform2D(idx, new Transform2D(0f, scale, 0f, pos));
+				holeMM.SetInstanceTransform2D(idx, new Transform2D(0f, scale, 0f, SlotPosition(m, k, offset)));
+			}
+		}
+	}
+
+	// Плавный угол кольца (в шагах по 45°) для рендера: дискретная фаза плюс
+	// доля до следующего шага.
+	private float RenderOffset(Molecule m)
+	{
+		long tick = _nucleusLayer.GlobalTick;
+		int period = PeriodTicks(m.Tier);
+		float offset = RingMath.RotationStep(tick, period, m.Dir);
+		if (period > 0)
+			offset += (RingMath.TicksIntoStep(tick, period) + _nucleusLayer.SubTickFraction) / period * m.Dir;
+		return offset;
+	}
+
+	private Vector2 SlotPosition(Molecule m, int k, float offset)
+	{
+		float angle = (k + offset) * (Mathf.Pi / 4f) - (Mathf.Pi / 2f);
+		return CenterOf(m) + _nucleusLayer.OrbitRadius * _scale * new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+	}
+
+	// Атом в гнезде: кружок и 8 точек по составу.
+	private void DrawAtoms()
+	{
+		if (!ViewLayer.IsLayer2) return;
+		var colors = _nucleusLayer.TierPreviewColors;
+		float radius = _nucleusLayer.HoleSpriteSize * _scale * 0.3f;
+		foreach (var m in _list)
+		{
+			float offset = RenderOffset(m);
+			for (int k = 0; k < RingMath.Positions; k++)
+			{
+				if (!m.Slots[k] || !m.Content[k].HasAtom) continue;
+				DrawAtom(_atomNode, SlotPosition(m, k, offset), radius, m.Content[k].Atom, colors);
+			}
+		}
+	}
+
+	public static void DrawAtom(CanvasItem ci, Vector2 center, float radius, Atom atom, Color[] tierColors)
+	{
+		ci.DrawCircle(center, radius, new Color(0.08f, 0.08f, 0.1f, 0.9f));
+		ci.DrawArc(center, radius, 0f, Mathf.Tau, 24, Colors.White, radius * 0.12f);
+		for (int i = 0; i < atom.Count; i++)
+		{
+			float a = i * Mathf.Tau / Atom.Size - Mathf.Pi / 2f;
+			int color = atom.ColorAt(i);
+			var c = (tierColors != null && color >= 0 && color < tierColors.Length) ? tierColors[color] : Colors.White;
+			ci.DrawCircle(center + radius * 0.6f * new Vector2(Mathf.Cos(a), Mathf.Sin(a)), radius * 0.2f, c);
+		}
+	}
+
+	// --- перенос атомов (T002) ---
+	// Законы ядер слоя 1 (NucleusLayer.SimTick, шаг 2), только в тиках слоя 2:
+	// шаг выполняется на тиках слоя 1, кратных k. Передача — только по 4
+	// сторонам, из гнезда в гнездо, смотрящие друг на друга; тир и спин — общие
+	// правила TransferRules с флагами слоя 1; принятый атом блокируется до
+	// следующего поворота принявшей молекулы. Блок — неподвижный серый объект
+	// без спина: молекула забирает готовый атом с выходной стороны и отдаёт атом
+	// во входную. Порядок обхода — _list (порядок установки), детерминирован.
+
+	private static readonly (int dx, int dy)[] Compass4 = { (0, -1), (1, 0), (0, 1), (-1, 0) }; // N, E, S, W
+	private readonly HashSet<(Molecule m, int slot)> _claimed = new();
+
+	private int PhysicalSlot(Molecule m, int compass, long tick)
+	{
+		int step = RingMath.RotationStep(tick, PeriodTicks(m.Tier), m.Dir);
+		return ((compass - step) % RingMath.Positions + RingMath.Positions) % RingMath.Positions;
+	}
+
+	// Поворачиватель и бросатель на слое 2 в T002 не участвуют — атомов не держат.
+	private bool CanHoldAtoms(Molecule m) =>
+		m.Tier != _nucleusLayer.RotatorCoreTier && m.Tier != _nucleusLayer.ThrowerCoreTier;
+
+	// Вызывается NucleusLayer после каждого тика слоя 1 (общие часы и пауза).
+	public void SimTick(long tick)
+	{
+		if (!_ready || _list.Count == 0 || L2TickRatio <= 0 || tick % L2TickRatio != 0) return;
+
+		// Поворот: снять блокировку у молекул, чей шаг приходится на этот тик.
+		foreach (var m in _list)
+		{
+			int period = PeriodTicks(m.Tier);
+			if (period <= 0 || tick % period != 0) continue;
+			for (int i = 0; i < RingMath.Positions; i++) m.Content[i].Locked = false;
+		}
+
+		_claimed.Clear();
+
+		// Проход A ("pull"): пустое гнездо забирает атом у соседа напротив.
+		foreach (var m in _list)
+		{
+			if (!CanHoldAtoms(m)) continue;
+			for (int side = 0; side < 4; side++)
+			{
+				int k = side * 2;
+				int p = PhysicalSlot(m, k, tick);
+				if (!m.Slots[p] || m.Content[p].HasAtom || _claimed.Contains((m, p))) continue;
+				var (dx, dy) = Compass4[side];
+				if (!_at.TryGetValue((m.Cx + dx, m.Cy + dy), out var nb) || !CanHoldAtoms(nb)) continue;
+				int p2 = PhysicalSlot(nb, (k + 4) % 8, tick);
+				var giver = nb.Content[p2];
+				if (!nb.Slots[p2] || !giver.HasAtom || giver.Locked || _claimed.Contains((nb, p2))) continue;
+				if (!_nucleusLayer.TierSpinAllowed(m.Tier, m.Dir, nb.Tier, nb.Dir)) continue;
+
+				m.Content[p] = new MoleculeSlot { HasAtom = true, Atom = giver.Atom, Locked = true };
+				nb.Content[p2] = default;
+				_claimed.Add((m, p));
+				_claimed.Add((nb, p2));
+			}
+		}
+
+		// Проход B ("push"): свободный атом толкается в пустое гнездо соседа.
+		foreach (var m in _list)
+		{
+			if (!CanHoldAtoms(m)) continue;
+			for (int side = 0; side < 4; side++)
+			{
+				int k = side * 2;
+				int p = PhysicalSlot(m, k, tick);
+				var giver = m.Content[p];
+				if (!m.Slots[p] || !giver.HasAtom || giver.Locked || _claimed.Contains((m, p))) continue;
+				var (dx, dy) = Compass4[side];
+				if (!_at.TryGetValue((m.Cx + dx, m.Cy + dy), out var nb) || !CanHoldAtoms(nb)) continue;
+				int p2 = PhysicalSlot(nb, (k + 4) % 8, tick);
+				if (!nb.Slots[p2] || nb.Content[p2].HasAtom || _claimed.Contains((nb, p2))) continue;
+				if (!_nucleusLayer.TierSpinAllowed(nb.Tier, nb.Dir, m.Tier, m.Dir)) continue;
+
+				nb.Content[p2] = new MoleculeSlot { HasAtom = true, Atom = giver.Atom, Locked = true };
+				m.Content[p] = default;
+				_claimed.Add((m, p));
+				_claimed.Add((nb, p2));
+			}
+		}
+
+		// Молекула ↔ блок. На одну сторону блока смотрит ровно одна L2-клетка,
+		// поэтому спора за порт между молекулами нет.
+		var ports = _nucleusLayer.Ports;
+		if (ports == null) return;
+		int gray = _nucleusLayer.GrayCoreTier;
+		foreach (var m in _list)
+		{
+			if (!CanHoldAtoms(m)) continue;
+			for (int side = 0; side < 4; side++)
+			{
+				int k = side * 2;
+				int p = PhysicalSlot(m, k, tick);
+				if (!m.Slots[p] || _claimed.Contains((m, p))) continue;
+				var (dx, dy) = Compass4[side];
+				var key = new PortKey(m.Cx + dx, m.Cy + dy, PortSet.OppositeSide(side));
+				var mode = ports.ModeOf(key);
+				if (mode == PortMode.Closed) continue;
+
+				var slot = m.Content[p];
+				if (mode == PortMode.Output && !slot.HasAtom && ports.HasReadyAtom(key)
+					&& _nucleusLayer.TierSpinAllowed(m.Tier, m.Dir, gray, TransferRules.NoSpin))
+				{
+					m.Content[p] = new MoleculeSlot { HasAtom = true, Atom = ports.TakeAtom(key), Locked = true };
+					_claimed.Add((m, p));
+				}
+				else if (mode == PortMode.Input && slot.HasAtom && !slot.Locked && ports.CanAcceptAtom(key)
+					&& _nucleusLayer.TierSpinAllowed(gray, TransferRules.NoSpin, m.Tier, m.Dir))
+				{
+					ports.AcceptAtom(key, slot.Atom);
+					m.Content[p] = default;
+					_claimed.Add((m, p));
+				}
 			}
 		}
 	}
@@ -534,6 +736,7 @@ public partial class MoleculeLayer : Node2D
 			if (_rightMouseHeld) TryRemoveAtMouse();
 			RebuildFills();
 			QueueRedraw();
+			_atomNode.QueueRedraw();
 			UpdateLayer2Hover();
 		}
 		else
@@ -609,10 +812,14 @@ public partial class MoleculeLayer : Node2D
 	}
 
 	// Упрощённый вид содержимого слоя 1 на слое 2: одна заливка на L2-клетку.
-	// Приоритет тона: источник (цвет его тира) > чёрная дыра > ядра.
+	// Приоритет тона: источник (цвет его тира) > чёрная дыра > ядра. Блоки
+	// (чанки с открытым портом) не заливаются — их рисует DrawBlocks.
 	private void RebuildFills()
 	{
 		_fills.Clear();
+		_blocks.Clear();
+		if (_nucleusLayer.Ports != null)
+			foreach (var chunk in _nucleusLayer.Ports.EnumerateBlocks()) _blocks.Add(chunk);
 
 		var nucleiColor = new Color(NucleiFillColor.R, NucleiFillColor.G, NucleiFillColor.B, FillAlpha);
 		foreach (var chunk in _nucleusLayer.EnumerateOccupiedChunks())
@@ -633,6 +840,31 @@ public partial class MoleculeLayer : Node2D
 			foreach (var (row, col) in layer.EnumerateCells())
 				_fills[(FloorDiv(col, _chunkSize), FloorDiv(row, _chunkSize))] = tierColor;
 		}
+
+		foreach (var chunk in _blocks) _fills.Remove(chunk);
+	}
+
+	// Блок слоя 2 — неподвижный серый объект на всю L2-клетку с 4 дырками у
+	// краёв сторон: те же полудырки и в тех же мировых координатах, что порты
+	// слоя 1 (PortLayer.DrawPortHalf), закрытые стороны приглушены, в дырке
+	// открытого порта виден атом (точки по составу).
+	private void DrawBlocks()
+	{
+		var ports = _nucleusLayer.Ports;
+		var colors = _nucleusLayer.TierPreviewColors;
+		float inset = _cellSize * 0.5f;
+		foreach (var (cx, cy) in _blocks)
+		{
+			var rect = new Rect2(cx * _chunkWorldSize + inset, cy * _chunkWorldSize + inset,
+				_chunkWorldSize - 2 * inset, _chunkWorldSize - 2 * inset);
+			DrawRect(rect, new Color(BlockFillColor, BlockAlpha));
+			DrawRect(rect, new Color(BlockFillColor, 0.9f), false, _cellSize * 0.25f);
+			for (int side = 0; side < PortSet.SideCount; side++)
+			{
+				var key = new PortKey(cx, cy, side);
+				PortLayer.DrawPortHalf(this, PortLayer.PortCenter(key, _chunkWorldSize), _cellSize, side, ports.Get(key), colors, 1f);
+			}
+		}
 	}
 
 	public override void _Draw()
@@ -643,5 +875,6 @@ public partial class MoleculeLayer : Node2D
 			var (cx, cy) = pair.Key;
 			DrawRect(new Rect2(cx * _chunkWorldSize, cy * _chunkWorldSize, _chunkWorldSize, _chunkWorldSize), pair.Value);
 		}
+		DrawBlocks();
 	}
 }

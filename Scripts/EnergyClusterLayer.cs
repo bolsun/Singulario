@@ -293,6 +293,8 @@ public partial class EnergyClusterLayer : TileMapLayer
 		_lastPlacedCell = (row, col);
 		// Чанк занят молекулой слоя 2 — сюда нельзя (см. MoleculeLayer).
 		if (_moleculeLayer != null && _moleculeLayer.HasMoleculeAtCell(row, col)) return;
+		// Клетка порта чанка — не для источников (см. PortSet).
+		if (_nucleusLayer?.Ports != null && _nucleusLayer.Ports.IsPortCell(row, col)) return;
 		PlaceClusterAt(row, col);
 	}
 
