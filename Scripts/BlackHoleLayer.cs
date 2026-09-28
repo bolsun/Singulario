@@ -13,7 +13,7 @@ using System.Collections.Generic;
 //
 // Эффект падения (GDD «Падение в ЧД») — только визуал: принятый атом летит по
 // спирали в центр, уменьшаясь; у центра ускоряется, тускнеет, краснеет и
-// вытягивается вдоль пути; попадание подсвечивает диск. Идёт по времени
+// вытягивается вдоль пути; попадание подсвечивает диск (если ShowHitFlash). Идёт по времени
 // кадра, в симуляцию и сохранение не попадает. Производительность: узлов на
 // атом нет — у каждой ЧД заранее выделенный массив из MaxFallingPerHole
 // структур; все летящие атомы всех ЧД — один MultiMesh (один draw call),
@@ -30,6 +30,8 @@ public partial class BlackHoleLayer : Node2D
 	[Export] public float FallSeconds = 1.6f;
 	// Сколько оборотов делает атом по пути от края до центра.
 	[Export] public float FallTurns = 1.25f;
+	// Вспышка диска при попадании атома (кольцо и красный круг); выключена по умолчанию.
+	[Export] public bool ShowHitFlash = false;
 	[Export] public float FlashDecayPerSecond = 2.5f;
 	// Радиус атома на экране (px), ниже которого атом рисуется одним кружком.
 	[Export] public float FallLodPixels = 5f;
@@ -104,6 +106,11 @@ public partial class BlackHoleLayer : Node2D
 			TransformFormat = MultiMesh.TransformFormatEnum.Transform2D,
 			UseColors = true,
 			Mesh = new QuadMesh { Size = Vector2.One },
+			// Canvas item кэширует прямоугольник отсечения при первом _draw
+			// (MultiMesh ещё пуст) и не пересчитывает его при MultimeshSetBuffer —
+			// без явных границ эффект отсекался целиком при сильном приближении.
+			// Границы на весь мир; по экрану фильтрует FillEffectMesh.
+			CustomAabb = new Aabb(new Vector3(-1e7f, -1e7f, -1f), new Vector3(2e7f, 2e7f, 2f)),
 		};
 		AddChild(new MultiMeshInstance2D
 		{
@@ -202,13 +209,14 @@ public partial class BlackHoleLayer : Node2D
 				fx.Flash = 0f;
 				continue;
 			}
-			fx.Flash = Mathf.Max(0f, fx.Flash - dt * FlashDecayPerSecond);
+			if (ShowHitFlash) fx.Flash = Mathf.Max(0f, fx.Flash - dt * FlashDecayPerSecond);
+			else fx.Flash = 0f;
 			for (int i = 0; i < fx.Count;)
 			{
 				fx.Items[i].Age += dt;
 				if (fx.Items[i].Age < FallSeconds) { i++; continue; }
 				fx.Items[i] = fx.Items[--fx.Count]; // порядок отрисовки не важен
-				fx.Flash = 1f;
+				if (ShowHitFlash) fx.Flash = 1f;
 			}
 		}
 	}
@@ -228,7 +236,7 @@ public partial class BlackHoleLayer : Node2D
 				var key = new PortKey(hole.Cx, hole.Cy, side);
 				PortLayer.DrawPortHalf(this, PortLayer.PortCenter(key, _chunkWorldSize), _cellSize, side, inputPort, colors, 1f, showSlots: false);
 			}
-			if (_fx.TryGetValue(hole, out var fx) && fx.Flash > 0f) DrawFlash(HoleCenter(hole.Cx, hole.Cy), fx.Flash);
+			if (ShowHitFlash && _fx.TryGetValue(hole, out var fx) && fx.Flash > 0f) DrawFlash(HoleCenter(hole.Cx, hole.Cy), fx.Flash);
 		}
 	}
 
