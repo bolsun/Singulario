@@ -24,6 +24,26 @@ public struct Atom
 		Count++;
 	}
 
+	// Для сохранения: цвета по порядку (не больше Size).
+	public readonly System.Collections.Generic.List<int> ToColorList()
+	{
+		var list = new System.Collections.Generic.List<int>(Count);
+		for (int i = 0; i < Count; i++) list.Add(ColorAt(i));
+		return list;
+	}
+
+	public static Atom FromColors(System.Collections.Generic.IEnumerable<int> colors)
+	{
+		var atom = new Atom();
+		if (colors == null) return atom;
+		foreach (int c in colors)
+		{
+			if (atom.IsFull) break;
+			atom.Push(c);
+		}
+		return atom;
+	}
+
 	public int PopFront()
 	{
 		if (IsEmpty) return -1;

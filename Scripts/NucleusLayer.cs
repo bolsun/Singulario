@@ -3103,6 +3103,17 @@ public partial class NucleusLayer : Node2D
 		// Молекулы слоя 2 (см. MoleculeLayer). В старых сохранениях поля нет —
 		// остаётся пустой список из инициализатора.
 		public List<MoleculeLayer.SavedMolecule> Molecules { get; set; } = new();
+		// Порты чанков (T002): режим и содержимое. В старых сохранениях поля нет.
+		public List<SavedPort> Ports { get; set; } = new();
+	}
+
+	private class SavedPort
+	{
+		public int Cx { get; set; }
+		public int Cy { get; set; }
+		public int Side { get; set; }  // PortSide: 0=N, 1=E, 2=S, 3=W
+		public int Mode { get; set; }  // PortMode: 0=закрыт, 1=выход, 2=вход
+		public List<int> Colors { get; set; } = new(); // частицы в порту по порядку (8 — готовый атом)
 	}
 
 	private class SavedNucleus
@@ -3142,6 +3153,14 @@ public partial class NucleusLayer : Node2D
 				data.Sources.Add(new SavedSource { Tier = layer.Tier, Row = row, Col = col });
 
 		if (_moleculeLayer != null) data.Molecules = _moleculeLayer.ExportMolecules();
+
+		if (Ports != null)
+			foreach (var pair in Ports.Enumerate())
+				data.Ports.Add(new SavedPort
+				{
+					Cx = pair.Key.Cx, Cy = pair.Key.Cy, Side = pair.Key.Side,
+					Mode = (int)pair.Value.Mode, Colors = pair.Value.Atom.ToColorList(),
+				});
 
 		return JsonSerializer.Serialize(data, FieldJsonOptions);
 	}
@@ -3215,11 +3234,26 @@ public partial class NucleusLayer : Node2D
 			if (!found) GD.PrintErr($"[NucleusLayer] импорт: не найден слой-источник тира {ss.Tier} — клетка ({ss.Row},{ss.Col}) пропущена.");
 		}
 
+		// Порты — до молекул: чанк с открытым портом — блок, молекула туда не ставится.
+		int portsPlaced = 0;
+		var portsList = data.Ports ?? new List<SavedPort>();
+		foreach (var sp in portsList)
+		{
+			if (sp.Side < 0 || sp.Side >= PortSet.SideCount || sp.Mode < 0 || sp.Mode > (int)PortMode.Input)
+			{
+				GD.PrintErr($"[NucleusLayer] импорт: порт чанка ({sp.Cx},{sp.Cy}) с неверной стороной/режимом ({sp.Side}/{sp.Mode}) — пропущен.");
+				continue;
+			}
+			var atom = sp.Mode == (int)PortMode.Closed ? default : Atom.FromColors(sp.Colors);
+			Ports.Restore(new PortKey(sp.Cx, sp.Cy, sp.Side), (PortMode)sp.Mode, atom);
+			portsPlaced++;
+		}
+
 		// Молекулы — после слоя 1: в чанк с содержимым слоя 1 они не ставятся.
 		var moleculesList = data.Molecules ?? new List<MoleculeLayer.SavedMolecule>();
 		int moleculesPlaced = _moleculeLayer?.ImportMolecules(moleculesList) ?? 0;
 
-		GD.Print($"[NucleusLayer] поле загружено из JSON: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, молекул {moleculesPlaced}/{moleculesList.Count}, тик сброшен в 0.");
+		GD.Print($"[NucleusLayer] поле загружено из JSON: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, портов {portsPlaced}/{portsList.Count}, молекул {moleculesPlaced}/{moleculesList.Count}, тик сброшен в 0.");
 		error = null;
 		return true;
 	}
@@ -3246,6 +3280,7 @@ public partial class NucleusLayer : Node2D
 
 		foreach (var layer in _energyClusterLayers) layer.ClearAll();
 		_moleculeLayer?.ClearAll();
+		Ports?.Clear();
 
 		// По заданию — при загрузке тик должен быть 0, а вместе с ним и все
 		// производные величины часов симуляции, чтобы не осталось дробного

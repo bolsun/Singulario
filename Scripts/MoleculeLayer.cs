@@ -73,6 +73,14 @@ public partial class MoleculeLayer : Node2D
 		public int Tier { get; set; }
 		public int Dir { get; set; }
 		public int HoleCount { get; set; }
+		// Атомы в гнёздах (T002). В старых сохранениях поля нет — пустой список.
+		public List<SavedAtom> Atoms { get; set; } = new();
+	}
+
+	public class SavedAtom
+	{
+		public int Slot { get; set; } // физический индекс гнезда 0..7
+		public List<int> Colors { get; set; } = new();
 	}
 
 	private NucleusLayer _nucleusLayer;
@@ -437,7 +445,13 @@ public partial class MoleculeLayer : Node2D
 	{
 		var result = new List<SavedMolecule>(_list.Count);
 		foreach (var m in _list)
-			result.Add(new SavedMolecule { Cx = m.Cx, Cy = m.Cy, Tier = m.Tier, Dir = m.Dir, HoleCount = m.HoleCount });
+		{
+			var sm = new SavedMolecule { Cx = m.Cx, Cy = m.Cy, Tier = m.Tier, Dir = m.Dir, HoleCount = m.HoleCount };
+			for (int k = 0; k < RingMath.Positions; k++)
+				if (m.Content[k].HasAtom)
+					sm.Atoms.Add(new SavedAtom { Slot = k, Colors = m.Content[k].Atom.ToColorList() });
+			result.Add(sm);
+		}
 		return result;
 	}
 
@@ -459,7 +473,16 @@ public partial class MoleculeLayer : Node2D
 			int dir = sm.Dir >= 0 ? 1 : -1;
 			if (_at.ContainsKey((sm.Cx, sm.Cy)) || !TryPlace(sm.Cx, sm.Cy, sm.Tier, sm.HoleCount, dir, log: false))
 				GD.PrintErr($"[MoleculeLayer] импорт: L2-клетка ({sm.Cx},{sm.Cy}) занята — молекула пропущена.");
-			else placed++;
+			else
+			{
+				placed++;
+				var m = _at[(sm.Cx, sm.Cy)];
+				foreach (var sa in sm.Atoms ?? new List<SavedAtom>())
+				{
+					if (sa.Slot < 0 || sa.Slot >= RingMath.Positions || !m.Slots[sa.Slot]) continue;
+					m.Content[sa.Slot] = new MoleculeSlot { HasAtom = true, Atom = Atom.FromColors(sa.Colors) };
+				}
+			}
 		}
 		return placed;
 	}
