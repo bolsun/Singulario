@@ -927,6 +927,20 @@ public partial class NucleusLayer : Node2D
 
 	private void PickNucleusUnderMouse()
 	{
+		// Звезда или ЧД под курсором (T006d) — их инструмент.
+		var mouse = GetGlobalMousePosition();
+		int mrow = Mathf.FloorToInt(mouse.Y / CellSize), mcol = Mathf.FloorToInt(mouse.X / CellSize);
+		if (Stars.TryGetAt(mrow, mcol, out var star) && _starLayer != null)
+		{
+			_starLayer.SelectTool(star.Tier);
+			return;
+		}
+		if (BlackHoles.TryGetAt(mrow, mcol, out _) && _blackHoleLayer != null)
+		{
+			_blackHoleLayer.SelectTool();
+			return;
+		}
+
 		var nucleus = FindNucleusUnderMouse(out int row, out int col);
 		if (nucleus == null)
 		{

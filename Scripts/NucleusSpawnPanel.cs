@@ -83,8 +83,8 @@ public partial class NucleusSpawnPanel : Control
 		// LoadParticleLayers), а не жёстко "1", чтобы панель не обрезала
 		// кнопки, если тиров вдруг станет больше 3 (GridContainer при этом
 		// сам переносит лишние кнопки на новую строку).
-		// + 1 — кнопка чёрной дыры (T005) в той же строке, что источники.
-		// + Tiers.Length — кнопки звёзд Ж/К/С (T006).
+		// + Tiers.Length — кнопки звёзд Ж/К/С (T006), одной строкой после источников.
+		// + 1 — кнопка чёрной дыры (T005), после звёзд (T006d).
 		int extraButtons = _particleLayers.Count + 1 + Tiers.Length;
 		int clusterRows = extraButtons > 0 ? Mathf.CeilToInt(extraButtons / 3f) : 0;
 		// HoleCounts.Length * 4 — линейка "количество дырок" повторена 4 раза:
@@ -301,16 +301,6 @@ public partial class NucleusSpawnPanel : Control
 			grid.AddChild(button);
 		}
 
-		// Чёрная дыра (T005) — объект слоя 1 (BlackHoleLayer.SelectTool):
-		// ЛКМ — поставить, ПКМ — удалить.
-		var holeButton = new Button
-		{
-			Text = "ЧД",
-			CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
-		};
-		holeButton.Pressed += () => GetNodeOrNull<BlackHoleLayer>("/root/Main/BlackHoleLayer")?.SelectTool();
-		grid.AddChild(holeButton);
-
 		// Звёзды-сборщики Ж/К/С (T006, StarLayer.SelectTool): ЛКМ — поставить
 		// 3×3 (центр под курсором), ПКМ — удалить.
 		foreach (var (label, tier) in Tiers)
@@ -332,6 +322,16 @@ public partial class NucleusSpawnPanel : Control
 			starButton.Pressed += () => GetNodeOrNull<StarLayer>("/root/Main/StarLayer")?.SelectTool(starTier);
 			grid.AddChild(starButton);
 		}
+
+		// Чёрная дыра (T005) — объект слоя 1 (BlackHoleLayer.SelectTool):
+		// ЛКМ — поставить, ПКМ — удалить.
+		var holeButton = new Button
+		{
+			Text = "ЧД",
+			CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
+		};
+		holeButton.Pressed += () => GetNodeOrNull<BlackHoleLayer>("/root/Main/BlackHoleLayer")?.SelectTool();
+		grid.AddChild(holeButton);
 
 		// Кнопки молекул — только при включённом слое 2 (T005).
 		if (ViewLayer.Layer2Enabled) BuildLayer2Grid();
