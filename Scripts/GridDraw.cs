@@ -20,7 +20,9 @@ using Godot;
 //
 // На слое 2 (см. ViewLayer) клетка — это чанк слоя 1, поэтому сетка рисуется
 // по границам ЧАНКОВ (шаг CellSize*ChunkSize), той же ширины в 1 экранный
-// пиксель; на слое 1 — обычная сетка клеток.
+// пиксель; на слое 1 — обычная сетка клеток. При отдалении ниже CellGridHideZoom
+// сетка клеток пропадает и остаются только границы чанков (серые, как клетки),
+// ниже GridHideZoom сетка не рисуется совсем.
 // ChunkSize берём у NucleusLayer (единственный источник истины для него, как
 // CellSize — у GridDraw, см. NucleusLayer._Ready) в _Ready(), это обычное
 // [Export]-поле, так что порядок вызова _Ready() между нодами не важен.
@@ -28,6 +30,11 @@ public partial class GridDraw : Node2D
 {
     [Export] public int CellSize = 96;
     [Export] public float CullMargin = 128f; // запас вокруг видимой области — как у NucleusLayer
+    // Зум, ниже которого сетка клеток не рисуется: остаются только границы чанков,
+    // тем же серым цветом, что и линии клеток.
+    [Export] public float CellGridHideZoom = 0.2f;
+    // Зум, ниже которого сетка не рисуется совсем.
+    [Export] public float GridHideZoom = 0.025f;
 
     private static readonly Color LineColor = new Color(0.35f, 0.35f, 0.4f);
     // По заданию клиента: на близком зуме, когда рисуется сетка КЛЕТОК (шаг
@@ -43,6 +50,7 @@ public partial class GridDraw : Node2D
     private int _step = 1;
     private float _lineWidth = 1f;
     private bool _haveRange;
+    private bool _hidden;
 
     // Включена ли сетка (G) — для других узлов: подробный вид портов (T004,
     // PortLayer, MoleculeLayer, BlackHoleLayer) показывается только с сеткой.
@@ -84,7 +92,15 @@ public partial class GridDraw : Node2D
         var visiblePos = cam.GetScreenCenterPosition() - visibleSize / 2f;
         var visibleRect = new Rect2(visiblePos, visibleSize).Grow(CullMargin);
 
-        int step = ViewLayer.IsLayer2 ? CellSize * _chunkSize : CellSize;
+        float zoom = cam.Zoom.X;
+        bool hidden = zoom < GridHideZoom;
+        int step = ViewLayer.IsLayer2 || zoom < CellGridHideZoom ? CellSize * _chunkSize : CellSize;
+        if (hidden != _hidden)
+        {
+            _hidden = hidden;
+            QueueRedraw();
+        }
+        if (hidden) return;
 
         int minCol = Mathf.FloorToInt(visibleRect.Position.X / step);
         int maxCol = Mathf.CeilToInt((visibleRect.Position.X + visibleRect.Size.X) / step);
@@ -110,7 +126,7 @@ public partial class GridDraw : Node2D
 
     public override void _Draw()
     {
-        if (!_haveRange) return;
+        if (!_haveRange || _hidden) return;
 
         // Сетка клеток и сетка чанков (см. _Process) — одна и та же отрисовка,
         // разница только в шаге (_step) и, теперь, в подсветке границ чанка:
