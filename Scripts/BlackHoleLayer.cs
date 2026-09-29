@@ -28,9 +28,9 @@ public partial class BlackHoleLayer : Node2D
 {
 	public const string TexturePath = "res://Resources/Textures/black_hole_96px.png";
 
-	// Сторона новой ЧД в клетках слоя 1 (GDD: «пока 2×2, размер решим»).
+	// Сторона новой ЧД в клетках слоя 1 (T006d: 4×4).
 	// У поставленной ЧД размер хранится в ней самой (и в сохранении).
-	[Export] public int BlackHoleSize = 2;
+	[Export] public int BlackHoleSize = 4;
 
 	[Export] public int MaxFallingPerHole = 32;
 	[Export] public float FallSeconds = 1.6f;
