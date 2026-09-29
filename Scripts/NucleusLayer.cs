@@ -1790,6 +1790,8 @@ public partial class NucleusLayer : Node2D
 				n.Ring[p] = new RingSlot { Exists = true, IsHole = true };
 				_claimed.Add((n, p));
 				star.Put(need);
+				var (dr, dc) = Adj8[k];
+				_starLayer?.OnParticleTaken(star, n.Center + new Vector2(dc, dr) * _orbitRadius, slot.ColorTier);
 			}
 		}
 	}
@@ -1826,6 +1828,13 @@ public partial class NucleusLayer : Node2D
 			int need = star.NeedIndex(IngredientKind.Atom, n.CoreTier);
 			if (need < 0) continue;
 			star.Put(need);
+			if (_starLayer != null)
+			{
+				var particles = new Atom();
+				foreach (var slot in n.Ring)
+					if (slot.Exists && !slot.IsHole) particles.Push(slot.ColorTier);
+				_starLayer.OnAtomTaken(star, n.MoveToCenter, n.CoreTier, particles);
+			}
 			RemoveNucleusEntity(n);
 			return true;
 		}
