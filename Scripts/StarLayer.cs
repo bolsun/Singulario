@@ -179,6 +179,7 @@ public partial class StarLayer : Node2D
 	}
 
 	public void ClearTool() => _toolTier = null;
+	public bool HasTool => _toolTier.HasValue;
 
 	public override void _UnhandledInput(InputEvent @event)
 	{

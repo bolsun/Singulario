@@ -610,6 +610,11 @@ public partial class NucleusLayer : Node2D
 		// не отдаёт (соседи его пропускают), не крутит и не бросает. Рисуется
 		// приглушённым, кольцо стоит на фазе 0. ЛКМ — стать рабочим (ActivateCargo).
 		public bool IsCargo;
+
+		// Перекрёсток (T010): не null — атом в режиме «орбитали», частицы едут по
+		// осям Cross, а кольцо Ring пустое (только число гнёзд — для ёмкости оси и
+		// возврата в обычный режим). Переключение — ToggleCrossroad.
+		public Crossroad Cross;
 	}
 
 	private class WorldChunk
@@ -1072,6 +1077,14 @@ public partial class NucleusLayer : Node2D
 					GetViewport().SetInputAsHandled();
 					return;
 				}
+				// ЛКМ по атому-переносчику без инструмента — перекрёсток ↔ обычный
+				// режим (T010).
+				if (!AnyToolSelected() && _entAt.TryGetValue(cargoCell, out var atom) && CanBeCrossroad(atom))
+				{
+					ToggleCrossroad(atom);
+					GetViewport().SetInputAsHandled();
+					return;
+				}
 				if (!_selectedSpawnTier.HasValue) return;
 				_leftMouseHeld = true;
 				_lastPlacedCell = null; // разрешаем установку в клетку под курсором сразу же
@@ -1227,13 +1240,65 @@ public partial class NucleusLayer : Node2D
 		if (Inventory.Sandbox) return 0;
 		int count = 0;
 		if (Inventory.IsAtomTier(nucleus.CoreTier)) { Inventory.Add(nucleus.CoreTier); count++; }
+		return count + RefundItemsToInventory(nucleus);
+	}
+
+	// Атомы-предметы из дырок и с осей перекрёстка (T010) — в инвентарь
+	// (настоящий режим). Частицы не возвращаются.
+	private int RefundItemsToInventory(NucleusEntity nucleus)
+	{
+		if (Inventory.Sandbox) return 0;
+		int count = 0;
 		foreach (var slot in nucleus.Ring)
 			if (slot.Exists && !slot.IsHole && slot.IsItem && Inventory.IsAtomTier(slot.ColorTier))
 			{
 				Inventory.Add(slot.ColorTier);
 				count++;
 			}
+		if (nucleus.Cross != null)
+			foreach (var axis in nucleus.Cross.Axes)
+				for (int i = 0; i < axis.Count; i++)
+					if (axis.Items[i].IsItem && Inventory.IsAtomTier(axis.Items[i].ColorTier))
+					{
+						Inventory.Add(axis.Items[i].ColorTier);
+						count++;
+					}
 		return count;
+	}
+
+	// --- перекрёсток (T010) ---
+
+	// Выбран ли какой-нибудь инструмент установки на панели слоя 1.
+	private bool AnyToolSelected()
+	{
+		if (_selectedSpawnTier.HasValue) return true;
+		if (_blackHoleLayer != null && _blackHoleLayer.HasTool) return true;
+		if (_starLayer != null && _starLayer.HasTool) return true;
+		if (_energyLayer != null && _energyLayer.IsPlacing) return true;
+		foreach (var layer in _energyClusterLayers) if (layer.IsPlacing) return true;
+		return false;
+	}
+
+	// Перекрёстком может стать рабочий атом-переносчик Ж/К/С или серый.
+	private bool CanBeCrossroad(NucleusEntity n) =>
+		!n.IsCargo && !IsSpinnerTier(n.CoreTier) && !(n.IsMoving && n.IsFlying);
+
+	private static int HoleCountOf(NucleusEntity n)
+	{
+		int count = 0;
+		foreach (var slot in n.Ring) if (slot.Exists) count++;
+		return count;
+	}
+
+	// Обычный режим ↔ перекрёсток. Содержимое очищается (решение пользователя):
+	// частицы пропадают, атомы-предметы в настоящем режиме — в инвентарь.
+	private void ToggleCrossroad(NucleusEntity n)
+	{
+		int refunded = RefundItemsToInventory(n);
+		int holeCount = HoleCountOf(n);
+		n.Ring = BuildFixedRing(holeCount);
+		n.Cross = n.Cross == null ? new Crossroad(holeCount) : null;
+		GD.Print($"[NucleusLayer] атом ({n.Row},{n.Col}): {(n.Cross != null ? "перекрёсток" : "обычный режим")}.{(refunded > 0 ? $" В инвентарь: {refunded}." : "")}");
 	}
 
 	// Общая точка удаления живого ядра из ВСЕХ структур — вынесена из
@@ -3129,6 +3194,11 @@ public partial class NucleusLayer : Node2D
 			}
 
 			var effCenter = EffectiveCenter(n);
+			if (n.Cross != null)
+			{
+				UpdateCrossroadVisuals(n, effCenter, holeMM, particleMM);
+				continue;
+			}
 			for (int k = 0; k < 8; k++)
 			{
 				int instanceIdx = n.LocalIndex * 8 + k;
@@ -3160,6 +3230,17 @@ public partial class NucleusLayer : Node2D
 					holeMM?.SetInstanceTransform2D(instanceIdx, HiddenTransform);
 				}
 			}
+		}
+	}
+
+	// Перекрёсток (T010): дырок нет, 8 инстансов частиц атома — частицы в пути
+	// (ось 0 — инстансы 0..3, ось 1 — 4..7).
+	private void UpdateCrossroadVisuals(NucleusEntity n, Vector2 center, MultiMesh holeMM, MultiMesh particleMM)
+	{
+		for (int k = 0; k < 8; k++)
+		{
+			holeMM?.SetInstanceTransform2D(n.LocalIndex * 8 + k, HiddenTransform);
+			particleMM?.SetInstanceTransform2D(n.LocalIndex * 8 + k, HiddenTransform);
 		}
 	}
 
@@ -3642,6 +3723,8 @@ public partial class NucleusLayer : Node2D
 		public int HoleCount { get; set; }
 		// Груз (T006). В старых сохранениях поля нет — false, рабочий атом.
 		public bool Cargo { get; set; }
+		// Перекрёсток (T010). В старых сохранениях поля нет — false, обычный режим.
+		public bool Crossroad { get; set; }
 	}
 
 	private class SavedSource
@@ -3742,7 +3825,7 @@ public partial class NucleusLayer : Node2D
 	{
 		int holeCount = 0;
 		foreach (var slot in n.Ring) if (slot.Exists) holeCount++;
-		return new SavedNucleus { Row = n.Row, Col = n.Col, CoreTier = n.CoreTier, Dir = n.Dir, HoleCount = holeCount, Cargo = n.IsCargo };
+		return new SavedNucleus { Row = n.Row, Col = n.Col, CoreTier = n.CoreTier, Dir = n.Dir, HoleCount = holeCount, Cargo = n.IsCargo, Crossroad = n.Cross != null };
 	}
 
 	// Разбирает JSON и полностью заменяет им текущее поле (ядра, источники
@@ -3806,6 +3889,9 @@ public partial class NucleusLayer : Node2D
 			bool ok = sn.Cargo
 				? PlaceCargo(sn.Row + dRow, sn.Col + dCol, sn.CoreTier, sn.HoleCount, sn.Dir)
 				: PlaceNucleusForImport(sn.Row + dRow, sn.Col + dCol, sn.CoreTier, sn.Dir, sn.HoleCount);
+			if (ok && sn.Crossroad && !sn.Cargo
+				&& _entAt.TryGetValue((sn.Row + dRow, sn.Col + dCol), out var imported) && CanBeCrossroad(imported))
+				imported.Cross = new Crossroad(HoleCountOf(imported));
 			if (ok) placed++;
 			else GD.PrintErr($"[NucleusLayer] импорт: клетка ({sn.Row + dRow},{sn.Col + dCol}) уже занята — ядро пропущено.");
 		}
