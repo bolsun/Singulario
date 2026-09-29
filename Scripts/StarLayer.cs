@@ -99,6 +99,7 @@ public partial class StarLayer : Node2D
 
 	private int? _toolTier;
 	private bool _hadPreview;
+	private bool _hadStars;
 
 	public override void _Ready()
 	{
@@ -413,8 +414,10 @@ public partial class StarLayer : Node2D
 		FillEffectMesh();
 		UpdateMesh();
 		bool preview = _toolTier.HasValue && !ViewLayer.IsLayer2;
-		if (_stars.Count > 0 || preview || _hadPreview) QueueRedraw();
+		// _hadStars — ещё один кадр после удаления последней звезды, чтобы стереть её рецепт.
+		if (_stars.Count > 0 || _hadStars || preview || _hadPreview) QueueRedraw();
 		_hadPreview = preview;
+		_hadStars = _stars.Count > 0;
 	}
 
 	// Звёзд мало — буфер пишется целиком каждый кадр (пульсация).
