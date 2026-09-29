@@ -3356,6 +3356,20 @@ public partial class NucleusLayer : Node2D
 		// Чёрные дыры слоя 1 (T005): верхняя левая клетка и размер.
 		public List<SavedBlackHole> BlackHoleCells { get; set; } = new();
 		public SavedAbsorbed Absorbed { get; set; }
+		// Звёзды-сборщики (T006). В старых сохранениях поля нет.
+		public List<SavedStar> Stars { get; set; } = new();
+	}
+
+	private class SavedStar
+	{
+		public int Row { get; set; }   // верхняя левая клетка
+		public int Col { get; set; }
+		public int Tier { get; set; }
+		public int Recipe { get; set; } // индекс в StarRecipes.All
+		public int OutputSide { get; set; } = Star.DefaultOutputSide; // 0 N, 1 E, 2 S, 3 W
+		public List<int> Buffer { get; set; } = new(); // набрано по ингредиентам рецепта
+		public bool Producing { get; set; }
+		public int Elapsed { get; set; }
 	}
 
 	private class SavedLayer2BlackHole
@@ -3455,6 +3469,14 @@ public partial class NucleusLayer : Node2D
 				if (BlackHoles.ParticlesAbsorbed[c] != 0)
 					data.Absorbed.Particles.Add(new SavedColorCount { Color = c, Count = BlackHoles.ParticlesAbsorbed[c] });
 		}
+
+		foreach (var star in Stars.All)
+			data.Stars.Add(new SavedStar
+			{
+				Row = star.Row, Col = star.Col, Tier = star.Tier, Recipe = star.Recipe,
+				OutputSide = star.OutputSide, Buffer = new List<int>(star.Buffer),
+				Producing = star.Producing, Elapsed = star.Elapsed,
+			});
 
 		if (Ports != null)
 			foreach (var pair in Ports.Enumerate())
@@ -3566,6 +3588,26 @@ public partial class NucleusLayer : Node2D
 			if (_blackHoleLayer != null && _blackHoleLayer.TryPlace(sh.Row, sh.Col, sh.Size, log: false)) holesPlaced++;
 			else GD.PushWarning($"[NucleusLayer] импорт: ЧД в клетке ({sh.Row},{sh.Col}) размером {sh.Size} не ставится (занято) — пропущена.");
 		}
+		// Звёзды (T006) — после атомов, источников и ЧД, с проверками инструмента.
+		int starsPlaced = 0;
+		var starsList = data.Stars ?? new List<SavedStar>();
+		foreach (var ss in starsList)
+		{
+			var star = ss.Recipe >= 0 && ss.Recipe < StarRecipes.Count
+				? _starLayer?.TryPlace(ss.Row, ss.Col, ss.Tier, log: false, recipe: ss.Recipe)
+				: null;
+			if (star == null)
+			{
+				GD.PushWarning($"[NucleusLayer] импорт: звезда в клетке ({ss.Row},{ss.Col}) не ставится (занято или неверный рецепт {ss.Recipe}) — пропущена.");
+				continue;
+			}
+			star.OutputSide = ((ss.OutputSide % Star.SideCount) + Star.SideCount) % Star.SideCount;
+			star.RestoreBuffer(ss.Buffer);
+			star.Producing = ss.Producing;
+			star.Elapsed = ss.Producing ? System.Math.Clamp(ss.Elapsed, 0, StarDuration(star)) : 0;
+			starsPlaced++;
+		}
+
 		// ЧД слоя 2 (T003) больше нет — старые записи пропускаются.
 		var oldHoles = data.BlackHoles ?? new List<SavedLayer2BlackHole>();
 		if (oldHoles.Count > 0)
@@ -3587,7 +3629,7 @@ public partial class NucleusLayer : Node2D
 			GD.PushWarning($"[NucleusLayer] импорт: слой 2 выключен — молекулы ({moleculesList.Count}) пропущены.");
 		int moleculesPlaced = _moleculeLayer?.ImportMolecules(moleculesList) ?? 0;
 
-		GD.Print($"[NucleusLayer] поле загружено из JSON: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, портов {portsPlaced}/{portsList.Count}, ЧД {holesPlaced}/{holesList.Count}, молекул {moleculesPlaced}/{moleculesList.Count}, тик сброшен в 0.");
+		GD.Print($"[NucleusLayer] поле загружено из JSON: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, портов {portsPlaced}/{portsList.Count}, ЧД {holesPlaced}/{holesList.Count}, звёзд {starsPlaced}/{starsList.Count}, молекул {moleculesPlaced}/{moleculesList.Count}, тик сброшен в 0.");
 		error = null;
 		return true;
 	}
@@ -3617,6 +3659,7 @@ public partial class NucleusLayer : Node2D
 		_moleculeLayer?.ClearAll();
 		Ports?.Clear();
 		BlackHoles?.Clear();
+		Stars?.Clear();
 
 		// По заданию — при загрузке тик должен быть 0, а вместе с ним и все
 		// производные величины часов симуляции, чтобы не осталось дробного
