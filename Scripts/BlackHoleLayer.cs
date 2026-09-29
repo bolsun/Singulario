@@ -169,6 +169,7 @@ public partial class BlackHoleLayer : Node2D
 	}
 
 	public void ClearTool() => _toolSelected = false;
+	public bool HasTool => _toolSelected;
 
 	public override void _UnhandledInput(InputEvent @event)
 	{
