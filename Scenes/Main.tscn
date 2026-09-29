@@ -18,8 +18,8 @@
 [ext_resource type="Texture2D" uid="uid://5bjnylen83cd" path="res://Resources/Textures/particle_source_yellow_25_96px.png" id="13_devvj"]
 [ext_resource type="Script" uid="uid://ldxrm8ytbdgt" path="res://Scripts/ClusterHoverProbe.cs" id="13_hoverprobe"]
 [ext_resource type="Script" uid="uid://m7w6whifhwgu" path="res://Scripts/BlackHoleLayer.cs" id="14_blackhole"]
-[ext_resource type="Script" path="res://Scripts/SaveLoadPanel.cs" id="16_saveload"]
-[ext_resource type="Script" path="res://Scripts/MoleculeLayer.cs" id="17_molecule"]
+[ext_resource type="Script" uid="uid://dpd435pbbjxyn" path="res://Scripts/SaveLoadPanel.cs" id="16_saveload"]
+[ext_resource type="Script" uid="uid://dkrow0kpplp5u" path="res://Scripts/MoleculeLayer.cs" id="17_molecule"]
 [ext_resource type="Script" uid="uid://dt55kgmbck18b" path="res://Scripts/PortLayer.cs" id="18_port"]
 [ext_resource type="Script" uid="uid://cyjr8v1byggrt" path="res://Scripts/StarLayer.cs" id="19_star"]
 
@@ -185,14 +185,13 @@ script = ExtResource("1_grid")
 
 [node name="NucleusLayer" type="Node2D" parent="." unique_id=398998017]
 script = ExtResource("2_nucleus")
-PauseTicksAfterStep = 32
 RequireColorMatch = false
 RequireSameCoreTier = true
 
-[node name="PortLayer" type="Node2D" parent="."]
+[node name="PortLayer" type="Node2D" parent="." unique_id=212261444]
 script = ExtResource("18_port")
 
-[node name="MoleculeLayer" type="Node2D" parent="."]
+[node name="MoleculeLayer" type="Node2D" parent="." unique_id=1079545324]
 script = ExtResource("17_molecule")
 
 [node name="Camera2D" type="Camera2D" parent="." unique_id=237866169]
@@ -217,7 +216,7 @@ script = ExtResource("6_spawn")
 [node name="ClusterHoverLabel" type="Label" parent="HUD" unique_id=997790339]
 script = ExtResource("12_hoverlabel")
 
-[node name="SaveLoadPanel" type="Control" parent="HUD" unique_id=3489217654]
+[node name="SaveLoadPanel" type="Control" parent="HUD" unique_id=-805749642]
 layout_mode = 3
 anchors_preset = 0
 script = ExtResource("16_saveload")
@@ -249,5 +248,5 @@ script = ExtResource("13_hoverprobe")
 [node name="BlackHoleLayer" type="Node2D" parent="." unique_id=2075888489]
 script = ExtResource("14_blackhole")
 
-[node name="StarLayer" type="Node2D" parent="."]
+[node name="StarLayer" type="Node2D" parent="." unique_id=1082987019]
 script = ExtResource("19_star")
