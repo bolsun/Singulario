@@ -30,8 +30,10 @@ public partial class FpsLabel : Label
 			+ PortCounters(_nucleusLayer.Ports)
 			+ BlackHoleCounters(_nucleusLayer.BlackHoles)
 			: "";
-		string ratio = _moleculeLayer != null ? $"  k = {_moleculeLayer.L2TickRatio}" : "";
-		Text = $"FPS: {Engine.GetFramesPerSecond()}  Слой {ViewLayer.Current}{ratio}{extraInfo}";
+		// Слой и k — только при включённом слое 2 (ViewLayer.Layer2Enabled, T005).
+		string layer = ViewLayer.Layer2Enabled ? $"  Слой {ViewLayer.Current}" : "";
+		string ratio = ViewLayer.Layer2Enabled && _moleculeLayer != null ? $"  k = {_moleculeLayer.L2TickRatio}" : "";
+		Text = $"FPS: {Engine.GetFramesPerSecond()}{layer}{ratio}{extraInfo}";
 	}
 
 	// Отладка портов (T002): упаковано частиц / атомов создано / атомов
@@ -45,21 +47,32 @@ public partial class FpsLabel : Label
 			+ $"  распак. {ports.AtomsUnpacked}  выдано {ports.ParticlesEmitted}{dropped}";
 	}
 
-	private static readonly string[] ColorLabels = { "Ж", "К", "С", "Сер" };
+	// Подписи тиров атомов (CoreTier) и цветов частиц — по одной нумерации.
+	private static readonly string[] TierLabels = { "Ж", "К", "С", "Сер", "Пов", "Бр" };
 	private readonly System.Text.StringBuilder _sb = new();
 
-	// Поглощено чёрными дырами (T003): атомов всего и частиц по цветам.
+	// Поглощено чёрными дырами (T005): атомы по тиру и частицы по цветам.
 	private string BlackHoleCounters(BlackHoleSet holes)
 	{
-		if (holes == null || (holes.Count == 0 && holes.AtomsAbsorbed == 0)) return "";
+		if (holes == null) return "";
+		long atoms = holes.TotalAtomsAbsorbed;
+		long particles = 0;
+		foreach (long p in holes.ParticlesAbsorbed) particles += p;
+		if (holes.Count == 0 && atoms == 0 && particles == 0) return "";
 		_sb.Clear();
-		_sb.Append("\nЧД (").Append(holes.Count).Append("): атомов ").Append(holes.AtomsAbsorbed);
-		for (int c = 0; c < BlackHoleSet.ColorCount; c++)
-		{
-			long n = holes.ParticlesAbsorbed[c];
-			if (n == 0) continue;
-			_sb.Append("  ").Append(c < ColorLabels.Length ? ColorLabels[c] : "#" + c).Append(' ').Append(n);
-		}
+		_sb.Append("\nЧД (").Append(holes.Count).Append("): атомов ").Append(atoms);
+		AppendCounts(holes.AtomsAbsorbed);
+		_sb.Append("\n  частиц ").Append(particles);
+		AppendCounts(holes.ParticlesAbsorbed);
 		return _sb.ToString();
+	}
+
+	private void AppendCounts(long[] counts)
+	{
+		for (int i = 0; i < counts.Length; i++)
+		{
+			if (counts[i] == 0) continue;
+			_sb.Append("  ").Append(i < TierLabels.Length ? TierLabels[i] : "#" + i).Append(' ').Append(counts[i]);
+		}
 	}
 }

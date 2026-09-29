@@ -11,6 +11,13 @@ using System;
 // статическое и переживает перезагрузку сцены.
 public static class ViewLayer
 {
+	// Выключатель слоя 2 (T005, GDD «Структура слоёв»: слой 2 заморожен) —
+	// единственное место. false: слой 2 не включается ни при каком зуме;
+	// молекулы (MoleculeLayer), порты (NucleusLayer.Ports, PortLayer) и блоки
+	// не существуют, граница чанка проходима. Код слоя 2 остаётся: true
+	// возвращает поведение после T004.
+	public static bool Layer2Enabled = false;
+
 	public const float ExitFactor = 1.05f;
 
 	public static int Current { get; private set; } = 1;
@@ -20,7 +27,7 @@ public static class ViewLayer
 
 	public static void UpdateFromZoom(float zoom, int chunkSize)
 	{
-		if (chunkSize <= 0) return;
+		if (chunkSize <= 0 || !Layer2Enabled) return;
 		float enter = 1f / chunkSize;
 		float exit = enter * ExitFactor;
 

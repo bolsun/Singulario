@@ -83,14 +83,15 @@ public partial class NucleusSpawnPanel : Control
 		// LoadParticleLayers), а не жёстко "1", чтобы панель не обрезала
 		// кнопки, если тиров вдруг станет больше 3 (GridContainer при этом
 		// сам переносит лишние кнопки на новую строку).
-		int extraButtons = _particleLayers.Count;
+		// + 1 — кнопка чёрной дыры (T005) в той же строке, что источники.
+		int extraButtons = _particleLayers.Count + 1;
 		int clusterRows = extraButtons > 0 ? Mathf.CeilToInt(extraButtons / 3f) : 0;
 		// HoleCounts.Length * 4 — линейка "количество дырок" повторена 4 раза:
 		// обычные тиры, серое ядро, поворачиватель И бросатель (см.
 		// ThrowerCoreTier в NucleusLayer.cs).
 		int totalRows = HoleCounts.Length * 4 + 1 + clusterRows;
-		// Слой 2: Ж/К/С x 2/4/8, строка серых Сер2/Сер4/Сер8 и строка с ЧД.
-		if (ViewLayer.IsLayer2) totalRows = HoleCounts.Length + 2;
+		// Слой 2: Ж/К/С x 2/4/8 и строка серых Сер2/Сер4/Сер8.
+		if (ViewLayer.IsLayer2) totalRows = HoleCounts.Length + 1;
 
 		int widthPx = ButtonSize * 3; // ровно столько колонок в GridContainer
 		int heightPx = ButtonSize * totalRows;
@@ -299,13 +300,24 @@ public partial class NucleusSpawnPanel : Control
 			grid.AddChild(button);
 		}
 
-		BuildLayer2Grid();
+		// Чёрная дыра (T005) — объект слоя 1 (BlackHoleLayer.SelectTool):
+		// ЛКМ — поставить, ПКМ — удалить.
+		var holeButton = new Button
+		{
+			Text = "ЧД",
+			CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
+		};
+		holeButton.Pressed += () => GetNodeOrNull<BlackHoleLayer>("/root/Main/BlackHoleLayer")?.SelectTool();
+		grid.AddChild(holeButton);
+
+		// Кнопки молекул — только при включённом слое 2 (T005).
+		if (ViewLayer.Layer2Enabled) BuildLayer2Grid();
 		ViewLayer.Changed += OnViewLayerChanged;
 		ApplyViewLayer();
 	}
 
 	// Кнопки молекул слоя 2: те же подписи и цвета, что у ядер слоя 1
-	// (Ж/К/С x 2/4/8 и Сер2/4/8), и кнопка чёрной дыры. Поворачиватель и
+	// (Ж/К/С x 2/4/8 и Сер2/4/8). ЧД с T005 — на панели слоя 1. Поворачиватель и
 	// бросатель на слое 2 пока не поддерживаются (T001).
 	private void BuildLayer2Grid()
 	{
@@ -322,15 +334,6 @@ public partial class NucleusSpawnPanel : Control
 		}
 		foreach (int holeCount in HoleCounts)
 			AddMoleculeButton($"Сер{holeCount}", grayTier, holeCount);
-
-		// Чёрная дыра (T003) — встроенный объект слоя 2, ставится только здесь.
-		var holeButton = new Button
-		{
-			Text = "ЧД",
-			CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
-		};
-		holeButton.Pressed += () => _moleculeLayer?.SelectBlackHoleTool();
-		_layer2Grid.AddChild(holeButton);
 	}
 
 	private void AddMoleculeButton(string text, int tier, int holeCount)
