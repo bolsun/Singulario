@@ -84,7 +84,8 @@ public partial class NucleusSpawnPanel : Control
 		// кнопки, если тиров вдруг станет больше 3 (GridContainer при этом
 		// сам переносит лишние кнопки на новую строку).
 		// + 1 — кнопка чёрной дыры (T005) в той же строке, что источники.
-		int extraButtons = _particleLayers.Count + 1;
+		// + Tiers.Length — кнопки звёзд Ж/К/С (T006).
+		int extraButtons = _particleLayers.Count + 1 + Tiers.Length;
 		int clusterRows = extraButtons > 0 ? Mathf.CeilToInt(extraButtons / 3f) : 0;
 		// HoleCounts.Length * 4 — линейка "количество дырок" повторена 4 раза:
 		// обычные тиры, серое ядро, поворачиватель И бросатель (см.
@@ -309,6 +310,28 @@ public partial class NucleusSpawnPanel : Control
 		};
 		holeButton.Pressed += () => GetNodeOrNull<BlackHoleLayer>("/root/Main/BlackHoleLayer")?.SelectTool();
 		grid.AddChild(holeButton);
+
+		// Звёзды-сборщики Ж/К/С (T006, StarLayer.SelectTool): ЛКМ — поставить
+		// 3×3 (центр под курсором), ПКМ — удалить.
+		foreach (var (label, tier) in Tiers)
+		{
+			var starButton = new Button
+			{
+				Text = $"★{label}",
+				CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
+			};
+			if (tier >= 0 && tier < _tierColors.Length)
+			{
+				var c = _tierColors[tier];
+				starButton.AddThemeColorOverride("font_color", c);
+				starButton.AddThemeColorOverride("font_hover_color", c);
+				starButton.AddThemeColorOverride("font_pressed_color", c);
+				starButton.AddThemeColorOverride("font_focus_color", c);
+			}
+			int starTier = tier;
+			starButton.Pressed += () => GetNodeOrNull<StarLayer>("/root/Main/StarLayer")?.SelectTool(starTier);
+			grid.AddChild(starButton);
+		}
 
 		// Кнопки молекул — только при включённом слое 2 (T005).
 		if (ViewLayer.Layer2Enabled) BuildLayer2Grid();

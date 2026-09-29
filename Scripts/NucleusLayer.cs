@@ -157,6 +157,8 @@ public partial class NucleusLayer : Node2D
 	// поэтому свой порог отключения: слой дырок гаснет раньше (при более
 	// сильном отдалении камеры), чем слой частиц (см. ParticleHideZoom).
 	[Export] public float HoleHideZoom = 0.25f;
+	// Приглушение тела груза (T006) в шейдере палитр: 0 — как рабочий атом, 1 — максимум.
+	[Export] public float CargoDim = 0.7f;
 
 	// --- частицы ---
 	[Export] public string ParticleSpritePath = "res://Resources/Textures/particle_gray_16px.png";
@@ -347,7 +349,20 @@ public partial class NucleusLayer : Node2D
 	// атома): её чанк занят молекулой (только при включённом слое 2) или в ней ЧД.
 	public bool IsCellBlockedForLayer1(int row, int col) =>
 		(_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col))
-		|| BlackHoles.TryGetAt(row, col, out _);
+		|| BlackHoles.TryGetAt(row, col, out _)
+		|| Stars.TryGetAt(row, col, out _);
+
+	// Звёзды-сборщики (T006): данные — StarSet, приём ингредиентов, производство
+	// и выход — здесь (SimTick, FinishArrivedMoves), установка и отрисовка — StarLayer.
+	public StarSet Stars { get; private set; }
+	// Время рецепта для звезды Ж (тиков) и скорость по тиру звезды Ж/К/С.
+	[Export] public int StarRecipeTicks = 256;
+	[Export] public int[] StarSpeedByTier = new int[] { 1, 2, 4 };
+	public int StarDuration(Star star) => star.Duration(StarRecipeTicks, StarSpeedByTier);
+
+	// Клетка свободна под звезду: как под ЧД, и не в ЧД. Пересечение звёзд — StarSet.
+	public bool CanPlaceStarCell(int row, int col) =>
+		CanPlaceBlackHoleCell(row, col) && !BlackHoles.TryGetAt(row, col, out _);
 
 	// Можно ли накрыть клетку чёрной дырой: нет атома, источника, клетки порта
 	// и молекулы в чанке (последние два — только при включённом слое 2).
@@ -355,6 +370,7 @@ public partial class NucleusLayer : Node2D
 	public bool CanPlaceBlackHoleCell(int row, int col)
 	{
 		if (_entAt.ContainsKey((row, col))) return false;
+		if (Stars.TryGetAt(row, col, out _)) return false; // клетка звезды (T006)
 		if (Ports != null && Ports.IsPortCell(row, col)) return false;
 		if (_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col)) return false;
 		foreach (var layer in _energyClusterLayers)
@@ -537,6 +553,13 @@ public partial class NucleusLayer : Node2D
 		// ЕМУ ЖЕ (блокировка обратного захвата, по заданию клиента) — но не
 		// блокирует передачу ДАЛЬШЕ, третьему вращателю в цепочке.
 		public NucleusEntity HandoffLastGiver;
+
+		// Груз (T006, GDD «Груз и установленный атом»): атом, выложенный
+		// звездой. Занимает клетку (_entAt) — его носят вращатели и бросатели,
+		// ЧД захватывает, — но не в _activeSet: не вращается, частиц не берёт и
+		// не отдаёт (соседи его пропускают), не крутит и не бросает. Рисуется
+		// приглушённым, кольцо стоит на фазе 0. ЛКМ — стать рабочим (ActivateCargo).
+		public bool IsCargo;
 	}
 
 	private class WorldChunk
@@ -577,6 +600,9 @@ public partial class NucleusLayer : Node2D
 	// тик проверяем только реально спящих, а не все живые ядра сразу (см.
 	// WakeSleepingNuclei).
 	private readonly HashSet<NucleusEntity> _sleepingSet = new();
+	// Груз (T006, см. NucleusEntity.IsCargo) — не тикает; набор нужен для
+	// сохранения и очистки, как _sleepingSet.
+	private readonly HashSet<NucleusEntity> _cargoSet = new();
 
 	private Texture2D _coreTexture;
 	private Texture2D _holeTexture;
@@ -687,6 +713,7 @@ public partial class NucleusLayer : Node2D
 	// Чёрные дыры (T005) — объекты слоя 1; узел нужен для эффекта падения
 	// (захват атома/частицы), инструмента установки и удаления ПКМ. Данные — BlackHoles.
 	private BlackHoleLayer _blackHoleLayer;
+	private StarLayer _starLayer; // звёзды (T006): инструмент, отрисовка, удаление ПКМ
 	// Слой 2 — только для правила занятости: в чанк с молекулой объекты слоя 1 не ставятся.
 	private MoleculeLayer _moleculeLayer;
 	private PortLayer _portLayer; // подсветка клетки порта при попытке поставить ядро (T004)
@@ -758,6 +785,8 @@ public partial class NucleusLayer : Node2D
 		_currentSpinDirection = SpinDirection;
 		Ports = ViewLayer.Layer2Enabled ? new PortSet(ChunkSize) : null;
 		BlackHoles = new BlackHoleSet();
+		Stars = new StarSet();
+		_starLayer = GetNodeOrNull<StarLayer>("../StarLayer");
 
 		_ready = true;
 		GD.Print($"[NucleusLayer] инициализирован. FillDensity={FillDensity}, ParticleFillChance={ParticleFillChance}.");
@@ -805,6 +834,16 @@ public partial class NucleusLayer : Node2D
 	// тем же направлением, а не молча вернулась к старому.
 	private void ToggleSpinDirectionUnderMouse()
 	{
+		// R над звездой (T006) — выход на следующую сторону по часовой.
+		var mouse = GetGlobalMousePosition();
+		if (Stars.TryGetAt(Mathf.FloorToInt(mouse.Y / CellSize), Mathf.FloorToInt(mouse.X / CellSize), out var star))
+		{
+			star.OutputSide = (star.OutputSide + 1) % Star.SideCount;
+			var (orow, ocol) = star.OutputCell;
+			GD.Print($"[NucleusLayer] выход звезды ({star.Row},{star.Col}) — клетка ({orow},{ocol}).");
+			return;
+		}
+
 		var nucleus = FindNucleusUnderMouse(out int row, out int col);
 		if (nucleus == null)
 		{
@@ -924,6 +963,18 @@ public partial class NucleusLayer : Node2D
 		{
 			if (mb.Pressed)
 			{
+				// ЛКМ по грузу — установить его на месте рабочим атомом (T006;
+				// инвентаря пока нет). Раньше инструмента: груз не затирается установкой.
+				var mouse = GetGlobalMousePosition();
+				var cargoCell = (Mathf.FloorToInt(mouse.Y / CellSize), Mathf.FloorToInt(mouse.X / CellSize));
+				if (_entAt.TryGetValue(cargoCell, out var cargo) && cargo.IsCargo)
+				{
+					ActivateCargo(cargo);
+					_lastPlacedCell = cargoCell; // удержание ЛКМ не ставит атом поверх только что установленного
+					_leftMouseHeld = _selectedSpawnTier.HasValue;
+					GetViewport().SetInputAsHandled();
+					return;
+				}
 				if (!_selectedSpawnTier.HasValue) return;
 				_leftMouseHeld = true;
 				_lastPlacedCell = null; // разрешаем установку в клетку под курсором сразу же
@@ -966,6 +1017,7 @@ public partial class NucleusLayer : Node2D
 		_energyLayer?.ClearSelection();
 		foreach (var clusterLayer in _energyClusterLayers) clusterLayer.ClearSelection();
 		_blackHoleLayer?.ClearTool();
+		_starLayer?.ClearTool();
 		GD.Print($"[NucleusLayer] выбрано для установки: тир {tier}, дырок {holeCount}/8, направление {(_currentSpinDirection > 0 ? "по часовой" : "против часовой")} (R — переключить). Клик (или удержание ЛКМ) по полю — поставить.");
 	}
 
@@ -977,6 +1029,7 @@ public partial class NucleusLayer : Node2D
 	{
 		_selectedSpawnTier = null;
 		_blackHoleLayer?.ClearTool();
+		_starLayer?.ClearTool();
 	}
 
 	// Общая точка входа и для одиночного клика, и для каждого кадра при
@@ -1040,6 +1093,7 @@ public partial class NucleusLayer : Node2D
 	{
 		RemoveNucleusAt(row, col);
 		_blackHoleLayer?.RemoveAt(row, col);
+		_starLayer?.RemoveAt(row, col);
 
 		foreach (var layer in _energyClusterLayers)
 		{
@@ -1085,6 +1139,7 @@ public partial class NucleusLayer : Node2D
 		_activeSet.Remove(nucleus);
 		_movingSet.Remove(nucleus); // защитная подстраховка — сюда не должны попадать едущие/летящие, но лишней не будет
 		_sleepingSet.Remove(nucleus); // на случай удаления ещё не проснувшегося ядра (см. AsleepUntilTick)
+		_cargoSet.Remove(nucleus);
 
 		if (!_chunks.TryGetValue((cx, cy), out var chunk))
 		{
@@ -1376,6 +1431,10 @@ public partial class NucleusLayer : Node2D
 		// вообще когда-либо проснуться.
 		if (_sleepingSet.Count > 0) WakeSleepingNuclei();
 
+		// Производство звёзд (T006) — до раннего выхода: звезда с набранным
+		// рецептом работает и выкладывает атом, даже если рабочих атомов нет.
+		if (Stars.Count > 0) TickStars();
+
 		if (_activeSet.Count == 0) return;
 
 		// Шаг 0: прибытие уже едущих ядер (см. StartMove/FinishArrivedMoves) —
@@ -1490,6 +1549,7 @@ public partial class NucleusLayer : Node2D
 				// мёртвым кодом, убрана.
 				var (dr, dc) = Adj8[k];
 				if (!_entAt.TryGetValue((n.Row + dr, n.Col + dc), out var neighbor)) continue;
+				if (neighbor.IsCargo) continue; // груз частиц не отдаёт (T006)
 
 				int k2 = Opposite(k);
 				int p2 = PhysicalSlotForCompass(neighbor, k2);
@@ -1524,6 +1584,7 @@ public partial class NucleusLayer : Node2D
 				// кодом, убрана.
 				var (dr, dc) = Adj8[k];
 				if (!_entAt.TryGetValue((n.Row + dr, n.Col + dc), out var neighbor)) continue;
+				if (neighbor.IsCargo) continue; // груз частиц не берёт (T006)
 
 				int k2 = Opposite(k);
 				int p2 = PhysicalSlotForCompass(neighbor, k2);
@@ -1548,6 +1609,9 @@ public partial class NucleusLayer : Node2D
 
 		// Шаг 2г: ЧД высасывает частицы из атомов, стоящих на горизонте (T005).
 		if (BlackHoles.Count > 0) AbsorbFromHorizon();
+
+		// Шаг 2д: звёзды берут нужные рецепту частицы у атомов вокруг (T006).
+		if (Stars.Count > 0) FeedStarsFromNeighbors();
 
 		// Шаг 3: захват энергии из источников частиц (EnergyClusterLayer).
 		// ВАЖНО: раньше здесь была одна общая проверка на ВСЮ симуляцию сразу —
@@ -1655,6 +1719,7 @@ public partial class NucleusLayer : Node2D
 						_ => (hole.Row + i, hole.Col - 1, 2),         // слева, смотрит на восток
 					};
 					if (!_entAt.TryGetValue((row, col), out var n)) continue;
+					if (n.IsCargo) continue; // груз частиц не отдаёт (T006)
 					if (_globalTick < n.AsleepUntilTick) continue; // ещё не проснулся — не крутится
 					int p = PhysicalSlotForCompass(n, k);
 					var slot = n.Ring[p];
@@ -1694,6 +1759,72 @@ public partial class NucleusLayer : Node2D
 		_blackHoleLayer?.OnAtomCaptured(hole, n.MoveToCenter, n.CoreTier, particles);
 		RemoveNucleusEntity(n);
 		return true;
+	}
+
+	// Звезда (T006, GDD «Звезда — сборщик») берёт частицы у атомов в 12
+	// клетках вокруг — как горизонт ЧД (AbsorbFromHorizon): звезда как серое без
+	// спина, незаблокированная частица из гнезда, смотрящего на звезду, с учётом
+	// _claimed. Берёт только цвет, нужный рецепту, пока в буфере есть место;
+	// остальное не трогает. Груз частиц не отдаёт. Обход — звёзды по порядку
+	// StarSet, клетки по порядку Star.RingCells.
+	private void FeedStarsFromNeighbors()
+	{
+		foreach (var star in Stars.All)
+		{
+			foreach (var (row, col, k) in star.RingCells())
+			{
+				if (!_entAt.TryGetValue((row, col), out var n)) continue;
+				if (n.IsCargo || _globalTick < n.AsleepUntilTick) continue;
+				int p = PhysicalSlotForCompass(n, k);
+				var slot = n.Ring[p];
+				if (!slot.Exists || slot.IsHole || slot.Locked || _claimed.Contains((n, p))) continue;
+				int need = star.NeedIndex(IngredientKind.Particle, slot.ColorTier);
+				if (need < 0) continue;
+				if (!TierSpinAllowed(GrayCoreTier, TransferRules.NoSpin, n.CoreTier, n.Dir)) continue;
+
+				n.Ring[p] = new RingSlot { Exists = true, IsHole = true };
+				_claimed.Add((n, p));
+				star.Put(need);
+			}
+		}
+	}
+
+	// Один тик производства всех звёзд (T006): полный буфер уходит в работу,
+	// работа длится StarDuration тиков, готовый атом кладётся грузом на клетку
+	// выхода. Клетка занята — атом ждёт внутри, звезда стоит (буфер при этом
+	// набирается), попытка — каждый тик.
+	private void TickStars()
+	{
+		foreach (var star in Stars.All)
+		{
+			if (!star.Advance(StarDuration(star))) continue;
+			var (row, col) = star.OutputCell;
+			var recipe = star.RecipeData;
+			if (!PlaceCargo(row, col, recipe.ResultTier, recipe.ResultHoles)) continue;
+			star.FinishOutput();
+		}
+	}
+
+	// Атом доставлен вращателем или бросателем в клетку вокруг звезды (или в
+	// саму звезду) — поглощается целиком, если нужен рецепту и в буфере есть
+	// место (частицы в его гнёздах сгорают). Иначе вызывающий оставляет его
+	// лежать (из звезды — возвращает назад). Атом, поставленный игроком, сюда
+	// не попадает — он не приезжает. Вызывается из FinishArrivedMoves, как
+	// TryCaptureArrived.
+	private bool TryFeedArrivedToStar(NucleusEntity n)
+	{
+		if (IsSpinnerTier(n.CoreTier) || n.CoreTier == GrayCoreTier) return false;
+		int row = n.MoveToRow, col = n.MoveToCol;
+		foreach (var star in Stars.All)
+		{
+			if (!star.ContainsCell(row, col) && !star.IsRingCell(row, col)) continue;
+			int need = star.NeedIndex(IngredientKind.Atom, n.CoreTier);
+			if (need < 0) continue;
+			star.Put(need);
+			RemoveNucleusEntity(n);
+			return true;
+		}
+		return false;
 	}
 
 	private readonly List<PortKey> _portKeys = new();
@@ -2419,6 +2550,8 @@ public partial class NucleusLayer : Node2D
 			// Доставлен на горизонт ЧД (переезд от вращателя, толчок или шаг
 			// полёта бросателя) — захвачен целиком (T005), дальше не едет.
 			if (BlackHoles.Count > 0 && TryCaptureArrived(n)) continue;
+			// Доставлен к звезде и нужен рецепту — поглощён (T006).
+			if (Stars.Count > 0 && TryFeedArrivedToStar(n)) continue;
 
 			int destRow = n.MoveToRow;
 			int destCol = n.MoveToCol;
@@ -2430,9 +2563,12 @@ public partial class NucleusLayer : Node2D
 			// чужое ядро нельзя — откатываем переезд, возвращая ядро на ту
 			// клетку, откуда оно выехало (она гарантированно всё ещё свободна,
 			// никто другой её не занимал, пока n оттуда числилось выехавшим).
-			if (_entAt.ContainsKey((destRow, destCol)))
+			// То же — если вращатель довёз атом в клетку звезды, а звезде он не
+			// нужен (T006): внутри звезды атом лежать не может.
+			if (_entAt.ContainsKey((destRow, destCol)) || Stars.TryGetAt(destRow, destCol, out _))
 			{
-				GD.PrintErr($"[NucleusLayer] переезд в клетку ({destRow},{destCol}) отменён — она уже занята; ядро возвращено в ({n.MoveFromRow},{n.MoveFromCol}).");
+				if (_entAt.ContainsKey((destRow, destCol)))
+					GD.PrintErr($"[NucleusLayer] переезд в клетку ({destRow},{destCol}) отменён — она уже занята; ядро возвращено в ({n.MoveFromRow},{n.MoveFromCol}).");
 				destRow = n.MoveFromRow;
 				destCol = n.MoveFromCol;
 			}
@@ -2796,7 +2932,7 @@ public partial class NucleusLayer : Node2D
 			// офсет 0 — переключение происходит без единого визуального
 			// скачка.
 			float continuousOffset;
-			if (_globalTick < n.AsleepUntilTick)
+			if (_globalTick < n.AsleepUntilTick || n.IsCargo) // груз не вращается (T006)
 			{
 				continuousOffset = 0f;
 			}
@@ -2998,7 +3134,9 @@ public partial class NucleusLayer : Node2D
 		{
 			mm.SetInstanceTransform2D(i, new Transform2D(0f, chunk.Nuclei[i].Center));
 			float rowUv = (chunk.Nuclei[i].CoreTier + 0.5f) / _tierCount;
-			mm.SetInstanceCustomData(i, new Color(rowUv, 0f, 0f, 0f));
+			// z — приглушение (шейдер палитр): груз тусклый, без свечения (T006).
+			float dim = chunk.Nuclei[i].IsCargo ? CargoDim : 0f;
+			mm.SetInstanceCustomData(i, new Color(rowUv, 0f, dim, 0f));
 		}
 		chunk.Node.Multimesh = mm;
 
@@ -3071,7 +3209,7 @@ public partial class NucleusLayer : Node2D
 
 		if (_entAt.TryGetValue((row, col), out var existingNucleus))
 		{
-			if (!IsNormalTier(tier) || !IsNormalTier(existingNucleus.CoreTier))
+			if (!IsNormalTier(tier) || !IsNormalTier(existingNucleus.CoreTier) || existingNucleus.IsCargo)
 			{
 				GD.Print($"[NucleusLayer] клетка ({row},{col}) уже занята — пропуск.");
 				return;
@@ -3134,6 +3272,56 @@ public partial class NucleusLayer : Node2D
 		GD.Print($"[NucleusLayer] установлено ядро тира {tier} в клетке ({row},{col}), запрошено гнёзд {holeCount}/8, реально гнёзд {actualSlots}/8 (частиц среди них: {actualParticles}){sleepNote}.");
 	}
 
+	// --- груз (T006, см. NucleusEntity.IsCargo) ---
+
+	// Клетка свободна для нового атома: нет атома, ЧД, звезды, молекулы и порта.
+	public bool IsCellFreeForAtom(int row, int col) =>
+		!_entAt.ContainsKey((row, col)) && !IsCellBlockedForLayer1(row, col)
+		&& (Ports == null || !Ports.IsPortCell(row, col));
+
+	// Кладёт груз (переносчик tier на holeCount пустых гнёзд) в свободную клетку.
+	// false — клетка занята, ничего не сделано.
+	public bool PlaceCargo(int row, int col, int tier, int holeCount, int dir = 1)
+	{
+		if (!IsCellFreeForAtom(row, col)) return false;
+		var chunk = GetOrCreateChunk(Mathf.FloorToInt((float)col / ChunkSize), Mathf.FloorToInt((float)row / ChunkSize));
+		if (_entAt.ContainsKey((row, col))) return false; // RandomFillEnabled мог поставить сюда атом
+		var cargo = new NucleusEntity
+		{
+			Row = row,
+			Col = col,
+			Center = new Vector2(col * CellSize + CellSize / 2f, row * CellSize + CellSize / 2f),
+			CoreTier = tier,
+			Dir = dir >= 0 ? 1 : -1,
+			Ring = BuildFixedRing(holeCount),
+			LocalIndex = chunk.Nuclei.Count,
+			IsCargo = true,
+		};
+		chunk.Nuclei.Add(cargo);
+		_entAt[(row, col)] = cargo;
+		_cargoSet.Add(cargo);
+		RebuildChunkMeshes(chunk);
+		return true;
+	}
+
+	// Груз → рабочий атом на месте. Включается в симуляцию так же, как
+	// только что поставленный атом: спит до фазы 0 своего тира (см.
+	// TryPlaceNucleus), чтобы кольцо не прыгнуло. Частицы в гнёздах сохраняются.
+	private void ActivateCargo(NucleusEntity cargo)
+	{
+		cargo.IsCargo = false;
+		_cargoSet.Remove(cargo);
+		long ownPeriod = (long)OwnRotationTicks(cargo.CoreTier) * 8;
+		cargo.AsleepUntilTick = (ownPeriod > 0 && _globalTick % ownPeriod != 0)
+			? ((_globalTick / ownPeriod) + 1) * ownPeriod
+			: _globalTick;
+		if (_globalTick >= cargo.AsleepUntilTick) _activeSet.Add(cargo);
+		else _sleepingSet.Add(cargo);
+		if (_chunks.TryGetValue((Mathf.FloorToInt((float)cargo.Col / ChunkSize), Mathf.FloorToInt((float)cargo.Row / ChunkSize)), out var chunk))
+			RebuildChunkMeshes(chunk);
+		GD.Print($"[NucleusLayer] груз в клетке ({cargo.Row},{cargo.Col}) установлен рабочим атомом тира {cargo.CoreTier}.");
+	}
+
 	// --- сохранение/загрузка поля в/из JSON-строки (см. SaveLoadPanel) ---
 	// По заданию клиента: сохраняются ТОЛЬКО ядра (позиция/тир/направление/
 	// число гнёзд кольца) и источники частиц (EnergyClusterLayer — только
@@ -3168,6 +3356,20 @@ public partial class NucleusLayer : Node2D
 		// Чёрные дыры слоя 1 (T005): верхняя левая клетка и размер.
 		public List<SavedBlackHole> BlackHoleCells { get; set; } = new();
 		public SavedAbsorbed Absorbed { get; set; }
+		// Звёзды-сборщики (T006). В старых сохранениях поля нет.
+		public List<SavedStar> Stars { get; set; } = new();
+	}
+
+	private class SavedStar
+	{
+		public int Row { get; set; }   // верхняя левая клетка
+		public int Col { get; set; }
+		public int Tier { get; set; }
+		public int Recipe { get; set; } // индекс в StarRecipes.All
+		public int OutputSide { get; set; } = Star.DefaultOutputSide; // 0 N, 1 E, 2 S, 3 W
+		public List<int> Buffer { get; set; } = new(); // набрано по ингредиентам рецепта
+		public bool Producing { get; set; }
+		public int Elapsed { get; set; }
 	}
 
 	private class SavedLayer2BlackHole
@@ -3225,6 +3427,8 @@ public partial class NucleusLayer : Node2D
 		// комментарий): позиции гнёзд — чистая функция одного этого числа, без
 		// надобности хранить весь массив Ring целиком.
 		public int HoleCount { get; set; }
+		// Груз (T006). В старых сохранениях поля нет — false, рабочий атом.
+		public bool Cargo { get; set; }
 	}
 
 	private class SavedSource
@@ -3245,6 +3449,7 @@ public partial class NucleusLayer : Node2D
 
 		foreach (var n in _activeSet) data.Nuclei.Add(ToSavedNucleus(n));
 		foreach (var n in _sleepingSet) data.Nuclei.Add(ToSavedNucleus(n));
+		foreach (var n in _cargoSet) data.Nuclei.Add(ToSavedNucleus(n));
 
 		foreach (var layer in _energyClusterLayers)
 			foreach (var (row, col) in layer.EnumerateCells())
@@ -3264,6 +3469,14 @@ public partial class NucleusLayer : Node2D
 				if (BlackHoles.ParticlesAbsorbed[c] != 0)
 					data.Absorbed.Particles.Add(new SavedColorCount { Color = c, Count = BlackHoles.ParticlesAbsorbed[c] });
 		}
+
+		foreach (var star in Stars.All)
+			data.Stars.Add(new SavedStar
+			{
+				Row = star.Row, Col = star.Col, Tier = star.Tier, Recipe = star.Recipe,
+				OutputSide = star.OutputSide, Buffer = new List<int>(star.Buffer),
+				Producing = star.Producing, Elapsed = star.Elapsed,
+			});
 
 		if (Ports != null)
 			foreach (var pair in Ports.Enumerate())
@@ -3287,7 +3500,7 @@ public partial class NucleusLayer : Node2D
 	{
 		int holeCount = 0;
 		foreach (var slot in n.Ring) if (slot.Exists) holeCount++;
-		return new SavedNucleus { Row = n.Row, Col = n.Col, CoreTier = n.CoreTier, Dir = n.Dir, HoleCount = holeCount };
+		return new SavedNucleus { Row = n.Row, Col = n.Col, CoreTier = n.CoreTier, Dir = n.Dir, HoleCount = holeCount, Cargo = n.IsCargo };
 	}
 
 	// Разбирает JSON и полностью заменяет им текущее поле (ядра, источники
@@ -3325,7 +3538,10 @@ public partial class NucleusLayer : Node2D
 				GD.PrintErr($"[NucleusLayer] импорт: клетка ({sn.Row},{sn.Col}) — порт чанка, ядро пропущено.");
 				continue;
 			}
-			if (PlaceNucleusForImport(sn.Row, sn.Col, sn.CoreTier, sn.Dir, sn.HoleCount)) placed++;
+			bool ok = sn.Cargo
+				? PlaceCargo(sn.Row, sn.Col, sn.CoreTier, sn.HoleCount, sn.Dir)
+				: PlaceNucleusForImport(sn.Row, sn.Col, sn.CoreTier, sn.Dir, sn.HoleCount);
+			if (ok) placed++;
 			else GD.PrintErr($"[NucleusLayer] импорт: клетка ({sn.Row},{sn.Col}) уже занята — ядро пропущено.");
 		}
 
@@ -3372,6 +3588,26 @@ public partial class NucleusLayer : Node2D
 			if (_blackHoleLayer != null && _blackHoleLayer.TryPlace(sh.Row, sh.Col, sh.Size, log: false)) holesPlaced++;
 			else GD.PushWarning($"[NucleusLayer] импорт: ЧД в клетке ({sh.Row},{sh.Col}) размером {sh.Size} не ставится (занято) — пропущена.");
 		}
+		// Звёзды (T006) — после атомов, источников и ЧД, с проверками инструмента.
+		int starsPlaced = 0;
+		var starsList = data.Stars ?? new List<SavedStar>();
+		foreach (var ss in starsList)
+		{
+			var star = ss.Recipe >= 0 && ss.Recipe < StarRecipes.Count
+				? _starLayer?.TryPlace(ss.Row, ss.Col, ss.Tier, log: false, recipe: ss.Recipe)
+				: null;
+			if (star == null)
+			{
+				GD.PushWarning($"[NucleusLayer] импорт: звезда в клетке ({ss.Row},{ss.Col}) не ставится (занято или неверный рецепт {ss.Recipe}) — пропущена.");
+				continue;
+			}
+			star.OutputSide = ((ss.OutputSide % Star.SideCount) + Star.SideCount) % Star.SideCount;
+			star.RestoreBuffer(ss.Buffer);
+			star.Producing = ss.Producing;
+			star.Elapsed = ss.Producing ? System.Math.Clamp(ss.Elapsed, 0, StarDuration(star)) : 0;
+			starsPlaced++;
+		}
+
 		// ЧД слоя 2 (T003) больше нет — старые записи пропускаются.
 		var oldHoles = data.BlackHoles ?? new List<SavedLayer2BlackHole>();
 		if (oldHoles.Count > 0)
@@ -3393,7 +3629,7 @@ public partial class NucleusLayer : Node2D
 			GD.PushWarning($"[NucleusLayer] импорт: слой 2 выключен — молекулы ({moleculesList.Count}) пропущены.");
 		int moleculesPlaced = _moleculeLayer?.ImportMolecules(moleculesList) ?? 0;
 
-		GD.Print($"[NucleusLayer] поле загружено из JSON: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, портов {portsPlaced}/{portsList.Count}, ЧД {holesPlaced}/{holesList.Count}, молекул {moleculesPlaced}/{moleculesList.Count}, тик сброшен в 0.");
+		GD.Print($"[NucleusLayer] поле загружено из JSON: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, портов {portsPlaced}/{portsList.Count}, ЧД {holesPlaced}/{holesList.Count}, звёзд {starsPlaced}/{starsList.Count}, молекул {moleculesPlaced}/{moleculesList.Count}, тик сброшен в 0.");
 		error = null;
 		return true;
 	}
@@ -3416,12 +3652,14 @@ public partial class NucleusLayer : Node2D
 		_activeSet.Clear();
 		_movingSet.Clear();
 		_sleepingSet.Clear();
+		_cargoSet.Clear();
 		_claimed.Clear();
 
 		foreach (var layer in _energyClusterLayers) layer.ClearAll();
 		_moleculeLayer?.ClearAll();
 		Ports?.Clear();
 		BlackHoles?.Clear();
+		Stars?.Clear();
 
 		// По заданию — при загрузке тик должен быть 0, а вместе с ним и все
 		// производные величины часов симуляции, чтобы не осталось дробного

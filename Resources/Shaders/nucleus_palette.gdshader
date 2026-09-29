@@ -17,9 +17,16 @@ shader_type canvas_item;
 uniform sampler2D palette_tex : filter_nearest, repeat_disable;
 
 varying float v_palette_row;
+// T006: INSTANCE_CUSTOM.y — свечение (звезда во время производства, 0..1),
+// INSTANCE_CUSTOM.z — приглушение (груз, звезда в простое, 0..1). У всех,
+// кто их не задаёт, там 0 — цвет не меняется.
+varying float v_glow;
+varying float v_dim;
 
 void vertex() {
 	v_palette_row = INSTANCE_CUSTOM.x;
+	v_glow = INSTANCE_CUSTOM.y;
+	v_dim = INSTANCE_CUSTOM.z;
 }
 
 void fragment() {
@@ -32,5 +39,9 @@ void fragment() {
 	vec4 src = texture(TEXTURE, uv);
 	float idx = src.r; // 0..1 — квантованный маркер уровня из index-спрайта
 	vec3 final_color = texture(palette_tex, vec2(idx, v_palette_row)).rgb;
+	final_color = mix(final_color, vec3(1.0), clamp(v_glow, 0.0, 1.0) * 0.45);
+	float luma = dot(final_color, vec3(0.299, 0.587, 0.114));
+	float dim = clamp(v_dim, 0.0, 1.0);
+	final_color = mix(final_color, vec3(luma), dim * 0.6) * (1.0 - dim * 0.5);
 	COLOR = vec4(final_color, src.a);
 }
