@@ -101,6 +101,14 @@ public partial class StarLayer : Node2D
 		if (!_ready || ViewLayer.IsLayer2) return;
 		if (@event is not InputEventMouseButton mb || mb.ButtonIndex != MouseButton.Left || !mb.Pressed) return;
 		var (row, col) = CellUnderMouse();
+		// ЛКМ по звезде — следующий рецепт (Ж → К → С → …), с любым инструментом.
+		if (_stars.TryGetAt(row, col, out var star))
+		{
+			bool burned = star.SetRecipe(star.Recipe + 1);
+			GD.Print($"[StarLayer] звезда ({star.Row},{star.Col}): рецепт «{star.RecipeData.Name}».{(burned ? " Ингредиенты в работе и в буфере сгорели." : "")}");
+			GetViewport().SetInputAsHandled();
+			return;
+		}
 		if (_toolTier.HasValue)
 		{
 			TryPlace(row - Star.Size / 2, col - Star.Size / 2, _toolTier.Value, log: true);
@@ -197,7 +205,50 @@ public partial class StarLayer : Node2D
 	public override void _Draw()
 	{
 		if (!_ready || ViewLayer.IsLayer2) return;
+		foreach (var star in _stars.All) DrawStarInfo(star);
 		if (_toolTier.HasValue) DrawPreview();
+	}
+
+	private Color TierColor(int tier)
+	{
+		var colors = _nucleusLayer.TierPreviewColors;
+		return colors != null && tier >= 0 && tier < colors.Length ? colors[tier] : Colors.White;
+	}
+
+	// Рецепт (атом-результат в центре), прогресс работы (дуга), буфер (подписи
+	// «набрано/нужно» цветом ингредиента) и клетка выхода (рамка).
+	private void DrawStarInfo(Star star)
+	{
+		var center = new Vector2((star.Col + Star.Size / 2f) * _cellSize, (star.Row + Star.Size / 2f) * _cellSize);
+		var recipe = star.RecipeData;
+
+		float icon = _cellSize * 0.8f;
+		var core = _nucleusLayer.CoreTexture;
+		if (core != null)
+			DrawTextureRect(core, new Rect2(center - new Vector2(icon, icon) / 2f, new Vector2(icon, icon)), false, TierColor(recipe.ResultTier));
+
+		if (star.Producing)
+		{
+			int duration = _nucleusLayer.StarDuration(star);
+			float t = Mathf.Clamp((float)star.Elapsed / duration, 0f, 1f);
+			var arcColor = t >= 1f ? new Color(1f, 0.35f, 0.3f, 0.9f) : new Color(1f, 1f, 1f, 0.85f); // красная — готово, выход занят
+			DrawArc(center, _cellSize * 0.6f, -Mathf.Pi / 2f, -Mathf.Pi / 2f + Mathf.Tau * t, 32, arcColor, _cellSize * 0.08f);
+		}
+
+		var font = ThemeDB.FallbackFont;
+		int fontSize = Mathf.Max(6, Mathf.RoundToInt(_cellSize * 0.3f));
+		float y = center.Y + _cellSize * 0.75f;
+		for (int i = 0; i < recipe.Ingredients.Length; i++)
+		{
+			var ing = recipe.Ingredients[i];
+			string text = ing.Kind == IngredientKind.Atom ? $"◯{star.Buffer[i]}/{ing.Count}" : $"•{star.Buffer[i]}/{ing.Count}";
+			float x = center.X + (i - (recipe.Ingredients.Length - 1) / 2f) * _cellSize * 0.9f - _cellSize * 0.4f;
+			DrawString(font, new Vector2(x, y + fontSize * 0.35f), text, HorizontalAlignment.Left, -1, fontSize, TierColor(ing.Id));
+		}
+
+		var (orow, ocol) = star.OutputCell;
+		var outRect = new Rect2(ocol * _cellSize, orow * _cellSize, _cellSize, _cellSize).Grow(-_cellSize * 0.06f);
+		DrawRect(outRect, new Color(TierColor(star.Tier), 0.9f), false, _cellSize * 0.06f);
 	}
 
 	private void DrawPreview()
