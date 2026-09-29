@@ -417,8 +417,12 @@ public partial class NucleusLayer : Node2D
 		                      // спавн-панели с числом гнёзд меньше 8 (см. BuildFixedRing) — у
 		                      // обычных (случайно сгенерированных) ядер всегда true на все 8.
 		public bool IsHole;   // значим, только если Exists
-		public int ColorTier; // значим, только если Exists и !IsHole
+		public int ColorTier; // значим, только если Exists и !IsHole; у предмета — тир атома (0 Ж, 1 К, 2 С)
 		public bool Locked;   // только что принятая частица — нельзя отдать дальше до следующего поворота этого ядра
+		// Атом-предмет (T007, GDD «Атом-предмет»): вместо частицы в дырке лежит
+		// атом-переносчик тира ColorTier. Едет по линии по тем же правилам, что
+		// частица (материал на перенос не влияет). Значим, только если !IsHole.
+		public bool IsItem;
 	}
 
 	private class NucleusEntity
@@ -1451,7 +1455,8 @@ public partial class NucleusLayer : Node2D
 		if (_sleepingSet.Count > 0) WakeSleepingNuclei();
 
 		// Производство звёзд (T006) — до раннего выхода: звезда с набранным
-		// рецептом работает и выкладывает атом, даже если рабочих атомов нет.
+		// рецептом работает, даже если рабочих атомов нет. Готовый атом уходит
+		// в дырку на выходе — шаг 2е (T007).
 		if (Stars.Count > 0) TickStars();
 
 		if (_activeSet.Count == 0) return;
@@ -1575,9 +1580,9 @@ public partial class NucleusLayer : Node2D
 				ref var giverSlot = ref neighbor.Ring[p2];
 				if (!giverSlot.Exists || giverSlot.IsHole || giverSlot.Locked) continue;
 				if (_claimed.Contains((neighbor, p2))) continue;
-				if (!TransferAllowed(receiver: n, giver: neighbor, giverColor: giverSlot.ColorTier)) continue;
+				if (!TransferAllowed(receiver: n, giver: neighbor, giverSlot)) continue;
 
-				n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = giverSlot.ColorTier, Locked = true };
+				n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = giverSlot.ColorTier, Locked = true, IsItem = giverSlot.IsItem };
 				neighbor.Ring[p2] = new RingSlot { Exists = true, IsHole = true };
 				_claimed.Add((n, p));
 				_claimed.Add((neighbor, p2));
@@ -1609,9 +1614,9 @@ public partial class NucleusLayer : Node2D
 				int p2 = PhysicalSlotForCompass(neighbor, k2);
 				if (!neighbor.Ring[p2].Exists || !neighbor.Ring[p2].IsHole) continue;
 				if (_claimed.Contains((neighbor, p2))) continue;
-				if (!TransferAllowed(receiver: neighbor, giver: n, giverColor: giverSlot.ColorTier)) continue;
+				if (!TransferAllowed(receiver: neighbor, giver: n, giverSlot)) continue;
 
-				neighbor.Ring[p2] = new RingSlot { Exists = true, IsHole = false, ColorTier = giverSlot.ColorTier, Locked = true };
+				neighbor.Ring[p2] = new RingSlot { Exists = true, IsHole = false, ColorTier = giverSlot.ColorTier, Locked = true, IsItem = giverSlot.IsItem };
 				n.Ring[p] = new RingSlot { Exists = true, IsHole = true };
 				_claimed.Add((n, p));
 				_claimed.Add((neighbor, p2));
@@ -1631,6 +1636,9 @@ public partial class NucleusLayer : Node2D
 
 		// Шаг 2д: звёзды берут нужные рецепту частицы у атомов вокруг (T006).
 		if (Stars.Count > 0) FeedStarsFromNeighbors();
+
+		// Шаг 2е: звёзды отдают готовые атомы-предметы в дырки на выходе (T007).
+		if (Stars.Count > 0) OutputStarsToHoles();
 
 		// Шаг 3: захват энергии из источников частиц (EnergyClusterLayer).
 		// ВАЖНО: раньше здесь была одна общая проверка на ВСЮ симуляцию сразу —
@@ -1747,9 +1755,17 @@ public partial class NucleusLayer : Node2D
 
 					n.Ring[p] = new RingSlot { Exists = true, IsHole = true };
 					_claimed.Add((n, p));
-					BlackHoles.AbsorbParticle(slot.ColorTier);
 					var (dr, dc) = Adj8[k];
-					_blackHoleLayer?.OnParticleAbsorbed(hole, n.Center + new Vector2(dc, dr) * _orbitRadius, slot.ColorTier);
+					var from = n.Center + new Vector2(dc, dr) * _orbitRadius;
+					if (slot.IsItem)
+					{
+						// Атом-предмет (T007) — в счётчик атомов по тиру, как при захвате.
+						BlackHoles.AbsorbAtom(slot.ColorTier);
+						_blackHoleLayer?.OnItemAbsorbed(hole, from, slot.ColorTier);
+						continue;
+					}
+					BlackHoles.AbsorbParticle(slot.ColorTier);
+					_blackHoleLayer?.OnParticleAbsorbed(hole, from, slot.ColorTier);
 				}
 			}
 		}
@@ -1771,6 +1787,7 @@ public partial class NucleusLayer : Node2D
 		foreach (var slot in n.Ring)
 		{
 			if (!slot.Exists || slot.IsHole) continue;
+			if (slot.IsItem) { BlackHoles.AbsorbAtom(slot.ColorTier); continue; } // предмет — атом (T007)
 			BlackHoles.AbsorbParticle(slot.ColorTier);
 			particles.Push(slot.ColorTier);
 		}
@@ -1797,7 +1814,8 @@ public partial class NucleusLayer : Node2D
 				int p = PhysicalSlotForCompass(n, k);
 				var slot = n.Ring[p];
 				if (!slot.Exists || slot.IsHole || slot.Locked || _claimed.Contains((n, p))) continue;
-				int need = star.NeedIndex(IngredientKind.Particle, slot.ColorTier);
+				// Атом-предмет (T007) — ингредиент-атом его тира, частица — по цвету.
+				int need = star.NeedIndex(slot.IsItem ? IngredientKind.Atom : IngredientKind.Particle, slot.ColorTier);
 				if (need < 0) continue;
 				if (!TierSpinAllowed(GrayCoreTier, TransferRules.NoSpin, n.CoreTier, n.Dir)) continue;
 
@@ -1805,26 +1823,51 @@ public partial class NucleusLayer : Node2D
 				_claimed.Add((n, p));
 				star.Put(need);
 				var (dr, dc) = Adj8[k];
-				_starLayer?.OnParticleTaken(star, n.Center + new Vector2(dc, dr) * _orbitRadius, slot.ColorTier);
+				var from = n.Center + new Vector2(dc, dr) * _orbitRadius;
+				if (slot.IsItem) _starLayer?.OnItemTaken(star, from, slot.ColorTier);
+				else _starLayer?.OnParticleTaken(star, from, slot.ColorTier);
 			}
 		}
 	}
 
 	// Один тик производства всех звёзд (T006): полный буфер уходит в работу,
-	// работа длится StarDuration тиков, готовый атом кладётся грузом на клетку
-	// выхода. Клетка занята — атом ждёт внутри, звезда стоит (буфер при этом
-	// набирается), попытка — каждый тик.
+	// работа длится StarDuration тиков. Готовый атом отдаёт OutputStarsToHoles
+	// (T007); груз на клетку выхода больше не кладётся (PlaceCargo заморожен).
 	private void TickStars()
+	{
+		foreach (var star in Stars.All) star.Advance(StarDuration(star));
+	}
+
+	// Звезда отдаёт готовый атом-предмет (T007, GDD «Звезда — сборщик») в
+	// пустую дырку атома в клетке выхода, обращённую к звезде, — на шаге
+	// атома-получателя, с учётом _claimed; звезда как серое без спина (любой тир
+	// и спин). Нет такой дырки — атом ждёт внутри, звезда стоит (буфер при этом
+	// набирается), попытка — каждый тик. Предмет блокируется до поворота атома.
+	private void OutputStarsToHoles()
 	{
 		foreach (var star in Stars.All)
 		{
-			if (!star.Advance(StarDuration(star))) continue;
+			if (!star.Producing || star.Elapsed < StarDuration(star)) continue;
 			var (row, col) = star.OutputCell;
-			var recipe = star.RecipeData;
-			if (!PlaceCargo(row, col, recipe.ResultTier, recipe.ResultHoles)) continue;
+			if (!_entAt.TryGetValue((row, col), out var n)) continue;
+			if (n.IsCargo || _globalTick < n.AsleepUntilTick || (n.IsMoving && n.IsFlying)) continue;
+			if (IsSpinnerTier(n.CoreTier)) continue; // вращатели и бросатели ничего не хранят
+			int k = Opposite(star.OutputSide * 2); // из клетки выхода на звезду
+			int p = PhysicalSlotForCompass(n, k);
+			var slot = n.Ring[p];
+			if (!slot.Exists || !slot.IsHole || _claimed.Contains((n, p))) continue;
+			if (!TierSpinAllowed(n.CoreTier, n.Dir, GrayCoreTier, TransferRules.NoSpin)) continue;
+
+			n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = star.RecipeData.ResultTier, Locked = true, IsItem = true };
+			_claimed.Add((n, p));
 			star.FinishOutput();
 		}
 	}
+
+	// T007: атомы-ингредиенты звезда берёт только предметами из дырок
+	// (FeedStarsFromNeighbors); приём атомов, доставленных вращателем или
+	// бросателем, выключен — код ниже заморожен.
+	private static readonly bool StarAcceptsDeliveredAtoms = false;
 
 	// Атом доставлен вращателем или бросателем в клетку вокруг звезды (или в
 	// саму звезду) — поглощается целиком, если нужен рецепту и в буфере есть
@@ -1834,6 +1877,7 @@ public partial class NucleusLayer : Node2D
 	// TryCaptureArrived.
 	private bool TryFeedArrivedToStar(NucleusEntity n)
 	{
+		if (!StarAcceptsDeliveredAtoms) return false;
 		if (IsSpinnerTier(n.CoreTier) || n.CoreTier == GrayCoreTier) return false;
 		int row = n.MoveToRow, col = n.MoveToCol;
 		foreach (var star in Stars.All)
@@ -1896,7 +1940,7 @@ public partial class NucleusLayer : Node2D
 
 					if (mode == PortMode.Output)
 					{
-						if (slot.IsHole || slot.Locked) continue;
+						if (slot.IsHole || slot.Locked || slot.IsItem) continue; // предметы порт не берёт (слой 2 заморожен)
 						if (!TransferRules.TierSpinAllowed(GrayCoreTier, TransferRules.NoSpin, n.CoreTier, n.Dir,
 								GrayCoreTier, GrayAcceptsAnySpin, RequireSameCoreTier)) continue;
 						Ports.AcceptParticle(key, slot.ColorTier);
@@ -2823,7 +2867,7 @@ public partial class NucleusLayer : Node2D
 	// ToggleSpinDirectionUnderMouse) — так что два соседних ядра с РАЗНЫМ
 	// направлением вращения не будут передавать друг другу частицы, как и
 	// задумано этим правилом изначально.
-	private bool TransferAllowed(NucleusEntity receiver, NucleusEntity giver, int giverColor)
+	private bool TransferAllowed(NucleusEntity receiver, NucleusEntity giver, RingSlot giverSlot)
 	{
 		// Тир и спин — общие законы слоёв 1 и 2 (см. TransferRules): серый
 		// получатель при GrayAcceptsAnySpin не проверяет спин; при
@@ -2834,7 +2878,11 @@ public partial class NucleusLayer : Node2D
 				GrayCoreTier, GrayAcceptsAnySpin, RequireSameCoreTier))
 			return false;
 
-		return ColorAccepted(receiver, giverColor);
+		// Атом-предмет (T007): материал на перенос не влияет — флаги цвета
+		// не применяются; вращатели и бросатели не хранят ничего, как и частицы.
+		if (giverSlot.IsItem) return !IsSpinnerTier(receiver.CoreTier);
+
+		return ColorAccepted(receiver, giverSlot.ColorTier);
 	}
 
 	// Для MoleculeLayer: те же флаги законов тира/спина, что у ядер слоя 1.
@@ -2898,7 +2946,7 @@ public partial class NucleusLayer : Node2D
 	private static int? NucleusColorOrNull(NucleusEntity n)
 	{
 		foreach (var slot in n.Ring)
-			if (slot.Exists && !slot.IsHole) return slot.ColorTier;
+			if (slot.Exists && !slot.IsHole && !slot.IsItem) return slot.ColorTier;
 		return null;
 	}
 
@@ -3002,7 +3050,8 @@ public partial class NucleusLayer : Node2D
 					{
 						particleMM.SetInstanceTransform2D(instanceIdx, new Transform2D(0f, pos));
 						float rowUv = (slot.ColorTier + 0.5f) / _tierCount;
-						particleMM.SetInstanceCustomData(instanceIdx, new Color(rowUv, 0f, 0f, 0f));
+						// .w = 1 — атом-предмет (T007): шейдер рисует полое кольцо.
+						particleMM.SetInstanceCustomData(instanceIdx, new Color(rowUv, 0f, 0f, slot.IsItem ? 1f : 0f));
 					}
 					holeMM?.SetInstanceTransform2D(instanceIdx, HiddenTransform);
 				}

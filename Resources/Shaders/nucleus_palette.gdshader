@@ -23,11 +23,19 @@ varying float v_palette_row;
 // кто их не задаёт, там 0 — цвет не меняется.
 varying float v_glow;
 varying float v_dim;
+// T007: INSTANCE_CUSTOM.w > 0.5 — атом-предмет в дырке: спрайт частицы с
+// вырезанным центром (полое кольцо цвета тира). Вырез считается по пиксельной
+// сетке спрайта (item_pixels), чтобы край остался пиксельным.
+varying float v_item;
+uniform float item_pixels = 16.0;
+uniform float item_hole_radius = 0.22;  // доля стороны квада — прозрачный центр
+uniform float item_edge_width = 0.07;   // тёмная обводка внутреннего края
 
 void vertex() {
 	v_palette_row = INSTANCE_CUSTOM.x;
 	v_glow = INSTANCE_CUSTOM.y;
 	v_dim = INSTANCE_CUSTOM.z;
+	v_item = INSTANCE_CUSTOM.w;
 }
 
 void fragment() {
@@ -47,5 +55,12 @@ void fragment() {
 	float luma = dot(final_color, vec3(0.299, 0.587, 0.114));
 	float dim = clamp(v_dim, 0.0, 1.0);
 	final_color = mix(final_color, vec3(luma), dim * 0.6) * (1.0 - dim * 0.5);
-	COLOR = vec4(final_color, src.a);
+	float alpha = src.a;
+	if (v_item > 0.5) {
+		vec2 cell = (floor(uv * item_pixels) + 0.5) / item_pixels;
+		float r = length(cell - vec2(0.5));
+		if (r < item_hole_radius) alpha = 0.0;
+		else if (r < item_hole_radius + item_edge_width) final_color *= 0.15;
+	}
+	COLOR = vec4(final_color, alpha);
 }
