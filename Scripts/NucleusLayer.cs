@@ -930,7 +930,12 @@ public partial class NucleusLayer : Node2D
 		var nucleus = FindNucleusUnderMouse(out int row, out int col);
 		if (nucleus == null)
 		{
-			GD.Print($"[NucleusLayer] пипетка: в клетке ({row},{col}) нет ядра.");
+			// Пустая клетка — снять любой инструмент (атом, звезда, ЧД, источник).
+			ClearSelection();
+			_energyLayer?.ClearSelection();
+			foreach (var clusterLayer in _energyClusterLayers) clusterLayer.ClearSelection();
+			GetViewport().GuiReleaseFocus(); // кнопка панели не остаётся подсвеченной
+			GD.Print($"[NucleusLayer] пипетка: в клетке ({row},{col}) нет ядра — инструмент снят.");
 			return;
 		}
 
