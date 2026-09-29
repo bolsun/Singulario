@@ -100,6 +100,7 @@ public partial class StarLayer : Node2D
 	private int? _toolTier;
 	private bool _hadPreview;
 	private bool _hadStars;
+	private bool _hadPickups;
 
 	public override void _Ready()
 	{
@@ -183,6 +184,14 @@ public partial class StarLayer : Node2D
 		if (!_ready || ViewLayer.IsLayer2) return;
 		if (@event is not InputEventMouseButton mb || mb.ButtonIndex != MouseButton.Left || !mb.Pressed) return;
 		var (row, col) = CellUnderMouse();
+		// Ctrl+ЛКМ по звезде — весь выходной буфер в инвентарь, Shift+ЛКМ — один
+		// атом (T008). Раньше смены рецепта, с любым инструментом.
+		if ((mb.CtrlPressed || mb.ShiftPressed) && _stars.TryGetAt(row, col, out var source))
+		{
+			TakeToInventory(source, all: mb.CtrlPressed);
+			GetViewport().SetInputAsHandled();
+			return;
+		}
 		// ЛКМ по звезде — следующий рецепт (Ж → К → С → …), с любым инструментом.
 		if (_stars.TryGetAt(row, col, out var star))
 		{
@@ -195,6 +204,73 @@ public partial class StarLayer : Node2D
 		{
 			TryPlace(row - Star.Size / 2, col - Star.Size / 2, _toolTier.Value, log: true);
 			GetViewport().SetInputAsHandled();
+		}
+	}
+
+	// Выходной буфер звезды → инвентарь (T008): все атомы или один, самый старый.
+	// Ждущая готовая работа уйдёт в освободившееся место на следующем тике.
+	private void TakeToInventory(Star star, bool all)
+	{
+		var inventory = _nucleusLayer.Inventory;
+		int taken = 0;
+		while (star.Output.Count > 0 && (all || taken == 0))
+		{
+			int tier = star.Output.Dequeue();
+			inventory.Add(tier);
+			AddPickup(star, tier, taken);
+			taken++;
+		}
+		GD.Print(taken > 0
+			? $"[StarLayer] из звезды ({star.Row},{star.Col}) в инвентарь: {taken} атом(ов)."
+			: $"[StarLayer] выходной буфер звезды ({star.Row},{star.Col}) пуст.");
+	}
+
+	// --- отклик «забрал в инвентарь» (только визуал): полое кольцо цвета тира
+	// летит из центра звезды к курсору и тает. Идёт по времени кадра.
+
+	[Export] public float PickupSeconds = 0.35f;
+	// Задержка между кольцами при заборе всего буфера (сек).
+	[Export] public float PickupStagger = 0.04f;
+	private const int MaxPickups = 32;
+
+	private struct Pickup
+	{
+		public Vector2 From;
+		public float Age; // < 0 — ещё не вылетело
+		public int Tier;
+	}
+
+	private readonly System.Collections.Generic.List<Pickup> _pickups = new();
+
+	private void AddPickup(Star star, int tier, int index)
+	{
+		if (_pickups.Count >= MaxPickups) return;
+		_pickups.Add(new Pickup { From = StarCenter(star), Age = -index * PickupStagger, Tier = tier });
+	}
+
+	private void UpdatePickups(float delta)
+	{
+		for (int i = _pickups.Count - 1; i >= 0; i--)
+		{
+			var p = _pickups[i];
+			p.Age += delta;
+			if (p.Age >= PickupSeconds) _pickups.RemoveAt(i);
+			else _pickups[i] = p;
+		}
+	}
+
+	private void DrawPickups()
+	{
+		var mouse = GetGlobalMousePosition();
+		float radius = Mathf.Max(_particleRadius * 1.5f, 1f);
+		foreach (var p in _pickups)
+		{
+			if (p.Age < 0f) continue;
+			float t = p.Age / PickupSeconds;
+			float ease = t * t; // с ускорением к курсору
+			var pos = p.From.Lerp(mouse, ease);
+			var color = new Color(TierColor(p.Tier), 1f - t * t);
+			DrawArc(pos, radius, 0f, Mathf.Tau, 16, color, radius * 0.6f);
 		}
 	}
 
@@ -411,13 +487,16 @@ public partial class StarLayer : Node2D
 		_time += (float)delta;
 		UpdateViewRect();
 		UpdateEffects((float)delta);
+		UpdatePickups((float)delta);
 		FillEffectMesh();
 		UpdateMesh();
 		bool preview = _toolTier.HasValue && !ViewLayer.IsLayer2;
 		// _hadStars — ещё один кадр после удаления последней звезды, чтобы стереть её рецепт.
-		if (_stars.Count > 0 || _hadStars || preview || _hadPreview) QueueRedraw();
+		bool pickups = _pickups.Count > 0;
+		if (_stars.Count > 0 || _hadStars || preview || _hadPreview || pickups || _hadPickups) QueueRedraw();
 		_hadPreview = preview;
 		_hadStars = _stars.Count > 0;
+		_hadPickups = pickups;
 	}
 
 	// Звёзд мало — буфер пишется целиком каждый кадр (пульсация).
@@ -450,6 +529,7 @@ public partial class StarLayer : Node2D
 		var hovered = StarUnderMouse();
 		foreach (var star in _stars.All) DrawStarInfo(star, star == hovered);
 		if (_toolTier.HasValue) DrawPreview();
+		DrawPickups();
 	}
 
 	// Звезда, над одной из 9 клеток которой или над клеткой выхода которой курсор.
