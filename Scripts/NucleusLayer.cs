@@ -157,6 +157,8 @@ public partial class NucleusLayer : Node2D
 	// поэтому свой порог отключения: слой дырок гаснет раньше (при более
 	// сильном отдалении камеры), чем слой частиц (см. ParticleHideZoom).
 	[Export] public float HoleHideZoom = 0.25f;
+	// Приглушение тела груза (T006) в шейдере палитр: 0 — как рабочий атом, 1 — максимум.
+	[Export] public float CargoDim = 0.7f;
 
 	// --- частицы ---
 	[Export] public string ParticleSpritePath = "res://Resources/Textures/particle_gray_16px.png";
@@ -537,6 +539,13 @@ public partial class NucleusLayer : Node2D
 		// ЕМУ ЖЕ (блокировка обратного захвата, по заданию клиента) — но не
 		// блокирует передачу ДАЛЬШЕ, третьему вращателю в цепочке.
 		public NucleusEntity HandoffLastGiver;
+
+		// Груз (T006, GDD «Груз и установленный атом»): атом, выложенный
+		// звездой. Занимает клетку (_entAt) — его носят вращатели и бросатели,
+		// ЧД захватывает, — но не в _activeSet: не вращается, частиц не берёт и
+		// не отдаёт (соседи его пропускают), не крутит и не бросает. Рисуется
+		// приглушённым, кольцо стоит на фазе 0. ЛКМ — стать рабочим (ActivateCargo).
+		public bool IsCargo;
 	}
 
 	private class WorldChunk
@@ -577,6 +586,9 @@ public partial class NucleusLayer : Node2D
 	// тик проверяем только реально спящих, а не все живые ядра сразу (см.
 	// WakeSleepingNuclei).
 	private readonly HashSet<NucleusEntity> _sleepingSet = new();
+	// Груз (T006, см. NucleusEntity.IsCargo) — не тикает; набор нужен для
+	// сохранения и очистки, как _sleepingSet.
+	private readonly HashSet<NucleusEntity> _cargoSet = new();
 
 	private Texture2D _coreTexture;
 	private Texture2D _holeTexture;
@@ -924,6 +936,18 @@ public partial class NucleusLayer : Node2D
 		{
 			if (mb.Pressed)
 			{
+				// ЛКМ по грузу — установить его на месте рабочим атомом (T006;
+				// инвентаря пока нет). Раньше инструмента: груз не затирается установкой.
+				var mouse = GetGlobalMousePosition();
+				var cargoCell = (Mathf.FloorToInt(mouse.Y / CellSize), Mathf.FloorToInt(mouse.X / CellSize));
+				if (_entAt.TryGetValue(cargoCell, out var cargo) && cargo.IsCargo)
+				{
+					ActivateCargo(cargo);
+					_lastPlacedCell = cargoCell; // удержание ЛКМ не ставит атом поверх только что установленного
+					_leftMouseHeld = _selectedSpawnTier.HasValue;
+					GetViewport().SetInputAsHandled();
+					return;
+				}
 				if (!_selectedSpawnTier.HasValue) return;
 				_leftMouseHeld = true;
 				_lastPlacedCell = null; // разрешаем установку в клетку под курсором сразу же
@@ -1085,6 +1109,7 @@ public partial class NucleusLayer : Node2D
 		_activeSet.Remove(nucleus);
 		_movingSet.Remove(nucleus); // защитная подстраховка — сюда не должны попадать едущие/летящие, но лишней не будет
 		_sleepingSet.Remove(nucleus); // на случай удаления ещё не проснувшегося ядра (см. AsleepUntilTick)
+		_cargoSet.Remove(nucleus);
 
 		if (!_chunks.TryGetValue((cx, cy), out var chunk))
 		{
@@ -1490,6 +1515,7 @@ public partial class NucleusLayer : Node2D
 				// мёртвым кодом, убрана.
 				var (dr, dc) = Adj8[k];
 				if (!_entAt.TryGetValue((n.Row + dr, n.Col + dc), out var neighbor)) continue;
+				if (neighbor.IsCargo) continue; // груз частиц не отдаёт (T006)
 
 				int k2 = Opposite(k);
 				int p2 = PhysicalSlotForCompass(neighbor, k2);
@@ -1524,6 +1550,7 @@ public partial class NucleusLayer : Node2D
 				// кодом, убрана.
 				var (dr, dc) = Adj8[k];
 				if (!_entAt.TryGetValue((n.Row + dr, n.Col + dc), out var neighbor)) continue;
+				if (neighbor.IsCargo) continue; // груз частиц не берёт (T006)
 
 				int k2 = Opposite(k);
 				int p2 = PhysicalSlotForCompass(neighbor, k2);
@@ -1655,6 +1682,7 @@ public partial class NucleusLayer : Node2D
 						_ => (hole.Row + i, hole.Col - 1, 2),         // слева, смотрит на восток
 					};
 					if (!_entAt.TryGetValue((row, col), out var n)) continue;
+					if (n.IsCargo) continue; // груз частиц не отдаёт (T006)
 					if (_globalTick < n.AsleepUntilTick) continue; // ещё не проснулся — не крутится
 					int p = PhysicalSlotForCompass(n, k);
 					var slot = n.Ring[p];
@@ -2796,7 +2824,7 @@ public partial class NucleusLayer : Node2D
 			// офсет 0 — переключение происходит без единого визуального
 			// скачка.
 			float continuousOffset;
-			if (_globalTick < n.AsleepUntilTick)
+			if (_globalTick < n.AsleepUntilTick || n.IsCargo) // груз не вращается (T006)
 			{
 				continuousOffset = 0f;
 			}
@@ -2998,7 +3026,9 @@ public partial class NucleusLayer : Node2D
 		{
 			mm.SetInstanceTransform2D(i, new Transform2D(0f, chunk.Nuclei[i].Center));
 			float rowUv = (chunk.Nuclei[i].CoreTier + 0.5f) / _tierCount;
-			mm.SetInstanceCustomData(i, new Color(rowUv, 0f, 0f, 0f));
+			// z — приглушение (шейдер палитр): груз тусклый, без свечения (T006).
+			float dim = chunk.Nuclei[i].IsCargo ? CargoDim : 0f;
+			mm.SetInstanceCustomData(i, new Color(rowUv, 0f, dim, 0f));
 		}
 		chunk.Node.Multimesh = mm;
 
@@ -3071,7 +3101,7 @@ public partial class NucleusLayer : Node2D
 
 		if (_entAt.TryGetValue((row, col), out var existingNucleus))
 		{
-			if (!IsNormalTier(tier) || !IsNormalTier(existingNucleus.CoreTier))
+			if (!IsNormalTier(tier) || !IsNormalTier(existingNucleus.CoreTier) || existingNucleus.IsCargo)
 			{
 				GD.Print($"[NucleusLayer] клетка ({row},{col}) уже занята — пропуск.");
 				return;
@@ -3132,6 +3162,56 @@ public partial class NucleusLayer : Node2D
 		}
 		string sleepNote = _sleepingSet.Contains(nucleus) ? $", спит до тика {nucleus.AsleepUntilTick}" : "";
 		GD.Print($"[NucleusLayer] установлено ядро тира {tier} в клетке ({row},{col}), запрошено гнёзд {holeCount}/8, реально гнёзд {actualSlots}/8 (частиц среди них: {actualParticles}){sleepNote}.");
+	}
+
+	// --- груз (T006, см. NucleusEntity.IsCargo) ---
+
+	// Клетка свободна для нового атома: нет атома, ЧД, звезды, молекулы и порта.
+	public bool IsCellFreeForAtom(int row, int col) =>
+		!_entAt.ContainsKey((row, col)) && !IsCellBlockedForLayer1(row, col)
+		&& (Ports == null || !Ports.IsPortCell(row, col));
+
+	// Кладёт груз (переносчик tier на holeCount пустых гнёзд) в свободную клетку.
+	// false — клетка занята, ничего не сделано.
+	public bool PlaceCargo(int row, int col, int tier, int holeCount, int dir = 1)
+	{
+		if (!IsCellFreeForAtom(row, col)) return false;
+		var chunk = GetOrCreateChunk(Mathf.FloorToInt((float)col / ChunkSize), Mathf.FloorToInt((float)row / ChunkSize));
+		if (_entAt.ContainsKey((row, col))) return false; // RandomFillEnabled мог поставить сюда атом
+		var cargo = new NucleusEntity
+		{
+			Row = row,
+			Col = col,
+			Center = new Vector2(col * CellSize + CellSize / 2f, row * CellSize + CellSize / 2f),
+			CoreTier = tier,
+			Dir = dir >= 0 ? 1 : -1,
+			Ring = BuildFixedRing(holeCount),
+			LocalIndex = chunk.Nuclei.Count,
+			IsCargo = true,
+		};
+		chunk.Nuclei.Add(cargo);
+		_entAt[(row, col)] = cargo;
+		_cargoSet.Add(cargo);
+		RebuildChunkMeshes(chunk);
+		return true;
+	}
+
+	// Груз → рабочий атом на месте. Включается в симуляцию так же, как
+	// только что поставленный атом: спит до фазы 0 своего тира (см.
+	// TryPlaceNucleus), чтобы кольцо не прыгнуло. Частицы в гнёздах сохраняются.
+	private void ActivateCargo(NucleusEntity cargo)
+	{
+		cargo.IsCargo = false;
+		_cargoSet.Remove(cargo);
+		long ownPeriod = (long)OwnRotationTicks(cargo.CoreTier) * 8;
+		cargo.AsleepUntilTick = (ownPeriod > 0 && _globalTick % ownPeriod != 0)
+			? ((_globalTick / ownPeriod) + 1) * ownPeriod
+			: _globalTick;
+		if (_globalTick >= cargo.AsleepUntilTick) _activeSet.Add(cargo);
+		else _sleepingSet.Add(cargo);
+		if (_chunks.TryGetValue((Mathf.FloorToInt((float)cargo.Col / ChunkSize), Mathf.FloorToInt((float)cargo.Row / ChunkSize)), out var chunk))
+			RebuildChunkMeshes(chunk);
+		GD.Print($"[NucleusLayer] груз в клетке ({cargo.Row},{cargo.Col}) установлен рабочим атомом тира {cargo.CoreTier}.");
 	}
 
 	// --- сохранение/загрузка поля в/из JSON-строки (см. SaveLoadPanel) ---
@@ -3225,6 +3305,8 @@ public partial class NucleusLayer : Node2D
 		// комментарий): позиции гнёзд — чистая функция одного этого числа, без
 		// надобности хранить весь массив Ring целиком.
 		public int HoleCount { get; set; }
+		// Груз (T006). В старых сохранениях поля нет — false, рабочий атом.
+		public bool Cargo { get; set; }
 	}
 
 	private class SavedSource
@@ -3245,6 +3327,7 @@ public partial class NucleusLayer : Node2D
 
 		foreach (var n in _activeSet) data.Nuclei.Add(ToSavedNucleus(n));
 		foreach (var n in _sleepingSet) data.Nuclei.Add(ToSavedNucleus(n));
+		foreach (var n in _cargoSet) data.Nuclei.Add(ToSavedNucleus(n));
 
 		foreach (var layer in _energyClusterLayers)
 			foreach (var (row, col) in layer.EnumerateCells())
@@ -3287,7 +3370,7 @@ public partial class NucleusLayer : Node2D
 	{
 		int holeCount = 0;
 		foreach (var slot in n.Ring) if (slot.Exists) holeCount++;
-		return new SavedNucleus { Row = n.Row, Col = n.Col, CoreTier = n.CoreTier, Dir = n.Dir, HoleCount = holeCount };
+		return new SavedNucleus { Row = n.Row, Col = n.Col, CoreTier = n.CoreTier, Dir = n.Dir, HoleCount = holeCount, Cargo = n.IsCargo };
 	}
 
 	// Разбирает JSON и полностью заменяет им текущее поле (ядра, источники
@@ -3325,7 +3408,10 @@ public partial class NucleusLayer : Node2D
 				GD.PrintErr($"[NucleusLayer] импорт: клетка ({sn.Row},{sn.Col}) — порт чанка, ядро пропущено.");
 				continue;
 			}
-			if (PlaceNucleusForImport(sn.Row, sn.Col, sn.CoreTier, sn.Dir, sn.HoleCount)) placed++;
+			bool ok = sn.Cargo
+				? PlaceCargo(sn.Row, sn.Col, sn.CoreTier, sn.HoleCount, sn.Dir)
+				: PlaceNucleusForImport(sn.Row, sn.Col, sn.CoreTier, sn.Dir, sn.HoleCount);
+			if (ok) placed++;
 			else GD.PrintErr($"[NucleusLayer] импорт: клетка ({sn.Row},{sn.Col}) уже занята — ядро пропущено.");
 		}
 
@@ -3416,6 +3502,7 @@ public partial class NucleusLayer : Node2D
 		_activeSet.Clear();
 		_movingSet.Clear();
 		_sleepingSet.Clear();
+		_cargoSet.Clear();
 		_claimed.Clear();
 
 		foreach (var layer in _energyClusterLayers) layer.ClearAll();
