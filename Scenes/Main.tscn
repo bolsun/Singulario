@@ -21,7 +21,7 @@
 [ext_resource type="Script" path="res://Scripts/SaveLoadPanel.cs" id="16_saveload"]
 [ext_resource type="Script" path="res://Scripts/MoleculeLayer.cs" id="17_molecule"]
 [ext_resource type="Script" uid="uid://dt55kgmbck18b" path="res://Scripts/PortLayer.cs" id="18_port"]
-[ext_resource type="Script" path="res://Scripts/StarLayer.cs" id="19_star"]
+[ext_resource type="Script" uid="uid://cyjr8v1byggrt" path="res://Scripts/StarLayer.cs" id="19_star"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_trn2v"]
 texture = ExtResource("7_trn2v")
