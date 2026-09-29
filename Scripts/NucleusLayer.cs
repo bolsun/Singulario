@@ -358,6 +358,8 @@ public partial class NucleusLayer : Node2D
 	// Время рецепта для звезды Ж (тиков) и скорость по тиру звезды Ж/К/С.
 	[Export] public int StarRecipeTicks = 256;
 	[Export] public int[] StarSpeedByTier = new int[] { 1, 2, 4 };
+	// Выходной буфер звезды (T008): сколько готовых атомов она копит.
+	[Export] public int StarOutputCapacity = 10;
 	public int StarDuration(Star star) => star.Duration(StarRecipeTicks, StarSpeedByTier);
 
 	// Клетка свободна под звезду: как под ЧД, и не в ЧД. Пересечение звёзд — StarSet.
@@ -1831,23 +1833,29 @@ public partial class NucleusLayer : Node2D
 	}
 
 	// Один тик производства всех звёзд (T006): полный буфер уходит в работу,
-	// работа длится StarDuration тиков. Готовый атом отдаёт OutputStarsToHoles
+	// работа длится StarDuration тиков. Готовый атом — в выходной буфер (T008);
+	// буфер полон — звезда стоит. Из буфера атомы отдаёт OutputStarsToHoles
 	// (T007); груз на клетку выхода больше не кладётся (PlaceCargo заморожен).
 	private void TickStars()
 	{
-		foreach (var star in Stars.All) star.Advance(StarDuration(star));
+		foreach (var star in Stars.All)
+		{
+			int duration = StarDuration(star);
+			star.Advance(duration);
+			star.TryFinishToOutput(duration, StarOutputCapacity);
+		}
 	}
 
-	// Звезда отдаёт готовый атом-предмет (T007, GDD «Звезда — сборщик») в
-	// пустую дырку атома в клетке выхода, обращённую к звезде, — на шаге
-	// атома-получателя, с учётом _claimed; звезда как серое без спина (любой тир
-	// и спин). Нет такой дырки — атом ждёт внутри, звезда стоит (буфер при этом
-	// набирается), попытка — каждый тик. Предмет блокируется до поворота атома.
+	// Звезда отдаёт готовый атом-предмет (T007, GDD «Звезда — сборщик») из
+	// головы выходного буфера (T008) в пустую дырку атома в клетке выхода,
+	// обращённую к звезде, — на шаге атома-получателя, с учётом _claimed; звезда
+	// как серое без спина (любой тир и спин). Нет такой дырки — атомы копятся в
+	// буфере, попытка — каждый тик. Предмет блокируется до поворота атома.
 	private void OutputStarsToHoles()
 	{
 		foreach (var star in Stars.All)
 		{
-			if (!star.Producing || star.Elapsed < StarDuration(star)) continue;
+			if (star.Output.Count == 0) continue;
 			var (row, col) = star.OutputCell;
 			if (!_entAt.TryGetValue((row, col), out var n)) continue;
 			if (n.IsCargo || _globalTick < n.AsleepUntilTick || (n.IsMoving && n.IsFlying)) continue;
@@ -1858,9 +1866,10 @@ public partial class NucleusLayer : Node2D
 			if (!slot.Exists || !slot.IsHole || _claimed.Contains((n, p))) continue;
 			if (!TierSpinAllowed(n.CoreTier, n.Dir, GrayCoreTier, TransferRules.NoSpin)) continue;
 
-			n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = star.RecipeData.ResultTier, Locked = true, IsItem = true };
+			n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = star.Output.Dequeue(), Locked = true, IsItem = true };
 			_claimed.Add((n, p));
-			star.FinishOutput();
+			// Место в буфере освободилось — ждущая готовая работа уходит туда же.
+			star.TryFinishToOutput(StarDuration(star), StarOutputCapacity);
 		}
 	}
 
@@ -3447,6 +3456,8 @@ public partial class NucleusLayer : Node2D
 		public List<int> Buffer { get; set; } = new(); // набрано по ингредиентам рецепта
 		public bool Producing { get; set; }
 		public int Elapsed { get; set; }
+		// Выходной буфер (T008): тиры готовых атомов, первый — самый старый. В старых сохранениях нет.
+		public List<int> Output { get; set; } = new();
 	}
 
 	private class SavedLayer2BlackHole
@@ -3553,6 +3564,7 @@ public partial class NucleusLayer : Node2D
 				Row = star.Row, Col = star.Col, Tier = star.Tier, Recipe = star.Recipe,
 				OutputSide = star.OutputSide, Buffer = new List<int>(star.Buffer),
 				Producing = star.Producing, Elapsed = star.Elapsed,
+				Output = new List<int>(star.Output),
 			});
 
 		if (Ports != null)
@@ -3682,6 +3694,11 @@ public partial class NucleusLayer : Node2D
 			star.RestoreBuffer(ss.Buffer);
 			star.Producing = ss.Producing;
 			star.Elapsed = ss.Producing ? System.Math.Clamp(ss.Elapsed, 0, StarDuration(star)) : 0;
+			foreach (int tier in ss.Output ?? new List<int>())
+			{
+				if (star.Output.Count >= StarOutputCapacity) break;
+				if (tier >= 0 && tier < BlackHoleSet.TierCount) star.Output.Enqueue(tier);
+			}
 			starsPlaced++;
 		}
 

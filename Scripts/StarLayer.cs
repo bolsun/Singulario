@@ -469,7 +469,7 @@ public partial class StarLayer : Node2D
 	}
 
 	// Рецепт (атом-результат в центре), прогресс работы (дуга), буфер (подписи
-	// «набрано/нужно» цветом ингредиента) и клетка выхода (рамка). Дуга — всегда
+	// «набрано/нужно» цветом ингредиента), выходной буфер (T008) и клетка выхода (рамка). Дуга — всегда
 	// (статус), остальное — только у звезды под курсором (hovered).
 	private void DrawStarInfo(Star star, bool hovered)
 	{
@@ -480,7 +480,7 @@ public partial class StarLayer : Node2D
 		{
 			int duration = _nucleusLayer.StarDuration(star);
 			float t = Mathf.Clamp((float)star.Elapsed / duration, 0f, 1f);
-			var arcColor = t >= 1f ? new Color(1f, 0.35f, 0.3f, 0.9f) : new Color(1f, 1f, 1f, 0.85f); // красная — готово, выход занят
+			var arcColor = t >= 1f ? new Color(1f, 0.35f, 0.3f, 0.9f) : new Color(1f, 1f, 1f, 0.85f); // красная — готово, выходной буфер полон
 			DrawArc(center, _cellSize * 0.6f, -Mathf.Pi / 2f, -Mathf.Pi / 2f + Mathf.Tau * t, 32, arcColor, _cellSize * 0.08f);
 		}
 		if (!hovered) return;
@@ -500,6 +500,10 @@ public partial class StarLayer : Node2D
 			float x = center.X + (i - (recipe.Ingredients.Length - 1) / 2f) * _cellSize * 0.9f - _cellSize * 0.4f;
 			DrawString(font, new Vector2(x, y + fontSize * 0.35f), text, HorizontalAlignment.Left, -1, fontSize, TierColor(ing.Id));
 		}
+		// Выходной буфер (T008) — строкой под ингредиентами.
+		string output = $"в буфере: {star.Output.Count} / {_nucleusLayer.StarOutputCapacity}";
+		var outSize = font.GetStringSize(output, HorizontalAlignment.Left, -1, fontSize);
+		DrawString(font, new Vector2(center.X - outSize.X / 2f, y + fontSize * 1.6f), output, HorizontalAlignment.Left, -1, fontSize, Colors.White);
 
 		var (orow, ocol) = star.OutputCell;
 		var outRect = new Rect2(ocol * _cellSize, orow * _cellSize, _cellSize, _cellSize).Grow(-_cellSize * 0.06f);

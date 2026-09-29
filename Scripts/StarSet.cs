@@ -10,8 +10,10 @@ using System.Collections.Generic;
 //
 // Производство: ингредиенты набираются в буфер (на 1 рецепт); полный буфер,
 // пока звезда не занята, уходит в работу; работа длится Duration тиков; готовый
-// атом ждёт внутри, пока клетка выхода занята. Пока идёт работа (или ждёт выход),
-// буфер набирается на следующий рецепт.
+// атом уходит в выходной буфер (T008, очередь тиров), если в нём есть место,
+// иначе ждёт внутри — звезда стоит. Из выходного буфера атомы уходят в линию
+// (NucleusLayer.OutputStarsToHoles) или руками в инвентарь. Пока идёт работа
+// (или ждёт выход), буфер набирается на следующий рецепт.
 
 public enum IngredientKind { Particle, Atom }
 
@@ -47,7 +49,10 @@ public sealed class Star
 	// Набрано в буфер по каждому ингредиенту рецепта (индексы — как в Ingredients).
 	public int[] Buffer { get; private set; }
 	public bool Producing;
-	public int Elapsed; // тиков работы; == Duration — готово, ждёт выход
+	public int Elapsed; // тиков работы; == Duration — готово, ждёт места в выходном буфере
+	// Выходной буфер (T008): тиры готовых атомов, голова — самый старый.
+	// Смена рецепта его не сжигает — атомы уже сделаны.
+	public readonly Queue<int> Output = new();
 
 	public Star(int row, int col, int tier, int recipe)
 	{
@@ -133,12 +138,16 @@ public sealed class Star
 		return Elapsed >= duration;
 	}
 
-	// Готовый атом выложен — звезда свободна, буфер сразу уходит в работу.
-	public void FinishOutput()
+	// Готовая работа — в выходной буфер, если там есть место (capacity);
+	// звезда свободна, буфер ингредиентов сразу уходит в работу. true — положено.
+	public bool TryFinishToOutput(int duration, int capacity)
 	{
+		if (!Producing || Elapsed < duration || Output.Count >= capacity) return false;
+		Output.Enqueue(RecipeData.ResultTier);
 		Producing = false;
 		Elapsed = 0;
 		TryStart();
+		return true;
 	}
 
 	public bool ContainsCell(int row, int col) =>
