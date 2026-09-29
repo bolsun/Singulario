@@ -346,9 +346,11 @@ public partial class NucleusLayer : Node2D
 	public BlackHoleSet BlackHoles { get; private set; }
 
 	// Клетка закрыта для объектов слоя 1 (атомов, источников, влёта брошенного
-	// атома): её чанк занят молекулой (только при включённом слое 2) или в ней ЧД.
+	// атома): её чанк закрыт (T009, IsCellOpen), занят молекулой (только при
+	// включённом слое 2) или в ней ЧД/звезда.
 	public bool IsCellBlockedForLayer1(int row, int col) =>
-		(_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col))
+		!IsCellOpen(row, col)
+		|| (_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col))
 		|| BlackHoles.TryGetAt(row, col, out _)
 		|| Stars.TryGetAt(row, col, out _);
 
@@ -361,6 +363,33 @@ public partial class NucleusLayer : Node2D
 	// Песочница — установка бесплатна; настоящий — атом Ж/К/С тратится из
 	// инвентаря, ПКМ возвращает его и атомы-предметы из дырок.
 	[Export] public bool SandboxMode = true;
+
+	// Открытая территория (T009): данные — Territory, правило — здесь.
+	// Закрытый чанк: ставить, удалять, бросать и везти туда нельзя (через
+	// IsCellBlockedForLayer1/CanPlaceBlackHoleCell), рисуется затемнённым
+	// (TerritoryLayer). Песочница открывает всю карту.
+	public Territory Territory { get; private set; }
+	private TerritoryLayer _territoryLayer;
+
+	public int ChunkOf(int cell) => Mathf.FloorToInt((float)cell / ChunkSize);
+	public bool IsChunkOpen(int cx, int cy) => Inventory.Sandbox || Territory.IsOpen(cx, cy);
+	public bool IsCellOpen(int row, int col) => IsChunkOpen(ChunkOf(col), ChunkOf(row));
+
+	// Открыть чанки (T010 — расширение по награде; сейчас — отладочная клавиша O).
+	public int OpenChunks(IEnumerable<(int cx, int cy)> chunks)
+	{
+		int added = Territory.Open(chunks);
+		if (added > 0) GD.Print($"[NucleusLayer] открыто чанков: {added} (всего открыто {Territory.OpenCount}).");
+		return added;
+	}
+
+	// Клетка в закрытом чанке — красная вспышка чанка, true. Для отказов ввода.
+	public bool DenyIfClosed(int row, int col)
+	{
+		if (IsCellOpen(row, col)) return false;
+		_territoryLayer?.FlashChunk(ChunkOf(col), ChunkOf(row));
+		return true;
+	}
 	private static readonly Color DeniedPreviewColor = new Color(1f, 0.2f, 0.2f, 0.5f);
 	// Время рецепта для звезды Ж (тиков) и скорость по тиру звезды Ж/К/С.
 	[Export] public int StarRecipeTicks = 256;
@@ -378,6 +407,7 @@ public partial class NucleusLayer : Node2D
 	// Пересечение с другой ЧД проверяет BlackHoleSet.Add.
 	public bool CanPlaceBlackHoleCell(int row, int col)
 	{
+		if (!IsCellOpen(row, col)) return false; // закрытый чанк (T009)
 		if (_entAt.ContainsKey((row, col))) return false;
 		if (Stars.TryGetAt(row, col, out _)) return false; // клетка звезды (T006)
 		if (Ports != null && Ports.IsPortCell(row, col)) return false;
@@ -800,6 +830,11 @@ public partial class NucleusLayer : Node2D
 		BlackHoles = new BlackHoleSet();
 		Stars = new StarSet();
 		Inventory = new Inventory { Sandbox = SandboxMode };
+		Territory = new Territory();
+		// Затемнение закрытых чанков — отдельный узел поверх объектов слоя 1,
+		// создаётся из кода (в сцене его нет).
+		_territoryLayer = new TerritoryLayer { Name = "TerritoryLayer", Layer = this };
+		GetParent().CallDeferred(Node.MethodName.AddChild, _territoryLayer);
 		_starLayer = GetNodeOrNull<StarLayer>("../StarLayer");
 
 		_ready = true;
@@ -830,6 +865,14 @@ public partial class NucleusLayer : Node2D
 			{
 				Inventory.Sandbox = !Inventory.Sandbox;
 				GD.Print($"[NucleusLayer] режим: {(Inventory.Sandbox ? "песочница (установка бесплатна)" : "настоящий (установка тратит атомы из инвентаря)")}.");
+				GetViewport().SetInputAsHandled();
+			}
+			else if (key.Keycode == Key.O && !ViewLayer.IsLayer2)
+			{
+				// Отладка (T009): открыть чанк под курсором.
+				var mouse = GetGlobalMousePosition();
+				int cx = ChunkOf(Mathf.FloorToInt(mouse.X / CellSize)), cy = ChunkOf(Mathf.FloorToInt(mouse.Y / CellSize));
+				if (OpenChunks(new[] { (cx, cy) }) == 0) GD.Print($"[NucleusLayer] чанк ({cx},{cy}) уже открыт.");
 				GetViewport().SetInputAsHandled();
 			}
 			else if (key.Keycode == Key.Space)
@@ -1130,6 +1173,7 @@ public partial class NucleusLayer : Node2D
 	// GridDraw.
 	private void RemoveAllAtMouse(Vector2 worldPos, int row, int col)
 	{
+		if (DenyIfClosed(row, col)) return; // закрытый чанк (T009)
 		RemoveNucleusAt(row, col);
 		_blackHoleLayer?.RemoveAt(row, col);
 		_starLayer?.RemoveAt(row, col);
@@ -2680,7 +2724,8 @@ public partial class NucleusLayer : Node2D
 			// никто другой её не занимал, пока n оттуда числилось выехавшим).
 			// То же — если вращатель довёз атом в клетку звезды, а звезде он не
 			// нужен (T006): внутри звезды атом лежать не может.
-			if (_entAt.ContainsKey((destRow, destCol)) || Stars.TryGetAt(destRow, destCol, out _))
+			// То же — клетка назначения в закрытом чанке (T009).
+			if (_entAt.ContainsKey((destRow, destCol)) || Stars.TryGetAt(destRow, destCol, out _) || !IsCellOpen(destRow, destCol))
 			{
 				if (_entAt.ContainsKey((destRow, destCol)))
 					GD.PrintErr($"[NucleusLayer] переезд в клетку ({destRow},{destCol}) отменён — она уже занята; ядро возвращено в ({n.MoveFromRow},{n.MoveFromCol}).");
@@ -3314,6 +3359,11 @@ public partial class NucleusLayer : Node2D
 		int col = Mathf.FloorToInt(worldPos.X / CellSize);
 		int row = Mathf.FloorToInt(worldPos.Y / CellSize);
 
+		if (DenyIfClosed(row, col))
+		{
+			GD.Print($"[NucleusLayer] клетка ({row},{col}) в закрытом чанке — пропуск.");
+			return;
+		}
 		if (IsCellBlockedForLayer1(row, col))
 		{
 			GD.Print($"[NucleusLayer] клетка ({row},{col}) занята чёрной дырой (или её чанк — молекулой) — пропуск.");
@@ -3495,6 +3545,14 @@ public partial class NucleusLayer : Node2D
 		// режим — настройка SandboxMode.
 		public List<SavedTierCount> Inventory { get; set; } = new();
 		public bool? Sandbox { get; set; }
+		// Открытые чанки (T009). null — вся карта открыта (старые сохранения).
+		public List<SavedChunk> OpenChunks { get; set; }
+	}
+
+	private class SavedChunk
+	{
+		public int Cx { get; set; }
+		public int Cy { get; set; }
 	}
 
 	private class SavedStar
@@ -3585,6 +3643,12 @@ public partial class NucleusLayer : Node2D
 	public string ExportFieldJson()
 	{
 		var data = new FieldSaveData { Sandbox = Inventory.Sandbox };
+		if (!Territory.AllOpen)
+		{
+			data.OpenChunks = new List<SavedChunk>();
+			foreach (var (cx, cy) in Territory.SortedOpenChunks())
+				data.OpenChunks.Add(new SavedChunk { Cx = cx, Cy = cy });
+		}
 		for (int t = 0; t < Inventory.TierCount; t++)
 			if (Inventory.Count(t) != 0)
 				data.Inventory.Add(new SavedTierCount { Tier = t, Count = Inventory.Count(t) });
@@ -3675,6 +3739,14 @@ public partial class NucleusLayer : Node2D
 		foreach (var tc in data.Inventory ?? new List<SavedTierCount>())
 			Inventory.Set(tc.Tier, tc.Count);
 		Inventory.Sandbox = data.Sandbox ?? SandboxMode;
+		// Территория — до объектов: в закрытый чанк ничего не ставится.
+		if (data.OpenChunks == null) Territory.OpenAll();
+		else
+		{
+			var open = new List<(int cx, int cy)>();
+			foreach (var sc in data.OpenChunks) open.Add((sc.Cx, sc.Cy));
+			Territory.Reset(open);
+		}
 
 		int placed = 0;
 		var nucleiList = data.Nuclei ?? new List<SavedNucleus>();

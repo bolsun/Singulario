@@ -284,6 +284,8 @@ public partial class EnergyClusterLayer : TileMapLayer
 		if (_lastPlacedCell.HasValue && _lastPlacedCell.Value == (row, col)) return;
 
 		_lastPlacedCell = (row, col);
+		// Закрытый чанк (T009) — красная вспышка, отказ.
+		if (_nucleusLayer != null && _nucleusLayer.DenyIfClosed(row, col)) return;
 		// Клетка ЧД или чанк с молекулой — сюда нельзя (см. NucleusLayer.IsCellBlockedForLayer1).
 		if (_nucleusLayer != null && _nucleusLayer.IsCellBlockedForLayer1(row, col)) return;
 		// Клетка порта чанка — не для источников (см. PortSet).
