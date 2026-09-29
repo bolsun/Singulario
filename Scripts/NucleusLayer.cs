@@ -357,6 +357,11 @@ public partial class NucleusLayer : Node2D
 	public StarSet Stars { get; private set; }
 	// Инвентарь игрока и режим песочница/настоящий (T008).
 	public Inventory Inventory { get; private set; }
+	// Режим при запуске (и для сохранений без режима); M — переключить.
+	// Песочница — установка бесплатна; настоящий — атом Ж/К/С тратится из
+	// инвентаря, ПКМ возвращает его и атомы-предметы из дырок.
+	[Export] public bool SandboxMode = true;
+	private static readonly Color DeniedPreviewColor = new Color(1f, 0.2f, 0.2f, 0.5f);
 	// Время рецепта для звезды Ж (тиков) и скорость по тиру звезды Ж/К/С.
 	[Export] public int StarRecipeTicks = 256;
 	[Export] public int[] StarSpeedByTier = new int[] { 1, 2, 4 };
@@ -794,7 +799,7 @@ public partial class NucleusLayer : Node2D
 		Ports = ViewLayer.Layer2Enabled ? new PortSet(ChunkSize) : null;
 		BlackHoles = new BlackHoleSet();
 		Stars = new StarSet();
-		Inventory = new Inventory();
+		Inventory = new Inventory { Sandbox = SandboxMode };
 		_starLayer = GetNodeOrNull<StarLayer>("../StarLayer");
 
 		_ready = true;
@@ -819,6 +824,12 @@ public partial class NucleusLayer : Node2D
 			else if (key.Keycode == Key.Q && !ViewLayer.IsLayer2)
 			{
 				PickNucleusUnderMouse();
+				GetViewport().SetInputAsHandled();
+			}
+			else if (key.Keycode == Key.M)
+			{
+				Inventory.Sandbox = !Inventory.Sandbox;
+				GD.Print($"[NucleusLayer] режим: {(Inventory.Sandbox ? "песочница (установка бесплатна)" : "настоящий (установка тратит атомы из инвентаря)")}.");
 				GetViewport().SetInputAsHandled();
 			}
 			else if (key.Keycode == Key.Space)
@@ -1143,8 +1154,27 @@ public partial class NucleusLayer : Node2D
 	private void RemoveNucleusAt(int row, int col)
 	{
 		if (!_entAt.TryGetValue((row, col), out var nucleus)) return;
+		int refunded = RefundToInventory(nucleus);
 		RemoveNucleusEntity(nucleus);
-		GD.Print($"[NucleusLayer] удалено ядро из клетки ({row},{col}).");
+		GD.Print($"[NucleusLayer] удалено ядро из клетки ({row},{col}).{(refunded > 0 ? $" В инвентарь: {refunded}." : "")}");
+	}
+
+	// Настоящий режим (T008): снятый игроком атом Ж/К/С возвращается в
+	// инвентарь, атомы-предметы из его дырок — тоже (у любого атома), частицы
+	// пропадают. В песочнице ничего. Возвращает, сколько атомов ушло в инвентарь.
+	// Только снятие игроком (ПКМ, замена) — захват ЧД и прочее сюда не идут.
+	private int RefundToInventory(NucleusEntity nucleus)
+	{
+		if (Inventory.Sandbox) return 0;
+		int count = 0;
+		if (Inventory.IsAtomTier(nucleus.CoreTier)) { Inventory.Add(nucleus.CoreTier); count++; }
+		foreach (var slot in nucleus.Ring)
+			if (slot.Exists && !slot.IsHole && slot.IsItem && Inventory.IsAtomTier(slot.ColorTier))
+			{
+				Inventory.Add(slot.ColorTier);
+				count++;
+			}
+		return count;
 	}
 
 	// Общая точка удаления живого ядра из ВСЕХ структур — вынесена из
@@ -1363,7 +1393,8 @@ public partial class NucleusLayer : Node2D
 		int tier = _selectedSpawnTier.Value;
 		var baseColor = (tier >= 0 && tier < _tierPreviewColors.Length) ? _tierPreviewColors[tier] : Colors.White;
 		_placementPreview.Position = new Vector2(col * CellSize + CellSize / 2f, row * CellSize + CellSize / 2f);
-		_placementPreview.Modulate = new Color(baseColor.R, baseColor.G, baseColor.B, 0.5f);
+		// Нет атома в инвентаре (настоящий режим, T008) — красный, как запрет.
+		_placementPreview.Modulate = Inventory.CanAfford(tier) ? new Color(baseColor.R, baseColor.G, baseColor.B, 0.5f) : DeniedPreviewColor;
 		_placementPreview.Visible = true;
 	}
 
@@ -3303,10 +3334,23 @@ public partial class NucleusLayer : Node2D
 				GD.Print($"[NucleusLayer] клетка ({row},{col}) уже занята — пропуск.");
 				return;
 			}
+		}
 
+		// Настоящий режим (T008): атом Ж/К/С стоит 1 атом этого тира из инвентаря.
+		// Проверка до замены: без атома старый остаётся на месте.
+		if (!Inventory.CanAfford(tier))
+		{
+			GD.Print($"[NucleusLayer] в инвентаре нет атома тира {tier} — установка в ({row},{col}) не сделана.");
+			return;
+		}
+
+		if (existingNucleus != null)
+		{
 			GD.Print($"[NucleusLayer] клетка ({row},{col}) занята обычным ядром тира {existingNucleus.CoreTier} — заменяю на тир {tier}.");
+			RefundToInventory(existingNucleus); // замена = снять старый + поставить новый
 			RemoveNucleusEntity(existingNucleus);
 		}
+		Inventory.TrySpend(tier);
 
 		int cx = Mathf.FloorToInt((float)col / ChunkSize);
 		int cy = Mathf.FloorToInt((float)row / ChunkSize);

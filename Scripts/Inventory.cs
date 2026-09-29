@@ -48,10 +48,10 @@ public sealed class Inventory
 		if (IsAtomTier(tier)) _atoms[tier] = count < 0 ? 0 : count;
 	}
 
+	// Только счётчики; режим задаёт владелец (настройка или сохранение).
 	public void Clear()
 	{
 		System.Array.Clear(_atoms);
-		Sandbox = true;
 		LastAddedTier = -1;
 	}
 }
