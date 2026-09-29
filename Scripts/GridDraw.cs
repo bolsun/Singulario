@@ -44,8 +44,13 @@ public partial class GridDraw : Node2D
     private float _lineWidth = 1f;
     private bool _haveRange;
 
+    // Включена ли сетка (G) — для других узлов: подробный вид портов (T004,
+    // PortLayer, MoleculeLayer, BlackHoleLayer) показывается только с сеткой.
+    public static bool Shown { get; private set; }
+
     public override void _Ready()
     {
+        Shown = Visible;
         SetProcessInput(true);
 
         var nucleusLayer = GetNodeOrNull<NucleusLayer>("../NucleusLayer");
@@ -57,6 +62,7 @@ public partial class GridDraw : Node2D
         if (@event is InputEventKey key && key.Pressed && !key.Echo && key.Keycode == Key.G)
         {
             Visible = !Visible;
+            Shown = Visible;
             // На случай если пока сетка была скрыта, диапазон не менялся (и
             // поэтому не переcчитывался) — форсируем перерисовку сразу при
             // включении, а не ждём следующего движения камеры.

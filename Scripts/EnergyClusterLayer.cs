@@ -161,6 +161,7 @@ public partial class EnergyClusterLayer : TileMapLayer
 	// выбора на панели спавна и защита клетки от двух тиров одновременно.
 	private List<EnergyClusterLayer> _siblingLayers = new();
 	private MoleculeLayer _moleculeLayer;
+	private PortLayer _portLayer; // подсветка клетки порта при попытке поставить источник (T004)
 
 	private bool _leftMouseHeld;
 	private (int row, int col)? _lastPlacedCell;
@@ -181,6 +182,7 @@ public partial class EnergyClusterLayer : TileMapLayer
 		_nucleusLayer = GetNodeOrNull<NucleusLayer>("../NucleusLayer");
 		_energyLayer = GetNodeOrNull<EnergyLayer>("../TileMapLayer");
 		_moleculeLayer = GetNodeOrNull<MoleculeLayer>("../MoleculeLayer");
+		_portLayer = GetNodeOrNull<PortLayer>("../PortLayer");
 
 		var parent = GetParent();
 		if (parent != null)
@@ -286,7 +288,11 @@ public partial class EnergyClusterLayer : TileMapLayer
 		// Чанк занят объектом слоя 2 (молекула, ЧД) — сюда нельзя (см. MoleculeLayer).
 		if (_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col)) return;
 		// Клетка порта чанка — не для источников (см. PortSet).
-		if (_nucleusLayer?.Ports != null && _nucleusLayer.Ports.IsPortCell(row, col)) return;
+		if (_nucleusLayer?.Ports != null && _nucleusLayer.Ports.TryGetPortAtCell(row, col, out var portKey))
+		{
+			_portLayer?.FlashPort(portKey);
+			return;
+		}
 		PlaceClusterAt(row, col);
 	}
 

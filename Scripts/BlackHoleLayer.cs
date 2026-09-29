@@ -235,6 +235,8 @@ public partial class BlackHoleLayer : Node2D
 			{
 				var key = new PortKey(hole.Cx, hole.Cy, side);
 				PortLayer.DrawPortHalf(this, PortLayer.PortCenter(key, _chunkWorldSize), _cellSize, side, inputPort, colors, 1f, showSlots: false);
+				// Подробный вид порта (T004) — только при сетке: контур клеток порта.
+				if (GridDraw.Shown) PortLayer.DrawPortCells(this, _ports, key, _cellSize, new Color(PortLayer.InputColor, 0.9f), filled: false);
 			}
 			if (ShowHitFlash && _fx.TryGetValue(hole, out var fx) && fx.Flash > 0f) DrawFlash(HoleCenter(hole.Cx, hole.Cy), fx.Flash);
 		}
