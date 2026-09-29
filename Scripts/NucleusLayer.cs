@@ -3050,7 +3050,8 @@ public partial class NucleusLayer : Node2D
 					{
 						particleMM.SetInstanceTransform2D(instanceIdx, new Transform2D(0f, pos));
 						float rowUv = (slot.ColorTier + 0.5f) / _tierCount;
-						particleMM.SetInstanceCustomData(instanceIdx, new Color(rowUv, 0f, 0f, 0f));
+						// .w = 1 — атом-предмет (T007): шейдер рисует полое кольцо.
+						particleMM.SetInstanceCustomData(instanceIdx, new Color(rowUv, 0f, 0f, slot.IsItem ? 1f : 0f));
 					}
 					holeMM?.SetInstanceTransform2D(instanceIdx, HiddenTransform);
 				}
