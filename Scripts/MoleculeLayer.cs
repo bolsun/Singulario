@@ -39,7 +39,6 @@ public partial class MoleculeLayer : Node2D
 	// > 1 гнёзда быстро бледнеют сразу после перехода, затем хвост уходит в 0.
 	[Export] public float HoleFadeExponent = 2f;
 
-	private static readonly Color NucleiFillColor = new Color(0.8f, 0.8f, 0.85f);
 	private static readonly Color BlockFillColor = new Color(0.55f, 0.55f, 0.6f);
 	[Export] public float BlockAlpha = 0.45f;
 	private static readonly Color BlockedColor = new Color(1f, 0.15f, 0.15f);
@@ -902,20 +901,14 @@ public partial class MoleculeLayer : Node2D
 		_blockedMarker.Visible = true;
 	}
 
-	// Упрощённый вид содержимого слоя 1 на слое 2: одна заливка на L2-клетку.
-	// Приоритет тона: источник (цвет его тира) > ядра. Блоки (чанки с
-	// открытым портом) не заливаются — их рисует DrawBlocks, чёрные дыры —
-	// BlackHoleLayer.
+	// Упрощённый вид содержимого слоя 1 на слое 2 (T004): блоки (ядра или
+	// открытый порт, NucleusLayer.IsBlock) рисует DrawBlocks, месторождения
+	// (только источники) — заливка тоном тира, чёрные дыры — BlackHoleLayer.
 	private void RebuildFills()
 	{
 		_fills.Clear();
 		_blocks.Clear();
-		if (_nucleusLayer.Ports != null)
-			foreach (var chunk in _nucleusLayer.Ports.EnumerateOpenPortChunks()) _blocks.Add(chunk);
-
-		var nucleiColor = new Color(NucleiFillColor.R, NucleiFillColor.G, NucleiFillColor.B, FillAlpha);
-		foreach (var chunk in _nucleusLayer.EnumerateOccupiedChunks())
-			_fills[chunk] = nucleiColor;
+		foreach (var chunk in _nucleusLayer.EnumerateBlocks()) _blocks.Add(chunk);
 
 		var colors = _nucleusLayer.TierPreviewColors;
 		foreach (var layer in _clusterLayers)
@@ -930,13 +923,17 @@ public partial class MoleculeLayer : Node2D
 	}
 
 	// Блок слоя 2 — неподвижный серый объект на всю L2-клетку с 4 дырками у
-	// краёв сторон: те же полудырки и в тех же мировых координатах, что порты
-	// слоя 1 (PortLayer.DrawPortHalf), закрытые стороны приглушены, в дырке
-	// открытого порта виден атом (точки по составу).
+	// середин сторон: те же дырки и в тех же мировых координатах, что порты
+	// слоя 1 (PortLayer.DrawPortHole — дырка молекулы, в ней атом), при сетке
+	// поверх — подробный вид (PortLayer.DrawPortDetail).
 	private void DrawBlocks()
 	{
 		var ports = _nucleusLayer.Ports;
 		var colors = _nucleusLayer.TierPreviewColors;
+		var holeTex = _nucleusLayer.HoleTexture;
+		float holeSize = _nucleusLayer.HoleSpriteSize * _scale;
+		float holeAlpha = _nucleusLayer.HoleOpacity;
+		bool detail = GridDraw.Shown;
 		float inset = _cellSize * 0.5f;
 		foreach (var (cx, cy) in _blocks)
 		{
@@ -944,10 +941,17 @@ public partial class MoleculeLayer : Node2D
 				_chunkWorldSize - 2 * inset, _chunkWorldSize - 2 * inset);
 			DrawRect(rect, new Color(BlockFillColor, BlockAlpha));
 			DrawRect(rect, new Color(BlockFillColor, 0.9f), false, _cellSize * 0.25f);
+		}
+		// Дырки — отдельным проходом: дырка заходит на соседнюю клетку, и
+		// прямоугольник соседнего блока не должен её перекрывать.
+		foreach (var (cx, cy) in _blocks)
+		{
 			for (int side = 0; side < PortSet.SideCount; side++)
 			{
 				var key = new PortKey(cx, cy, side);
-				PortLayer.DrawPortHalf(this, PortLayer.PortCenter(key, _chunkWorldSize), _cellSize, side, ports.Get(key), colors, 1f);
+				var state = ports.Get(key);
+				PortLayer.DrawPortHole(this, PortLayer.PortCenter(key, _chunkWorldSize), holeTex, holeSize, holeAlpha, state.Atom, colors);
+				if (detail) PortLayer.DrawPortDetail(this, ports, key, state, _cellSize, _chunkWorldSize, colors);
 			}
 		}
 	}
