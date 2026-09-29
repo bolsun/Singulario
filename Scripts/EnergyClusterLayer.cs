@@ -160,7 +160,6 @@ public partial class EnergyClusterLayer : TileMapLayer
 	// добавлению новых тиров в сцене). Нужны для двух вещей: взаимный сброс
 	// выбора на панели спавна и защита клетки от двух тиров одновременно.
 	private List<EnergyClusterLayer> _siblingLayers = new();
-	private MoleculeLayer _moleculeLayer;
 	private PortLayer _portLayer; // подсветка клетки порта при попытке поставить источник (T004)
 
 	private bool _leftMouseHeld;
@@ -181,11 +180,8 @@ public partial class EnergyClusterLayer : TileMapLayer
 
 		_nucleusLayer = GetNodeOrNull<NucleusLayer>("../NucleusLayer");
 		_energyLayer = GetNodeOrNull<EnergyLayer>("../TileMapLayer");
-		if (ViewLayer.Layer2Enabled) // слой 2 выключен — молекул и портов нет (T005)
-		{
-			_moleculeLayer = GetNodeOrNull<MoleculeLayer>("../MoleculeLayer");
+		if (ViewLayer.Layer2Enabled) // слой 2 выключен — портов нет (T005)
 			_portLayer = GetNodeOrNull<PortLayer>("../PortLayer");
-		}
 
 		var parent = GetParent();
 		if (parent != null)
@@ -288,8 +284,8 @@ public partial class EnergyClusterLayer : TileMapLayer
 		if (_lastPlacedCell.HasValue && _lastPlacedCell.Value == (row, col)) return;
 
 		_lastPlacedCell = (row, col);
-		// Чанк занят объектом слоя 2 (молекула, ЧД) — сюда нельзя (см. MoleculeLayer).
-		if (_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col)) return;
+		// Клетка ЧД или чанк с молекулой — сюда нельзя (см. NucleusLayer.IsCellBlockedForLayer1).
+		if (_nucleusLayer != null && _nucleusLayer.IsCellBlockedForLayer1(row, col)) return;
 		// Клетка порта чанка — не для источников (см. PortSet).
 		if (_nucleusLayer?.Ports != null && _nucleusLayer.Ports.TryGetPortAtCell(row, col, out var portKey))
 		{

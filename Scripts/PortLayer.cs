@@ -82,7 +82,7 @@ public partial class PortLayer : Node2D
 		GetViewport().SetInputAsHandled();
 		if (_moleculeLayer != null && _moleculeLayer.IsChunkTakenByLayer2(key.Cx, key.Cy))
 		{
-			GD.Print($"[PortLayer] чанк ({key.Cx},{key.Cy}) занят объектом слоя 2 (молекула или ЧД) — порт не открыть.");
+			GD.Print($"[PortLayer] чанк ({key.Cx},{key.Cy}) занят молекулой — порт не открыть.");
 			return;
 		}
 		if (!_nucleusLayer.IsBlock(key.Cx, key.Cy))

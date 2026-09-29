@@ -338,10 +338,29 @@ public partial class NucleusLayer : Node2D
 	// Порты чанков (T002) — одно место истины для слоя 1 (обмен частицами в
 	// SimTick, PortLayer) и слоя 2 (блоки и атомы, MoleculeLayer).
 	public PortSet Ports { get; private set; }
-	// Чёрные дыры (T003): клетки слоя 2 и счётчики поглощённого — одно место
-	// истины для MoleculeLayer (приём от молекул) и BlackHoleLayer (приём из
-	// портов, отрисовка).
+	// Чёрные дыры (T005): объекты слоя 1 (Size×Size клеток) и счётчики
+	// поглощённого. Захват атомов и частиц на горизонте — здесь (SimTick,
+	// FinishArrivedMoves), установка и отрисовка — BlackHoleLayer.
 	public BlackHoleSet BlackHoles { get; private set; }
+
+	// Клетка закрыта для объектов слоя 1 (атомов, источников, влёта брошенного
+	// атома): её чанк занят молекулой (только при включённом слое 2) или в ней ЧД.
+	public bool IsCellBlockedForLayer1(int row, int col) =>
+		(_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col))
+		|| BlackHoles.TryGetAt(row, col, out _);
+
+	// Можно ли накрыть клетку чёрной дырой: нет атома, источника, клетки порта
+	// и молекулы в чанке (последние два — только при включённом слое 2).
+	// Пересечение с другой ЧД проверяет BlackHoleSet.Add.
+	public bool CanPlaceBlackHoleCell(int row, int col)
+	{
+		if (_entAt.ContainsKey((row, col))) return false;
+		if (Ports != null && Ports.IsPortCell(row, col)) return false;
+		if (_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col)) return false;
+		foreach (var layer in _energyClusterLayers)
+			if (layer.HasClusterAt(row, col)) return false;
+		return true;
+	}
 	// Выбран ли сейчас пресет ядра для установки — для подсветки запрета на
 	// слое 1 (клетка в чанке с молекулой, см. MoleculeLayer).
 	public bool HasSpawnSelection => _selectedSpawnTier.HasValue;
@@ -665,10 +684,8 @@ public partial class NucleusLayer : Node2D
 	// список, а не одна ссылка; находится автоматически по типу скрипта среди
 	// узлов того же родителя, а не по жёстко зашитым именам.
 	private List<EnergyClusterLayer> _energyClusterLayers = new();
-	// Чёрные дыры (T003) — объекты слоя 2, с ядрами напрямую не
-	// взаимодействуют, только через порты. Узел нужен, чтобы на тех же часах
-	// после слоя 2 забрать готовые атомы из выходных портов, смотрящих на ЧД
-	// (см. BlackHoleLayer.SimTick), данные — BlackHoles.
+	// Чёрные дыры (T005) — объекты слоя 1; узел нужен для эффекта падения
+	// (захват атома/частицы), инструмента установки и удаления ПКМ. Данные — BlackHoles.
 	private BlackHoleLayer _blackHoleLayer;
 	// Слой 2 — только для правила занятости: в чанк с молекулой объекты слоя 1 не ставятся.
 	private MoleculeLayer _moleculeLayer;
@@ -948,14 +965,18 @@ public partial class NucleusLayer : Node2D
 		_lastPlacedCell = null;
 		_energyLayer?.ClearSelection();
 		foreach (var clusterLayer in _energyClusterLayers) clusterLayer.ClearSelection();
+		_blackHoleLayer?.ClearTool();
 		GD.Print($"[NucleusLayer] выбрано для установки: тир {tier}, дырок {holeCount}/8, направление {(_currentSpinDirection > 0 ? "по часовой" : "против часовой")} (R — переключить). Клик (или удержание ЛКМ) по полю — поставить.");
 	}
 
 	// Вызывается EnergyLayer при выборе типа энергии на панели — сбрасывает
 	// выбор ядра (см. комментарий у SelectSpawnPreset).
+	// Инструмент ЧД (BlackHoleLayer) тоже сбрасывается — его вызывают все
+	// остальные инструменты.
 	public void ClearSelection()
 	{
 		_selectedSpawnTier = null;
+		_blackHoleLayer?.ClearTool();
 	}
 
 	// Общая точка входа и для одиночного клика, и для каждого кадра при
@@ -1018,6 +1039,7 @@ public partial class NucleusLayer : Node2D
 	private void RemoveAllAtMouse(Vector2 worldPos, int row, int col)
 	{
 		RemoveNucleusAt(row, col);
+		_blackHoleLayer?.RemoveAt(row, col);
 
 		foreach (var layer in _energyClusterLayers)
 		{
@@ -1057,7 +1079,9 @@ public partial class NucleusLayer : Node2D
 		int cx = Mathf.FloorToInt((float)col / ChunkSize);
 		int cy = Mathf.FloorToInt((float)row / ChunkSize);
 
-		_entAt.Remove((row, col));
+		// Только если клетка числится за этим атомом: у едущего (захват ЧД на
+		// прибытии, TryCaptureArrived) Row/Col — старая клетка, её мог уже занять другой.
+		if (_entAt.TryGetValue((row, col), out var atCell) && atCell == nucleus) _entAt.Remove((row, col));
 		_activeSet.Remove(nucleus);
 		_movingSet.Remove(nucleus); // защитная подстраховка — сюда не должны попадать едущие/летящие, но лишней не будет
 		_sleepingSet.Remove(nucleus); // на случай удаления ещё не проснувшегося ядра (см. AsleepUntilTick)
@@ -1199,8 +1223,6 @@ public partial class NucleusLayer : Node2D
 				// Слой 2 (перенос атомов молекулами) — на тех же часах, после
 				// слоя 1: порты уже обменялись частицами на этом тике.
 				_moleculeLayer?.SimTick(_globalTick);
-				// ЧД забирает готовые атомы из выходных портов, смотрящих на неё.
-				_blackHoleLayer?.SimTick(_globalTick);
 				guard++;
 				_upsWindowTicks++;
 
@@ -1249,9 +1271,9 @@ public partial class NucleusLayer : Node2D
 		int col = Mathf.FloorToInt(worldPos.X / CellSize);
 		int row = Mathf.FloorToInt(worldPos.Y / CellSize);
 
-		if (_entAt.ContainsKey((row, col)) || (_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col)))
+		if (_entAt.ContainsKey((row, col)) || IsCellBlockedForLayer1(row, col))
 		{
-			_placementPreview.Visible = false; // клетка занята (или чанк занят объектом слоя 2 — красную подсветку рисует MoleculeLayer)
+			_placementPreview.Visible = false; // клетка занята (ЧД или чанк с молекулой — красную подсветку молекулы рисует MoleculeLayer)
 			return;
 		}
 
@@ -1524,6 +1546,9 @@ public partial class NucleusLayer : Node2D
 		if (Ports != null && PortTicksPerParticle > 0 && _globalTick % PortTicksPerParticle == 0)
 			ExchangeWithPorts();
 
+		// Шаг 2г: ЧД высасывает частицы из атомов, стоящих на горизонте (T005).
+		if (BlackHoles.Count > 0) AbsorbFromHorizon();
+
 		// Шаг 3: захват энергии из источников частиц (EnergyClusterLayer).
 		// ВАЖНО: раньше здесь была одна общая проверка на ВСЮ симуляцию сразу —
 		// "_globalTick % _energyCaptureTicks == 0" — в надежде, что она будет
@@ -1604,6 +1629,71 @@ public partial class NucleusLayer : Node2D
 				}
 			}
 		}
+	}
+
+	// Горизонт ЧД (T005, GDD «Встроенные объекты»): атом, который стоит на
+	// клетке горизонта (поставлен игроком — доставленные захватываются сразу,
+	// см. FinishArrivedMoves), отдаёт ЧД частицы. ЧД — как серое без спина
+	// (TransferRules.NoSpin: любой тир и спин, любой цвет), дырки у неё всегда
+	// свободны: забирается незаблокированная частица из гнезда, смотрящего на
+	// ЧД, с учётом _claimed — то есть на шаге поворота атома, как при передаче
+	// между атомами. Обход — ЧД по порядку BlackHoleSet, стороны N/E/S/W.
+	private void AbsorbFromHorizon()
+	{
+		foreach (var hole in BlackHoles.Enumerate())
+		{
+			for (int side = 0; side < 4; side++)
+			{
+				for (int i = 0; i < hole.Size; i++)
+				{
+					// Клетка горизонта и сторона света из неё на ЧД (компас Adj8).
+					var (row, col, k) = side switch
+					{
+						0 => (hole.Row - 1, hole.Col + i, 4),         // сверху, смотрит на юг
+						1 => (hole.Row + i, hole.Col + hole.Size, 6), // справа, смотрит на запад
+						2 => (hole.Row + hole.Size, hole.Col + i, 0), // снизу, смотрит на север
+						_ => (hole.Row + i, hole.Col - 1, 2),         // слева, смотрит на восток
+					};
+					if (!_entAt.TryGetValue((row, col), out var n)) continue;
+					if (_globalTick < n.AsleepUntilTick) continue; // ещё не проснулся — не крутится
+					int p = PhysicalSlotForCompass(n, k);
+					var slot = n.Ring[p];
+					if (!slot.Exists || slot.IsHole || slot.Locked || _claimed.Contains((n, p))) continue;
+					if (!TierSpinAllowed(GrayCoreTier, TransferRules.NoSpin, n.CoreTier, n.Dir)) continue;
+
+					n.Ring[p] = new RingSlot { Exists = true, IsHole = true };
+					_claimed.Add((n, p));
+					BlackHoles.AbsorbParticle(slot.ColorTier);
+					var (dr, dc) = Adj8[k];
+					_blackHoleLayer?.OnParticleAbsorbed(hole, n.Center + new Vector2(dc, dr) * _orbitRadius, slot.ColorTier);
+				}
+			}
+		}
+	}
+
+	// Атом доставлен на горизонт ЧД (или внутрь неё) вращателем или
+	// бросателем — захватывается целиком в том же тике: +1 атом его тира,
+	// частицы из его дырок — в счётчик по цветам, эффект падения из клетки
+	// прибытия. Вызывается из FinishArrivedMoves до завершения переезда:
+	// Row/Col у атома ещё старые (клетка, откуда выехал), он в списке старого
+	// чанка и не в _entAt — RemoveNucleusEntity это учитывает.
+	private bool TryCaptureArrived(NucleusEntity n)
+	{
+		int row = n.MoveToRow, col = n.MoveToCol;
+		if (!BlackHoles.TryGetAt(row, col, out var hole) && !BlackHoles.TryGetHorizon(row, col, out hole, out _, out _))
+			return false;
+
+		var particles = new Atom();
+		foreach (var slot in n.Ring)
+		{
+			if (!slot.Exists || slot.IsHole) continue;
+			BlackHoles.AbsorbParticle(slot.ColorTier);
+			particles.Push(slot.ColorTier);
+		}
+		BlackHoles.AbsorbAtom(n.CoreTier);
+		_blackHoleLayer?.OnAtomCaptured(hole, n.MoveToCenter, n.CoreTier, particles);
+		RemoveNucleusEntity(n);
+		return true;
 	}
 
 	private readonly List<PortKey> _portKeys = new();
@@ -2326,6 +2416,10 @@ public partial class NucleusLayer : Node2D
 			_movingSet.Remove(n);
 			n.IsMoving = false;
 
+			// Доставлен на горизонт ЧД (переезд от вращателя, толчок или шаг
+			// полёта бросателя) — захвачен целиком (T005), дальше не едет.
+			if (BlackHoles.Count > 0 && TryCaptureArrived(n)) continue;
+
 			int destRow = n.MoveToRow;
 			int destCol = n.MoveToCol;
 
@@ -2423,15 +2517,15 @@ public partial class NucleusLayer : Node2D
 	// Вызывается сразу по прибытии летящего ядра в новую клетку (как сразу
 	// после толчка бросателем, так и после каждого следующего перелётного
 	// шага) — решает, что дальше, строго в этом порядке (по заданию):
-	// 1) (раньше здесь была чёрная дыра по соседству — с T003 ЧД объект
-	//    слоя 2 и с ядрами напрямую не взаимодействует);
+	// 1) (горизонт ЧД проверяется раньше, в FinishArrivedMoves: атом,
+	//    прилетевший на горизонт, захватывается и сюда не попадает, T005);
 	// 2) любое ОБЫЧНОЕ ядро (Ж/К/С/Сер — явно НЕ вращатель/бросатель) СТРОГО
 	//    ПОД ПРЯМЫМ УГЛОМ (см. OrthogonalSlots — только 4 ортогонали, БЕЗ
 	//    диагоналей, по заданию) — "прилипание": полёт останавливается прямо
 	//    тут, ядро остаётся на месте и продолжает работать как обычное;
 	// 3) дистанция исчерпана (FlightCellsRemaining<=0) — исчезает;
-	// 4) следующая клетка по курсу чем-либо занята (в том числе её чанк —
-	//    объект слоя 2: молекула или ЧД) — не влетаем, тот же исход, что и
+	// 4) следующая клетка по курсу чем-либо занята (атом, ЧД или её чанк —
+	//    молекула, см. IsCellBlockedForLayer1) — не влетаем, тот же исход, что и
 	//    (2) — прилипаем на текущем месте;
 	// 5) иначе — летим ещё на одну клетку в том же направлении.
 	private void EvaluateFlightStep(NucleusEntity n)
@@ -2461,8 +2555,7 @@ public partial class NucleusLayer : Node2D
 		var (fdr, fdc) = Adj8[n.FlightDir];
 		int nextRow = n.Row + fdr;
 		int nextCol = n.Col + fdc;
-		if (_entAt.ContainsKey((nextRow, nextCol))
-			|| (_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(nextRow, nextCol)))
+		if (_entAt.ContainsKey((nextRow, nextCol)) || IsCellBlockedForLayer1(nextRow, nextCol))
 		{
 			AttachFlyingNucleus(n);
 			return;
@@ -2963,9 +3056,9 @@ public partial class NucleusLayer : Node2D
 		int col = Mathf.FloorToInt(worldPos.X / CellSize);
 		int row = Mathf.FloorToInt(worldPos.Y / CellSize);
 
-		if (_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col))
+		if (IsCellBlockedForLayer1(row, col))
 		{
-			GD.Print($"[NucleusLayer] чанк клетки ({row},{col}) занят объектом слоя 2 (молекула или ЧД) — пропуск.");
+			GD.Print($"[NucleusLayer] клетка ({row},{col}) занята чёрной дырой (или её чанк — молекулой) — пропуск.");
 			return;
 		}
 
@@ -3069,23 +3162,41 @@ public partial class NucleusLayer : Node2D
 		public List<MoleculeLayer.SavedMolecule> Molecules { get; set; } = new();
 		// Порты чанков (T002): режим и содержимое. В старых сохранениях поля нет.
 		public List<SavedPort> Ports { get; set; } = new();
-		// Чёрные дыры (T003): клетки слоя 2 и счётчики поглощённого. В старых
-		// сохранениях полей нет; ЧД слоя 1 раньше не сохранялись вовсе.
-		public List<SavedBlackHole> BlackHoles { get; set; } = new();
+		// Чёрные дыры слоя 2 из T003 (L2-клетки) — только для чтения старых
+		// сохранений: с T005 ЧД — объект слоя 1, такие записи пропускаются.
+		public List<SavedLayer2BlackHole> BlackHoles { get; set; } = new();
+		// Чёрные дыры слоя 1 (T005): верхняя левая клетка и размер.
+		public List<SavedBlackHole> BlackHoleCells { get; set; } = new();
 		public SavedAbsorbed Absorbed { get; set; }
 	}
 
-	private class SavedBlackHole
+	private class SavedLayer2BlackHole
 	{
 		public int Cx { get; set; }
 		public int Cy { get; set; }
 	}
 
+	private class SavedBlackHole
+	{
+		public int Row { get; set; }
+		public int Col { get; set; }
+		public int Size { get; set; }
+	}
+
 	private class SavedAbsorbed
 	{
+		// Атомы ЧД слоя 2 (T003), без тира — только чтение старых сохранений.
 		public long Atoms { get; set; }
+		// Атомы по тиру (T005): пары (тир, количество), только ненулевые.
+		public List<SavedTierCount> AtomsByTier { get; set; } = new();
 		// Частицы по цветам: пары (цвет, количество), только ненулевые.
 		public List<SavedColorCount> Particles { get; set; } = new();
+	}
+
+	private class SavedTierCount
+	{
+		public int Tier { get; set; }
+		public long Count { get; set; }
 	}
 
 	private class SavedColorCount
@@ -3144,8 +3255,11 @@ public partial class NucleusLayer : Node2D
 		if (BlackHoles != null)
 		{
 			foreach (var hole in BlackHoles.Enumerate())
-				data.BlackHoles.Add(new SavedBlackHole { Cx = hole.Cx, Cy = hole.Cy });
-			data.Absorbed = new SavedAbsorbed { Atoms = BlackHoles.AtomsAbsorbed };
+				data.BlackHoleCells.Add(new SavedBlackHole { Row = hole.Row, Col = hole.Col, Size = hole.Size });
+			data.Absorbed = new SavedAbsorbed();
+			for (int t = 0; t < BlackHoleSet.TierCount; t++)
+				if (BlackHoles.AtomsAbsorbed[t] != 0)
+					data.Absorbed.AtomsByTier.Add(new SavedTierCount { Tier = t, Count = BlackHoles.AtomsAbsorbed[t] });
 			for (int c = 0; c < BlackHoleSet.ColorCount; c++)
 				if (BlackHoles.ParticlesAbsorbed[c] != 0)
 					data.Absorbed.Particles.Add(new SavedColorCount { Color = c, Count = BlackHoles.ParticlesAbsorbed[c] });
@@ -3249,24 +3363,26 @@ public partial class NucleusLayer : Node2D
 			portsPlaced++;
 		}
 
-		// Чёрные дыры — после слоя 1 и портов, до молекул: правило занятости то
-		// же, что при установке инструментом (MoleculeLayer.TryPlaceBlackHole).
+		// Чёрные дыры слоя 1 (T005) — после атомов, источников и портов: те же
+		// проверки, что при установке инструментом (BlackHoleLayer.TryPlace).
 		int holesPlaced = 0;
-		var holesList = data.BlackHoles ?? new List<SavedBlackHole>();
+		var holesList = data.BlackHoleCells ?? new List<SavedBlackHole>();
 		foreach (var sh in holesList)
 		{
-			if (_moleculeLayer == null)
-			{
-				GD.PushWarning($"[NucleusLayer] импорт: слой 2 выключен — ЧД в L2-клетке ({sh.Cx},{sh.Cy}) пропущена.");
-				continue;
-			}
-			bool ok = _moleculeLayer.TryPlaceBlackHole(sh.Cx, sh.Cy, log: false);
-			if (ok) holesPlaced++;
-			else GD.PushWarning($"[NucleusLayer] импорт: L2-клетка ({sh.Cx},{sh.Cy}) занята — чёрная дыра пропущена.");
+			if (_blackHoleLayer != null && _blackHoleLayer.TryPlace(sh.Row, sh.Col, sh.Size, log: false)) holesPlaced++;
+			else GD.PushWarning($"[NucleusLayer] импорт: ЧД в клетке ({sh.Row},{sh.Col}) размером {sh.Size} не ставится (занято) — пропущена.");
 		}
+		// ЧД слоя 2 (T003) больше нет — старые записи пропускаются.
+		var oldHoles = data.BlackHoles ?? new List<SavedLayer2BlackHole>();
+		if (oldHoles.Count > 0)
+			GD.PushWarning($"[NucleusLayer] импорт: ЧД слоя 2 из старого сохранения ({oldHoles.Count}) пропущены — с T005 ЧД ставится на слое 1.");
+
 		if (data.Absorbed != null)
 		{
-			BlackHoles.AtomsAbsorbed = data.Absorbed.Atoms;
+			foreach (var tc in data.Absorbed.AtomsByTier ?? new List<SavedTierCount>())
+				if (tc.Tier >= 0 && tc.Tier < BlackHoleSet.TierCount) BlackHoles.AtomsAbsorbed[tc.Tier] = tc.Count;
+			if (data.Absorbed.Atoms > 0)
+				GD.PushWarning($"[NucleusLayer] импорт: счётчик атомов ЧД слоя 2 ({data.Absorbed.Atoms}, без тира) пропущен.");
 			foreach (var pc in data.Absorbed.Particles ?? new List<SavedColorCount>())
 				if (pc.Color >= 0 && pc.Color < BlackHoleSet.ColorCount) BlackHoles.ParticlesAbsorbed[pc.Color] = pc.Count;
 		}
