@@ -1455,7 +1455,8 @@ public partial class NucleusLayer : Node2D
 		if (_sleepingSet.Count > 0) WakeSleepingNuclei();
 
 		// Производство звёзд (T006) — до раннего выхода: звезда с набранным
-		// рецептом работает и выкладывает атом, даже если рабочих атомов нет.
+		// рецептом работает, даже если рабочих атомов нет. Готовый атом уходит
+		// в дырку на выходе — шаг 2е (T007).
 		if (Stars.Count > 0) TickStars();
 
 		if (_activeSet.Count == 0) return;
@@ -1636,6 +1637,9 @@ public partial class NucleusLayer : Node2D
 		// Шаг 2д: звёзды берут нужные рецепту частицы у атомов вокруг (T006).
 		if (Stars.Count > 0) FeedStarsFromNeighbors();
 
+		// Шаг 2е: звёзды отдают готовые атомы-предметы в дырки на выходе (T007).
+		if (Stars.Count > 0) OutputStarsToHoles();
+
 		// Шаг 3: захват энергии из источников частиц (EnergyClusterLayer).
 		// ВАЖНО: раньше здесь была одна общая проверка на ВСЮ симуляцию сразу —
 		// "_globalTick % _energyCaptureTicks == 0" — в надежде, что она будет
@@ -1815,17 +1819,35 @@ public partial class NucleusLayer : Node2D
 	}
 
 	// Один тик производства всех звёзд (T006): полный буфер уходит в работу,
-	// работа длится StarDuration тиков, готовый атом кладётся грузом на клетку
-	// выхода. Клетка занята — атом ждёт внутри, звезда стоит (буфер при этом
-	// набирается), попытка — каждый тик.
+	// работа длится StarDuration тиков. Готовый атом отдаёт OutputStarsToHoles
+	// (T007); груз на клетку выхода больше не кладётся (PlaceCargo заморожен).
 	private void TickStars()
+	{
+		foreach (var star in Stars.All) star.Advance(StarDuration(star));
+	}
+
+	// Звезда отдаёт готовый атом-предмет (T007, GDD «Звезда — сборщик») в
+	// пустую дырку атома в клетке выхода, обращённую к звезде, — на шаге
+	// атома-получателя, с учётом _claimed; звезда как серое без спина (любой тир
+	// и спин). Нет такой дырки — атом ждёт внутри, звезда стоит (буфер при этом
+	// набирается), попытка — каждый тик. Предмет блокируется до поворота атома.
+	private void OutputStarsToHoles()
 	{
 		foreach (var star in Stars.All)
 		{
-			if (!star.Advance(StarDuration(star))) continue;
+			if (!star.Producing || star.Elapsed < StarDuration(star)) continue;
 			var (row, col) = star.OutputCell;
-			var recipe = star.RecipeData;
-			if (!PlaceCargo(row, col, recipe.ResultTier, recipe.ResultHoles)) continue;
+			if (!_entAt.TryGetValue((row, col), out var n)) continue;
+			if (n.IsCargo || _globalTick < n.AsleepUntilTick || (n.IsMoving && n.IsFlying)) continue;
+			if (IsSpinnerTier(n.CoreTier)) continue; // вращатели и бросатели ничего не хранят
+			int k = Opposite(star.OutputSide * 2); // из клетки выхода на звезду
+			int p = PhysicalSlotForCompass(n, k);
+			var slot = n.Ring[p];
+			if (!slot.Exists || !slot.IsHole || _claimed.Contains((n, p))) continue;
+			if (!TierSpinAllowed(n.CoreTier, n.Dir, GrayCoreTier, TransferRules.NoSpin)) continue;
+
+			n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = star.RecipeData.ResultTier, Locked = true, IsItem = true };
+			_claimed.Add((n, p));
 			star.FinishOutput();
 		}
 	}
