@@ -355,9 +355,18 @@ public partial class NucleusLayer : Node2D
 	// Звёзды-сборщики (T006): данные — StarSet, приём ингредиентов, производство
 	// и выход — здесь (SimTick, FinishArrivedMoves), установка и отрисовка — StarLayer.
 	public StarSet Stars { get; private set; }
+	// Инвентарь игрока и режим песочница/настоящий (T008).
+	public Inventory Inventory { get; private set; }
+	// Режим при запуске (и для сохранений без режима); M — переключить.
+	// Песочница — установка бесплатна; настоящий — атом Ж/К/С тратится из
+	// инвентаря, ПКМ возвращает его и атомы-предметы из дырок.
+	[Export] public bool SandboxMode = true;
+	private static readonly Color DeniedPreviewColor = new Color(1f, 0.2f, 0.2f, 0.5f);
 	// Время рецепта для звезды Ж (тиков) и скорость по тиру звезды Ж/К/С.
 	[Export] public int StarRecipeTicks = 256;
 	[Export] public int[] StarSpeedByTier = new int[] { 1, 2, 4 };
+	// Выходной буфер звезды (T008): сколько готовых атомов она копит.
+	[Export] public int StarOutputCapacity = 10;
 	public int StarDuration(Star star) => star.Duration(StarRecipeTicks, StarSpeedByTier);
 
 	// Клетка свободна под звезду: как под ЧД, и не в ЧД. Пересечение звёзд — StarSet.
@@ -790,6 +799,7 @@ public partial class NucleusLayer : Node2D
 		Ports = ViewLayer.Layer2Enabled ? new PortSet(ChunkSize) : null;
 		BlackHoles = new BlackHoleSet();
 		Stars = new StarSet();
+		Inventory = new Inventory { Sandbox = SandboxMode };
 		_starLayer = GetNodeOrNull<StarLayer>("../StarLayer");
 
 		_ready = true;
@@ -814,6 +824,12 @@ public partial class NucleusLayer : Node2D
 			else if (key.Keycode == Key.Q && !ViewLayer.IsLayer2)
 			{
 				PickNucleusUnderMouse();
+				GetViewport().SetInputAsHandled();
+			}
+			else if (key.Keycode == Key.M)
+			{
+				Inventory.Sandbox = !Inventory.Sandbox;
+				GD.Print($"[NucleusLayer] режим: {(Inventory.Sandbox ? "песочница (установка бесплатна)" : "настоящий (установка тратит атомы из инвентаря)")}.");
 				GetViewport().SetInputAsHandled();
 			}
 			else if (key.Keycode == Key.Space)
@@ -1138,8 +1154,27 @@ public partial class NucleusLayer : Node2D
 	private void RemoveNucleusAt(int row, int col)
 	{
 		if (!_entAt.TryGetValue((row, col), out var nucleus)) return;
+		int refunded = RefundToInventory(nucleus);
 		RemoveNucleusEntity(nucleus);
-		GD.Print($"[NucleusLayer] удалено ядро из клетки ({row},{col}).");
+		GD.Print($"[NucleusLayer] удалено ядро из клетки ({row},{col}).{(refunded > 0 ? $" В инвентарь: {refunded}." : "")}");
+	}
+
+	// Настоящий режим (T008): снятый игроком атом Ж/К/С возвращается в
+	// инвентарь, атомы-предметы из его дырок — тоже (у любого атома), частицы
+	// пропадают. В песочнице ничего. Возвращает, сколько атомов ушло в инвентарь.
+	// Только снятие игроком (ПКМ, замена) — захват ЧД и прочее сюда не идут.
+	private int RefundToInventory(NucleusEntity nucleus)
+	{
+		if (Inventory.Sandbox) return 0;
+		int count = 0;
+		if (Inventory.IsAtomTier(nucleus.CoreTier)) { Inventory.Add(nucleus.CoreTier); count++; }
+		foreach (var slot in nucleus.Ring)
+			if (slot.Exists && !slot.IsHole && slot.IsItem && Inventory.IsAtomTier(slot.ColorTier))
+			{
+				Inventory.Add(slot.ColorTier);
+				count++;
+			}
+		return count;
 	}
 
 	// Общая точка удаления живого ядра из ВСЕХ структур — вынесена из
@@ -1358,7 +1393,8 @@ public partial class NucleusLayer : Node2D
 		int tier = _selectedSpawnTier.Value;
 		var baseColor = (tier >= 0 && tier < _tierPreviewColors.Length) ? _tierPreviewColors[tier] : Colors.White;
 		_placementPreview.Position = new Vector2(col * CellSize + CellSize / 2f, row * CellSize + CellSize / 2f);
-		_placementPreview.Modulate = new Color(baseColor.R, baseColor.G, baseColor.B, 0.5f);
+		// Нет атома в инвентаре (настоящий режим, T008) — красный, как запрет.
+		_placementPreview.Modulate = Inventory.CanAfford(tier) ? new Color(baseColor.R, baseColor.G, baseColor.B, 0.5f) : DeniedPreviewColor;
 		_placementPreview.Visible = true;
 	}
 
@@ -1831,23 +1867,29 @@ public partial class NucleusLayer : Node2D
 	}
 
 	// Один тик производства всех звёзд (T006): полный буфер уходит в работу,
-	// работа длится StarDuration тиков. Готовый атом отдаёт OutputStarsToHoles
+	// работа длится StarDuration тиков. Готовый атом — в выходной буфер (T008);
+	// буфер полон — звезда стоит. Из буфера атомы отдаёт OutputStarsToHoles
 	// (T007); груз на клетку выхода больше не кладётся (PlaceCargo заморожен).
 	private void TickStars()
 	{
-		foreach (var star in Stars.All) star.Advance(StarDuration(star));
+		foreach (var star in Stars.All)
+		{
+			int duration = StarDuration(star);
+			star.Advance(duration);
+			star.TryFinishToOutput(duration, StarOutputCapacity);
+		}
 	}
 
-	// Звезда отдаёт готовый атом-предмет (T007, GDD «Звезда — сборщик») в
-	// пустую дырку атома в клетке выхода, обращённую к звезде, — на шаге
-	// атома-получателя, с учётом _claimed; звезда как серое без спина (любой тир
-	// и спин). Нет такой дырки — атом ждёт внутри, звезда стоит (буфер при этом
-	// набирается), попытка — каждый тик. Предмет блокируется до поворота атома.
+	// Звезда отдаёт готовый атом-предмет (T007, GDD «Звезда — сборщик») из
+	// головы выходного буфера (T008) в пустую дырку атома в клетке выхода,
+	// обращённую к звезде, — на шаге атома-получателя, с учётом _claimed; звезда
+	// как серое без спина (любой тир и спин). Нет такой дырки — атомы копятся в
+	// буфере, попытка — каждый тик. Предмет блокируется до поворота атома.
 	private void OutputStarsToHoles()
 	{
 		foreach (var star in Stars.All)
 		{
-			if (!star.Producing || star.Elapsed < StarDuration(star)) continue;
+			if (star.Output.Count == 0) continue;
 			var (row, col) = star.OutputCell;
 			if (!_entAt.TryGetValue((row, col), out var n)) continue;
 			if (n.IsCargo || _globalTick < n.AsleepUntilTick || (n.IsMoving && n.IsFlying)) continue;
@@ -1858,9 +1900,10 @@ public partial class NucleusLayer : Node2D
 			if (!slot.Exists || !slot.IsHole || _claimed.Contains((n, p))) continue;
 			if (!TierSpinAllowed(n.CoreTier, n.Dir, GrayCoreTier, TransferRules.NoSpin)) continue;
 
-			n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = star.RecipeData.ResultTier, Locked = true, IsItem = true };
+			n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = star.Output.Dequeue(), Locked = true, IsItem = true };
 			_claimed.Add((n, p));
-			star.FinishOutput();
+			// Место в буфере освободилось — ждущая готовая работа уходит туда же.
+			star.TryFinishToOutput(StarDuration(star), StarOutputCapacity);
 		}
 	}
 
@@ -3291,10 +3334,23 @@ public partial class NucleusLayer : Node2D
 				GD.Print($"[NucleusLayer] клетка ({row},{col}) уже занята — пропуск.");
 				return;
 			}
+		}
 
+		// Настоящий режим (T008): атом Ж/К/С стоит 1 атом этого тира из инвентаря.
+		// Проверка до замены: без атома старый остаётся на месте.
+		if (!Inventory.CanAfford(tier))
+		{
+			GD.Print($"[NucleusLayer] в инвентаре нет атома тира {tier} — установка в ({row},{col}) не сделана.");
+			return;
+		}
+
+		if (existingNucleus != null)
+		{
 			GD.Print($"[NucleusLayer] клетка ({row},{col}) занята обычным ядром тира {existingNucleus.CoreTier} — заменяю на тир {tier}.");
+			RefundToInventory(existingNucleus); // замена = снять старый + поставить новый
 			RemoveNucleusEntity(existingNucleus);
 		}
+		Inventory.TrySpend(tier);
 
 		int cx = Mathf.FloorToInt((float)col / ChunkSize);
 		int cy = Mathf.FloorToInt((float)row / ChunkSize);
@@ -3435,6 +3491,10 @@ public partial class NucleusLayer : Node2D
 		public SavedAbsorbed Absorbed { get; set; }
 		// Звёзды-сборщики (T006). В старых сохранениях поля нет.
 		public List<SavedStar> Stars { get; set; } = new();
+		// Инвентарь и режим (T008). В старых сохранениях нет: пустой инвентарь,
+		// режим — настройка SandboxMode.
+		public List<SavedTierCount> Inventory { get; set; } = new();
+		public bool? Sandbox { get; set; }
 	}
 
 	private class SavedStar
@@ -3447,6 +3507,8 @@ public partial class NucleusLayer : Node2D
 		public List<int> Buffer { get; set; } = new(); // набрано по ингредиентам рецепта
 		public bool Producing { get; set; }
 		public int Elapsed { get; set; }
+		// Выходной буфер (T008): тиры готовых атомов, первый — самый старый. В старых сохранениях нет.
+		public List<int> Output { get; set; } = new();
 	}
 
 	private class SavedLayer2BlackHole
@@ -3522,7 +3584,10 @@ public partial class NucleusLayer : Node2D
 	// в начале раздела о том, что НЕ сохраняется.
 	public string ExportFieldJson()
 	{
-		var data = new FieldSaveData();
+		var data = new FieldSaveData { Sandbox = Inventory.Sandbox };
+		for (int t = 0; t < Inventory.TierCount; t++)
+			if (Inventory.Count(t) != 0)
+				data.Inventory.Add(new SavedTierCount { Tier = t, Count = Inventory.Count(t) });
 
 		foreach (var n in _activeSet) data.Nuclei.Add(ToSavedNucleus(n));
 		foreach (var n in _sleepingSet) data.Nuclei.Add(ToSavedNucleus(n));
@@ -3553,6 +3618,7 @@ public partial class NucleusLayer : Node2D
 				Row = star.Row, Col = star.Col, Tier = star.Tier, Recipe = star.Recipe,
 				OutputSide = star.OutputSide, Buffer = new List<int>(star.Buffer),
 				Producing = star.Producing, Elapsed = star.Elapsed,
+				Output = new List<int>(star.Output),
 			});
 
 		if (Ports != null)
@@ -3605,6 +3671,10 @@ public partial class NucleusLayer : Node2D
 		}
 
 		ClearFieldForImport();
+
+		foreach (var tc in data.Inventory ?? new List<SavedTierCount>())
+			Inventory.Set(tc.Tier, tc.Count);
+		Inventory.Sandbox = data.Sandbox ?? SandboxMode;
 
 		int placed = 0;
 		var nucleiList = data.Nuclei ?? new List<SavedNucleus>();
@@ -3682,6 +3752,11 @@ public partial class NucleusLayer : Node2D
 			star.RestoreBuffer(ss.Buffer);
 			star.Producing = ss.Producing;
 			star.Elapsed = ss.Producing ? System.Math.Clamp(ss.Elapsed, 0, StarDuration(star)) : 0;
+			foreach (int tier in ss.Output ?? new List<int>())
+			{
+				if (star.Output.Count >= StarOutputCapacity) break;
+				if (Inventory.IsAtomTier(tier)) star.Output.Enqueue(tier);
+			}
 			starsPlaced++;
 		}
 
@@ -3737,6 +3812,7 @@ public partial class NucleusLayer : Node2D
 		Ports?.Clear();
 		BlackHoles?.Clear();
 		Stars?.Clear();
+		Inventory?.Clear();
 
 		// По заданию — при загрузке тик должен быть 0, а вместе с ним и все
 		// производные величины часов симуляции, чтобы не осталось дробного
