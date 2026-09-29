@@ -417,8 +417,12 @@ public partial class NucleusLayer : Node2D
 		                      // спавн-панели с числом гнёзд меньше 8 (см. BuildFixedRing) — у
 		                      // обычных (случайно сгенерированных) ядер всегда true на все 8.
 		public bool IsHole;   // значим, только если Exists
-		public int ColorTier; // значим, только если Exists и !IsHole
+		public int ColorTier; // значим, только если Exists и !IsHole; у предмета — тир атома (0 Ж, 1 К, 2 С)
 		public bool Locked;   // только что принятая частица — нельзя отдать дальше до следующего поворота этого ядра
+		// Атом-предмет (T007, GDD «Атом-предмет»): вместо частицы в дырке лежит
+		// атом-переносчик тира ColorTier. Едет по линии по тем же правилам, что
+		// частица (материал на перенос не влияет). Значим, только если !IsHole.
+		public bool IsItem;
 	}
 
 	private class NucleusEntity
@@ -1575,9 +1579,9 @@ public partial class NucleusLayer : Node2D
 				ref var giverSlot = ref neighbor.Ring[p2];
 				if (!giverSlot.Exists || giverSlot.IsHole || giverSlot.Locked) continue;
 				if (_claimed.Contains((neighbor, p2))) continue;
-				if (!TransferAllowed(receiver: n, giver: neighbor, giverColor: giverSlot.ColorTier)) continue;
+				if (!TransferAllowed(receiver: n, giver: neighbor, giverSlot)) continue;
 
-				n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = giverSlot.ColorTier, Locked = true };
+				n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = giverSlot.ColorTier, Locked = true, IsItem = giverSlot.IsItem };
 				neighbor.Ring[p2] = new RingSlot { Exists = true, IsHole = true };
 				_claimed.Add((n, p));
 				_claimed.Add((neighbor, p2));
@@ -1609,9 +1613,9 @@ public partial class NucleusLayer : Node2D
 				int p2 = PhysicalSlotForCompass(neighbor, k2);
 				if (!neighbor.Ring[p2].Exists || !neighbor.Ring[p2].IsHole) continue;
 				if (_claimed.Contains((neighbor, p2))) continue;
-				if (!TransferAllowed(receiver: neighbor, giver: n, giverColor: giverSlot.ColorTier)) continue;
+				if (!TransferAllowed(receiver: neighbor, giver: n, giverSlot)) continue;
 
-				neighbor.Ring[p2] = new RingSlot { Exists = true, IsHole = false, ColorTier = giverSlot.ColorTier, Locked = true };
+				neighbor.Ring[p2] = new RingSlot { Exists = true, IsHole = false, ColorTier = giverSlot.ColorTier, Locked = true, IsItem = giverSlot.IsItem };
 				n.Ring[p] = new RingSlot { Exists = true, IsHole = true };
 				_claimed.Add((n, p));
 				_claimed.Add((neighbor, p2));
@@ -1896,7 +1900,7 @@ public partial class NucleusLayer : Node2D
 
 					if (mode == PortMode.Output)
 					{
-						if (slot.IsHole || slot.Locked) continue;
+						if (slot.IsHole || slot.Locked || slot.IsItem) continue; // предметы порт не берёт (слой 2 заморожен)
 						if (!TransferRules.TierSpinAllowed(GrayCoreTier, TransferRules.NoSpin, n.CoreTier, n.Dir,
 								GrayCoreTier, GrayAcceptsAnySpin, RequireSameCoreTier)) continue;
 						Ports.AcceptParticle(key, slot.ColorTier);
@@ -2823,7 +2827,7 @@ public partial class NucleusLayer : Node2D
 	// ToggleSpinDirectionUnderMouse) — так что два соседних ядра с РАЗНЫМ
 	// направлением вращения не будут передавать друг другу частицы, как и
 	// задумано этим правилом изначально.
-	private bool TransferAllowed(NucleusEntity receiver, NucleusEntity giver, int giverColor)
+	private bool TransferAllowed(NucleusEntity receiver, NucleusEntity giver, RingSlot giverSlot)
 	{
 		// Тир и спин — общие законы слоёв 1 и 2 (см. TransferRules): серый
 		// получатель при GrayAcceptsAnySpin не проверяет спин; при
@@ -2834,7 +2838,11 @@ public partial class NucleusLayer : Node2D
 				GrayCoreTier, GrayAcceptsAnySpin, RequireSameCoreTier))
 			return false;
 
-		return ColorAccepted(receiver, giverColor);
+		// Атом-предмет (T007): материал на перенос не влияет — флаги цвета
+		// не применяются; вращатели и бросатели не хранят ничего, как и частицы.
+		if (giverSlot.IsItem) return !IsSpinnerTier(receiver.CoreTier);
+
+		return ColorAccepted(receiver, giverSlot.ColorTier);
 	}
 
 	// Для MoleculeLayer: те же флаги законов тира/спина, что у ядер слоя 1.
@@ -2898,7 +2906,7 @@ public partial class NucleusLayer : Node2D
 	private static int? NucleusColorOrNull(NucleusEntity n)
 	{
 		foreach (var slot in n.Ring)
-			if (slot.Exists && !slot.IsHole) return slot.ColorTier;
+			if (slot.Exists && !slot.IsHole && !slot.IsItem) return slot.ColorTier;
 		return null;
 	}
 
