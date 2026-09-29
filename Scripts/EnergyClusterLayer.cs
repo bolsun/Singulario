@@ -181,8 +181,11 @@ public partial class EnergyClusterLayer : TileMapLayer
 
 		_nucleusLayer = GetNodeOrNull<NucleusLayer>("../NucleusLayer");
 		_energyLayer = GetNodeOrNull<EnergyLayer>("../TileMapLayer");
-		_moleculeLayer = GetNodeOrNull<MoleculeLayer>("../MoleculeLayer");
-		_portLayer = GetNodeOrNull<PortLayer>("../PortLayer");
+		if (ViewLayer.Layer2Enabled) // слой 2 выключен — молекул и портов нет (T005)
+		{
+			_moleculeLayer = GetNodeOrNull<MoleculeLayer>("../MoleculeLayer");
+			_portLayer = GetNodeOrNull<PortLayer>("../PortLayer");
+		}
 
 		var parent = GetParent();
 		if (parent != null)

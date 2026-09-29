@@ -727,14 +727,19 @@ public partial class NucleusLayer : Node2D
 
 		_energyLayer = GetNodeOrNull<EnergyLayer>("../TileMapLayer");
 		_blackHoleLayer = GetNodeOrNull<BlackHoleLayer>("../BlackHoleLayer");
-		_moleculeLayer = GetNodeOrNull<MoleculeLayer>("../MoleculeLayer");
-		_portLayer = GetNodeOrNull<PortLayer>("../PortLayer");
+		// Слой 2 выключен (ViewLayer.Layer2Enabled, T005) — молекул и портов нет:
+		// ссылки и PortSet не заводятся, клетки 7–8 свободны, обмена с портами нет.
+		if (ViewLayer.Layer2Enabled)
+		{
+			_moleculeLayer = GetNodeOrNull<MoleculeLayer>("../MoleculeLayer");
+			_portLayer = GetNodeOrNull<PortLayer>("../PortLayer");
+		}
 		foreach (var child in GetParent().GetChildren())
 			if (child is EnergyClusterLayer clusterLayer)
 				_energyClusterLayers.Add(clusterLayer);
 
 		_currentSpinDirection = SpinDirection;
-		Ports = new PortSet(ChunkSize);
+		Ports = ViewLayer.Layer2Enabled ? new PortSet(ChunkSize) : null;
 		BlackHoles = new BlackHoleSet();
 
 		_ready = true;
@@ -3229,8 +3234,11 @@ public partial class NucleusLayer : Node2D
 		// Порты — до молекул: чанк с открытым портом — блок, молекула туда не ставится.
 		int portsPlaced = 0;
 		var portsList = data.Ports ?? new List<SavedPort>();
+		if (Ports == null && portsList.Count > 0)
+			GD.PushWarning($"[NucleusLayer] импорт: слой 2 выключен — порты ({portsList.Count}) пропущены.");
 		foreach (var sp in portsList)
 		{
+			if (Ports == null) break;
 			if (sp.Side < 0 || sp.Side >= PortSet.SideCount || sp.Mode < 0 || sp.Mode > (int)PortMode.Input)
 			{
 				GD.PrintErr($"[NucleusLayer] импорт: порт чанка ({sp.Cx},{sp.Cy}) с неверной стороной/режимом ({sp.Side}/{sp.Mode}) — пропущен.");
@@ -3247,7 +3255,12 @@ public partial class NucleusLayer : Node2D
 		var holesList = data.BlackHoles ?? new List<SavedBlackHole>();
 		foreach (var sh in holesList)
 		{
-			bool ok = _moleculeLayer != null ? _moleculeLayer.TryPlaceBlackHole(sh.Cx, sh.Cy, log: false) : BlackHoles.Add(sh.Cx, sh.Cy);
+			if (_moleculeLayer == null)
+			{
+				GD.PushWarning($"[NucleusLayer] импорт: слой 2 выключен — ЧД в L2-клетке ({sh.Cx},{sh.Cy}) пропущена.");
+				continue;
+			}
+			bool ok = _moleculeLayer.TryPlaceBlackHole(sh.Cx, sh.Cy, log: false);
 			if (ok) holesPlaced++;
 			else GD.PushWarning($"[NucleusLayer] импорт: L2-клетка ({sh.Cx},{sh.Cy}) занята — чёрная дыра пропущена.");
 		}
@@ -3260,6 +3273,8 @@ public partial class NucleusLayer : Node2D
 
 		// Молекулы — после слоя 1: в чанк с содержимым слоя 1 они не ставятся.
 		var moleculesList = data.Molecules ?? new List<MoleculeLayer.SavedMolecule>();
+		if (_moleculeLayer == null && moleculesList.Count > 0)
+			GD.PushWarning($"[NucleusLayer] импорт: слой 2 выключен — молекулы ({moleculesList.Count}) пропущены.");
 		int moleculesPlaced = _moleculeLayer?.ImportMolecules(moleculesList) ?? 0;
 
 		GD.Print($"[NucleusLayer] поле загружено из JSON: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, портов {portsPlaced}/{portsList.Count}, ЧД {holesPlaced}/{holesList.Count}, молекул {moleculesPlaced}/{moleculesList.Count}, тик сброшен в 0.");

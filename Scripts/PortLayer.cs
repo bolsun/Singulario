@@ -45,6 +45,15 @@ public partial class PortLayer : Node2D
 
 	public override void _Ready()
 	{
+		// Слой 2 выключен (ViewLayer.Layer2Enabled, T005) — портов нет.
+		if (!ViewLayer.Layer2Enabled)
+		{
+			Visible = false;
+			SetProcess(false);
+			SetProcessUnhandledInput(false);
+			return;
+		}
+
 		_nucleusLayer = GetNodeOrNull<NucleusLayer>("../NucleusLayer");
 		_moleculeLayer = GetNodeOrNull<MoleculeLayer>("../MoleculeLayer");
 		if (_nucleusLayer == null || !_nucleusLayer.IsReady || _nucleusLayer.Ports == null)

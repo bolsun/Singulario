@@ -299,7 +299,8 @@ public partial class NucleusSpawnPanel : Control
 			grid.AddChild(button);
 		}
 
-		BuildLayer2Grid();
+		// Кнопки молекул — только при включённом слое 2 (T005).
+		if (ViewLayer.Layer2Enabled) BuildLayer2Grid();
 		ViewLayer.Changed += OnViewLayerChanged;
 		ApplyViewLayer();
 	}

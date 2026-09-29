@@ -30,8 +30,10 @@ public partial class FpsLabel : Label
 			+ PortCounters(_nucleusLayer.Ports)
 			+ BlackHoleCounters(_nucleusLayer.BlackHoles)
 			: "";
-		string ratio = _moleculeLayer != null ? $"  k = {_moleculeLayer.L2TickRatio}" : "";
-		Text = $"FPS: {Engine.GetFramesPerSecond()}  Слой {ViewLayer.Current}{ratio}{extraInfo}";
+		// Слой и k — только при включённом слое 2 (ViewLayer.Layer2Enabled, T005).
+		string layer = ViewLayer.Layer2Enabled ? $"  Слой {ViewLayer.Current}" : "";
+		string ratio = ViewLayer.Layer2Enabled && _moleculeLayer != null ? $"  k = {_moleculeLayer.L2TickRatio}" : "";
+		Text = $"FPS: {Engine.GetFramesPerSecond()}{layer}{ratio}{extraInfo}";
 	}
 
 	// Отладка портов (T002): упаковано частиц / атомов создано / атомов

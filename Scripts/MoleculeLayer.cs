@@ -124,6 +124,17 @@ public partial class MoleculeLayer : Node2D
 
 	public override void _Ready()
 	{
+		// Слой 2 выключен (ViewLayer.Layer2Enabled, T005): узел остаётся в сцене,
+		// но не тикает, не рисуется и не принимает ввод (_ready = false).
+		if (!ViewLayer.Layer2Enabled)
+		{
+			Visible = false;
+			SetProcess(false);
+			SetProcessInput(false);
+			SetProcessUnhandledInput(false);
+			return;
+		}
+
 		_nucleusLayer = GetNodeOrNull<NucleusLayer>("../NucleusLayer");
 		_blackHoleLayer = GetNodeOrNull<BlackHoleLayer>("../BlackHoleLayer");
 		foreach (var child in GetParent().GetChildren())
