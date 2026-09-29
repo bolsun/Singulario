@@ -349,7 +349,20 @@ public partial class NucleusLayer : Node2D
 	// атома): её чанк занят молекулой (только при включённом слое 2) или в ней ЧД.
 	public bool IsCellBlockedForLayer1(int row, int col) =>
 		(_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col))
-		|| BlackHoles.TryGetAt(row, col, out _);
+		|| BlackHoles.TryGetAt(row, col, out _)
+		|| Stars.TryGetAt(row, col, out _);
+
+	// Звёзды-сборщики (T006): данные — StarSet, приём ингредиентов, производство
+	// и выход — здесь (SimTick, FinishArrivedMoves), установка и отрисовка — StarLayer.
+	public StarSet Stars { get; private set; }
+	// Время рецепта для звезды Ж (тиков) и скорость по тиру звезды Ж/К/С.
+	[Export] public int StarRecipeTicks = 256;
+	[Export] public int[] StarSpeedByTier = new int[] { 1, 2, 4 };
+	public int StarDuration(Star star) => star.Duration(StarRecipeTicks, StarSpeedByTier);
+
+	// Клетка свободна под звезду: как под ЧД, и не в ЧД. Пересечение звёзд — StarSet.
+	public bool CanPlaceStarCell(int row, int col) =>
+		CanPlaceBlackHoleCell(row, col) && !BlackHoles.TryGetAt(row, col, out _);
 
 	// Можно ли накрыть клетку чёрной дырой: нет атома, источника, клетки порта
 	// и молекулы в чанке (последние два — только при включённом слое 2).
@@ -357,6 +370,7 @@ public partial class NucleusLayer : Node2D
 	public bool CanPlaceBlackHoleCell(int row, int col)
 	{
 		if (_entAt.ContainsKey((row, col))) return false;
+		if (Stars.TryGetAt(row, col, out _)) return false; // клетка звезды (T006)
 		if (Ports != null && Ports.IsPortCell(row, col)) return false;
 		if (_moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col)) return false;
 		foreach (var layer in _energyClusterLayers)
@@ -699,6 +713,7 @@ public partial class NucleusLayer : Node2D
 	// Чёрные дыры (T005) — объекты слоя 1; узел нужен для эффекта падения
 	// (захват атома/частицы), инструмента установки и удаления ПКМ. Данные — BlackHoles.
 	private BlackHoleLayer _blackHoleLayer;
+	private StarLayer _starLayer; // звёзды (T006): инструмент, отрисовка, удаление ПКМ
 	// Слой 2 — только для правила занятости: в чанк с молекулой объекты слоя 1 не ставятся.
 	private MoleculeLayer _moleculeLayer;
 	private PortLayer _portLayer; // подсветка клетки порта при попытке поставить ядро (T004)
@@ -770,6 +785,8 @@ public partial class NucleusLayer : Node2D
 		_currentSpinDirection = SpinDirection;
 		Ports = ViewLayer.Layer2Enabled ? new PortSet(ChunkSize) : null;
 		BlackHoles = new BlackHoleSet();
+		Stars = new StarSet();
+		_starLayer = GetNodeOrNull<StarLayer>("../StarLayer");
 
 		_ready = true;
 		GD.Print($"[NucleusLayer] инициализирован. FillDensity={FillDensity}, ParticleFillChance={ParticleFillChance}.");
@@ -990,6 +1007,7 @@ public partial class NucleusLayer : Node2D
 		_energyLayer?.ClearSelection();
 		foreach (var clusterLayer in _energyClusterLayers) clusterLayer.ClearSelection();
 		_blackHoleLayer?.ClearTool();
+		_starLayer?.ClearTool();
 		GD.Print($"[NucleusLayer] выбрано для установки: тир {tier}, дырок {holeCount}/8, направление {(_currentSpinDirection > 0 ? "по часовой" : "против часовой")} (R — переключить). Клик (или удержание ЛКМ) по полю — поставить.");
 	}
 
@@ -1001,6 +1019,7 @@ public partial class NucleusLayer : Node2D
 	{
 		_selectedSpawnTier = null;
 		_blackHoleLayer?.ClearTool();
+		_starLayer?.ClearTool();
 	}
 
 	// Общая точка входа и для одиночного клика, и для каждого кадра при
@@ -1064,6 +1083,7 @@ public partial class NucleusLayer : Node2D
 	{
 		RemoveNucleusAt(row, col);
 		_blackHoleLayer?.RemoveAt(row, col);
+		_starLayer?.RemoveAt(row, col);
 
 		foreach (var layer in _energyClusterLayers)
 		{
