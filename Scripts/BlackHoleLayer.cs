@@ -136,8 +136,9 @@ public partial class BlackHoleLayer : Node2D
 		_ready = true;
 	}
 
-	// Белый круг с мягким краем — общая текстура всех кружков эффекта.
-	private static Texture2D BuildDiscTexture(int size)
+	// Белый круг с мягким краем — общая текстура всех кружков эффекта
+	// (и эффекта поглощения звездой, StarLayer).
+	internal static Texture2D BuildDiscTexture(int size)
 	{
 		var img = Image.CreateEmpty(size, size, false, Image.Format.Rgba8);
 		float c = size / 2f;

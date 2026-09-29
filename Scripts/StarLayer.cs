@@ -9,20 +9,77 @@ using Godot;
 //     (RemoveAllAtMouse → RemoveAt);
 //   - отрисовка: спрайт star_gray на 3×3 клетки, цвет тира — шейдер палитр
 //     атомов (общий материал NucleusLayer, строка палитры в INSTANCE_CUSTOM.x);
-//     во время производства звезда пульсирует ярче (INSTANCE_CUSTOM.y), в
-//     простое — тусклее (INSTANCE_CUSTOM.z). Все звёзды — один MultiMesh.
+//     во время производства звезда пульсирует ярче (INSTANCE_CUSTOM.y, яркость
+//     с сохранением оттенка), в простое — ровно цвета палитры (приглушение
+//     INSTANCE_CUSTOM.z = IdleDim, по умолчанию 0). Все звёзды — один MultiMesh;
+//   - эффект поглощения (T006c).
+//
+// Эффект поглощения — только визуал: частица или атом, которых забрала звезда
+// (в симуляции — мгновенно), летит по прямой к центру с ускорением и на
+// IntakeEndFraction радиуса диска исчезает (уменьшается и растворяется на
+// последней IntakeFadeFraction пути). Цвет свой, без спирали и красного
+// смещения. Идёт по времени кадра, в сохранение не попадает. Устройство как у
+// падения в ЧД (BlackHoleLayer): узлов на объект нет, у звезды заранее
+// выделенный массив из MaxIntakePerStar структур, всё летящее всех звёзд — один
+// MultiMesh, буфер пишется одним вызовом за кадр. Сверх лимита — без анимации.
+// Звезда вне экрана анимаций не заводит и не обновляет (текущие сбрасываются).
 public partial class StarLayer : Node2D
 {
 	public const string TexturePath = "res://Resources/Textures/star_gray_96px.png";
 
-	// Свечение во время производства: база и размах пульсации (0..1), частота (Гц).
+	// Свечение во время производства — прибавка яркости (0.5 — в 1.5 раза ярче):
+	// база и размах пульсации, частота (Гц).
 	[Export] public float ProducingGlow = 0.3f;
 	[Export] public float ProducingPulse = 0.2f;
 	[Export] public float PulseHz = 1.2f;
-	// Приглушение в простое (0..1).
-	[Export] public float IdleDim = 0.45f;
+	// Приглушение в простое (0..1); 0 — ровно цвета палитры.
+	[Export] public float IdleDim = 0f;
+
+	// Эффект поглощения.
+	[Export] public int MaxIntakePerStar = 16;
+	[Export] public float IntakeSeconds = 0.4f;
+	// Радиус видимого диска спрайта в клетках (33.5 из 96 px на 3 клетки).
+	[Export] public float DiskRadiusCells = 1.05f;
+	// Где объект исчезает — доля радиуса диска от центра.
+	[Export] public float IntakeEndFraction = 2f / 3f;
+	// Доля пути в конце, на которой объект уменьшается и растворяется.
+	[Export] public float IntakeFadeFraction = 0.35f;
+	// Радиус атома на экране (px), ниже которого атом рисуется одним кружком.
+	[Export] public float IntakeLodPixels = 5f;
 
 	private static readonly Color BlockedColor = new Color(1f, 0.2f, 0.2f, 0.35f);
+	private static readonly Color AtomBodyColor = new Color(0.08f, 0.08f, 0.1f, 0.9f);
+
+	// MultiMesh 2D с цветом: 8 float трансформа (2 строки по 4) + 4 float цвета.
+	private const int Stride = 12;
+
+	private struct IntakeFx
+	{
+		public Vector2 Start;  // откуда пришёл, относительно центра звезды
+		public float Age;      // секунд с начала
+		public int Tier;       // тир атома; -1 — одиночная частица
+		public int Color;      // цвет частицы (только для Tier == -1)
+		public Atom Particles; // частицы в гнёздах атома (цвета)
+
+		public readonly int Instances => Tier < 0 ? 1 : 2 + Particles.Count;
+	}
+
+	private sealed class StarFx
+	{
+		public IntakeFx[] Items;
+		public int Count;
+	}
+
+	// Только для звёзд, которые принимали на экране; чистится при удалении звезды.
+	private readonly System.Collections.Generic.Dictionary<Star, StarFx> _fx = new();
+	private readonly System.Collections.Generic.List<Star> _fxToRemove = new();
+	private int _fxStarsVersion = -1;
+	private float _atomRadius;
+	private float _particleRadius;
+	private MultiMesh _fxMesh;
+	private float[] _fxBuffer = System.Array.Empty<float>();
+	private int _fxCapacity;
+	private Rect2 _viewRect;
 
 	private NucleusLayer _nucleusLayer;
 	private EnergyLayer _energyLayer;
@@ -78,6 +135,25 @@ public partial class StarLayer : Node2D
 			Material = _nucleusLayer.PaletteMaterial,
 			TextureFilter = TextureFilterEnum.Nearest,
 			// Спрайты — под _Draw этого узла (рецепт, дуга, превью), а не поверх.
+			ShowBehindParent = true,
+		});
+
+		_atomRadius = _cellSize * 0.4f;
+		_particleRadius = _cellSize * 0.1f;
+		_fxMesh = new MultiMesh
+		{
+			TransformFormat = MultiMesh.TransformFormatEnum.Transform2D,
+			UseColors = true,
+			Mesh = new QuadMesh { Size = Vector2.One },
+			CustomAabb = new Aabb(new Vector3(-1e7f, -1e7f, -1f), new Vector3(2e7f, 2e7f, 2f)),
+		};
+		// После спрайтов звёзд — поверх них, но тоже под _Draw (дуга, рецепт).
+		AddChild(new MultiMeshInstance2D
+		{
+			Name = "StarIntake",
+			Multimesh = _fxMesh,
+			Texture = BlackHoleLayer.BuildDiscTexture(64),
+			TextureFilter = TextureFilterEnum.Linear,
 			ShowBehindParent = true,
 		});
 		SetProcessUnhandledInput(true);
@@ -168,12 +244,165 @@ public partial class StarLayer : Node2D
 		GD.Print($"[StarLayer] удалена звезда из клетки ({star.Row},{star.Col}).{burned}");
 	}
 
+	// --- эффект поглощения (только визуал, на симуляцию не влияет) ---
+
+	// Звезда забрала частицу из гнезда соседнего атома: from — мировая точка гнезда.
+	public void OnParticleTaken(Star star, Vector2 from, int color) =>
+		AddFx(star, new IntakeFx { Start = from - StarCenter(star), Tier = -1, Color = color });
+
+	// Звезда поглотила атом-ингредиент: from — мировая точка, куда он приехал;
+	// particles — цвета частиц в его гнёздах.
+	public void OnAtomTaken(Star star, Vector2 from, int tier, Atom particles) =>
+		AddFx(star, new IntakeFx { Start = from - StarCenter(star), Tier = System.Math.Max(0, tier), Particles = particles });
+
+	private void AddFx(Star star, IntakeFx item)
+	{
+		if (!_ready || MaxIntakePerStar <= 0 || ViewLayer.IsLayer2) return;
+		if (!_viewRect.Intersects(StarRect(star))) return;
+		if (!_fx.TryGetValue(star, out var fx))
+		{
+			fx = new StarFx { Items = new IntakeFx[MaxIntakePerStar] };
+			_fx[star] = fx;
+		}
+		if (fx.Count >= fx.Items.Length) return; // сверх лимита — без анимации
+		fx.Items[fx.Count++] = item;
+	}
+
+	private Vector2 StarCenter(Star s) =>
+		new Vector2((s.Col + Star.Size / 2f) * _cellSize, (s.Row + Star.Size / 2f) * _cellSize);
+
+	private Rect2 StarRect(Star s) =>
+		new Rect2(s.Col * _cellSize, s.Row * _cellSize, Star.Size * _cellSize, Star.Size * _cellSize);
+
+	private void UpdateViewRect()
+	{
+		var cam = GetViewport().GetCamera2D();
+		if (cam == null) { _viewRect = new Rect2(); return; }
+		var size = GetViewportRect().Size / cam.Zoom;
+		_viewRect = new Rect2(cam.GetScreenCenterPosition() - size / 2f, size);
+	}
+
+	private void UpdateEffects(float dt)
+	{
+		if (_fxStarsVersion != _stars.Version)
+		{
+			_fxStarsVersion = _stars.Version;
+			_fxToRemove.Clear();
+			var alive = new System.Collections.Generic.HashSet<Star>(_stars.All);
+			foreach (var key in _fx.Keys)
+				if (!alive.Contains(key)) _fxToRemove.Add(key);
+			foreach (var key in _fxToRemove) _fx.Remove(key);
+		}
+
+		bool hidden = ViewLayer.IsLayer2;
+		foreach (var pair in _fx)
+		{
+			var fx = pair.Value;
+			if (fx.Count == 0) continue;
+			if (hidden || !_viewRect.Intersects(StarRect(pair.Key)))
+			{
+				fx.Count = 0;
+				continue;
+			}
+			for (int i = 0; i < fx.Count;)
+			{
+				fx.Items[i].Age += dt;
+				if (fx.Items[i].Age < IntakeSeconds) { i++; continue; }
+				fx.Items[i] = fx.Items[--fx.Count]; // порядок отрисовки не важен
+			}
+		}
+	}
+
+	// Всё летящее видимых звёзд → буфер MultiMesh (атом: обод, тело, точки поверх).
+	private void FillEffectMesh()
+	{
+		int needed = 0;
+		foreach (var fx in _fx.Values)
+			for (int i = 0; i < fx.Count; i++) needed += fx.Items[i].Instances;
+		if (needed > _fxCapacity)
+		{
+			_fxCapacity = Mathf.Max(needed, _fxCapacity * 2);
+			_fxBuffer = new float[_fxCapacity * Stride];
+			_fxMesh.InstanceCount = _fxCapacity; // растёт только до пика
+		}
+		if (needed == 0)
+		{
+			_fxMesh.VisibleInstanceCount = 0;
+			return;
+		}
+
+		var colors = _nucleusLayer.TierPreviewColors;
+		var cam = GetViewport().GetCamera2D();
+		float zoom = cam != null ? cam.Zoom.X : 1f;
+		float endR = DiskRadiusCells * _cellSize * IntakeEndFraction;
+		float fade = Mathf.Clamp(IntakeFadeFraction, 0.01f, 1f);
+		int n = 0;
+		foreach (var pair in _fx)
+		{
+			var fx = pair.Value;
+			if (fx.Count == 0) continue;
+			var center = StarCenter(pair.Key);
+			for (int i = 0; i < fx.Count; i++)
+			{
+				ref var f = ref fx.Items[i];
+				float t = Mathf.Clamp(f.Age / IntakeSeconds, 0f, 1f);
+				float e = t * t; // ускорение к центру
+				float r0 = f.Start.Length();
+				var dir = r0 > 0f ? f.Start / r0 : Vector2.Up;
+				// Приехал уже внутрь 2/3 диска — только растворяется на месте.
+				float r1 = Mathf.Min(endR, r0);
+				var pos = center + dir * Mathf.Lerp(r0, r1, e);
+				float k = Mathf.Clamp((e - (1f - fade)) / fade, 0f, 1f); // 0..1 на последнем участке
+				float shrink = 1f - 0.85f * k;
+				float alpha = 1f - k;
+
+				if (f.Tier < 0)
+				{
+					float pr = _particleRadius * shrink;
+					Put(ref n, pos, 2f * pr, new Color(FxColor(f.Color, colors), alpha));
+					continue;
+				}
+
+				float radius = _atomRadius * shrink;
+				Put(ref n, pos, 2f * radius, new Color(FxColor(f.Tier, colors), alpha));
+				if (radius * zoom < IntakeLodPixels) continue; // мелко — один кружок
+				Put(ref n, pos, 1.76f * radius, new Color(AtomBodyColor, AtomBodyColor.A * alpha));
+				for (int p = 0; p < f.Particles.Count; p++)
+				{
+					float da = p * Mathf.Tau / Atom.Size - Mathf.Pi / 2f;
+					var at = pos + radius * 0.6f * new Vector2(Mathf.Cos(da), Mathf.Sin(da));
+					Put(ref n, at, 0.4f * radius, new Color(FxColor(f.Particles.ColorAt(p), colors), alpha));
+				}
+			}
+		}
+
+		RenderingServer.MultimeshSetBuffer(_fxMesh.GetRid(), _fxBuffer);
+		_fxMesh.VisibleInstanceCount = n;
+	}
+
+	// Один кружок: центр pos, диаметр d, цвет c.
+	private void Put(ref int n, Vector2 pos, float d, Color c)
+	{
+		int o = n * Stride;
+		var b = _fxBuffer;
+		b[o] = d; b[o + 1] = 0f; b[o + 2] = 0f; b[o + 3] = pos.X;
+		b[o + 4] = 0f; b[o + 5] = d; b[o + 6] = 0f; b[o + 7] = pos.Y;
+		b[o + 8] = c.R; b[o + 9] = c.G; b[o + 10] = c.B; b[o + 11] = c.A;
+		n++;
+	}
+
+	private static Color FxColor(int color, Color[] tierColors) =>
+		(tierColors != null && color >= 0 && color < tierColors.Length) ? tierColors[color] : Colors.White;
+
 	// --- отрисовка ---
 
 	public override void _Process(double delta)
 	{
 		if (!_ready) return;
 		_time += (float)delta;
+		UpdateViewRect();
+		UpdateEffects((float)delta);
+		FillEffectMesh();
 		UpdateMesh();
 		bool preview = _toolTier.HasValue && !ViewLayer.IsLayer2;
 		if (_stars.Count > 0 || preview || _hadPreview) QueueRedraw();
