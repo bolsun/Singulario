@@ -1596,6 +1596,9 @@ public partial class NucleusLayer : Node2D
 		// Шаг 2г: ЧД высасывает частицы из атомов, стоящих на горизонте (T005).
 		if (BlackHoles.Count > 0) AbsorbFromHorizon();
 
+		// Шаг 2д: звёзды берут нужные рецепту частицы у атомов вокруг (T006).
+		if (Stars.Count > 0) FeedStarsFromNeighbors();
+
 		// Шаг 3: захват энергии из источников частиц (EnergyClusterLayer).
 		// ВАЖНО: раньше здесь была одна общая проверка на ВСЮ симуляцию сразу —
 		// "_globalTick % _energyCaptureTicks == 0" — в надежде, что она будет
@@ -1742,6 +1745,56 @@ public partial class NucleusLayer : Node2D
 		_blackHoleLayer?.OnAtomCaptured(hole, n.MoveToCenter, n.CoreTier, particles);
 		RemoveNucleusEntity(n);
 		return true;
+	}
+
+	// Звезда (T006, GDD «Звезда — сборщик») берёт частицы у атомов в 12
+	// клетках вокруг — как горизонт ЧД (AbsorbFromHorizon): звезда как серое без
+	// спина, незаблокированная частица из гнезда, смотрящего на звезду, с учётом
+	// _claimed. Берёт только цвет, нужный рецепту, пока в буфере есть место;
+	// остальное не трогает. Груз частиц не отдаёт. Обход — звёзды по порядку
+	// StarSet, клетки по порядку Star.RingCells.
+	private void FeedStarsFromNeighbors()
+	{
+		foreach (var star in Stars.All)
+		{
+			foreach (var (row, col, k) in star.RingCells())
+			{
+				if (!_entAt.TryGetValue((row, col), out var n)) continue;
+				if (n.IsCargo || _globalTick < n.AsleepUntilTick) continue;
+				int p = PhysicalSlotForCompass(n, k);
+				var slot = n.Ring[p];
+				if (!slot.Exists || slot.IsHole || slot.Locked || _claimed.Contains((n, p))) continue;
+				int need = star.NeedIndex(IngredientKind.Particle, slot.ColorTier);
+				if (need < 0) continue;
+				if (!TierSpinAllowed(GrayCoreTier, TransferRules.NoSpin, n.CoreTier, n.Dir)) continue;
+
+				n.Ring[p] = new RingSlot { Exists = true, IsHole = true };
+				_claimed.Add((n, p));
+				star.Put(need);
+			}
+		}
+	}
+
+	// Атом доставлен вращателем или бросателем в клетку вокруг звезды (или в
+	// саму звезду) — поглощается целиком, если нужен рецепту и в буфере есть
+	// место (частицы в его гнёздах сгорают). Иначе вызывающий оставляет его
+	// лежать (из звезды — возвращает назад). Атом, поставленный игроком, сюда
+	// не попадает — он не приезжает. Вызывается из FinishArrivedMoves, как
+	// TryCaptureArrived.
+	private bool TryFeedArrivedToStar(NucleusEntity n)
+	{
+		if (IsSpinnerTier(n.CoreTier) || n.CoreTier == GrayCoreTier) return false;
+		int row = n.MoveToRow, col = n.MoveToCol;
+		foreach (var star in Stars.All)
+		{
+			if (!star.ContainsCell(row, col) && !star.IsRingCell(row, col)) continue;
+			int need = star.NeedIndex(IngredientKind.Atom, n.CoreTier);
+			if (need < 0) continue;
+			star.Put(need);
+			RemoveNucleusEntity(n);
+			return true;
+		}
+		return false;
 	}
 
 	private readonly List<PortKey> _portKeys = new();
@@ -2467,6 +2520,8 @@ public partial class NucleusLayer : Node2D
 			// Доставлен на горизонт ЧД (переезд от вращателя, толчок или шаг
 			// полёта бросателя) — захвачен целиком (T005), дальше не едет.
 			if (BlackHoles.Count > 0 && TryCaptureArrived(n)) continue;
+			// Доставлен к звезде и нужен рецепту — поглощён (T006).
+			if (Stars.Count > 0 && TryFeedArrivedToStar(n)) continue;
 
 			int destRow = n.MoveToRow;
 			int destCol = n.MoveToCol;
@@ -2478,9 +2533,12 @@ public partial class NucleusLayer : Node2D
 			// чужое ядро нельзя — откатываем переезд, возвращая ядро на ту
 			// клетку, откуда оно выехало (она гарантированно всё ещё свободна,
 			// никто другой её не занимал, пока n оттуда числилось выехавшим).
-			if (_entAt.ContainsKey((destRow, destCol)))
+			// То же — если вращатель довёз атом в клетку звезды, а звезде он не
+			// нужен (T006): внутри звезды атом лежать не может.
+			if (_entAt.ContainsKey((destRow, destCol)) || Stars.TryGetAt(destRow, destCol, out _))
 			{
-				GD.PrintErr($"[NucleusLayer] переезд в клетку ({destRow},{destCol}) отменён — она уже занята; ядро возвращено в ({n.MoveFromRow},{n.MoveFromCol}).");
+				if (_entAt.ContainsKey((destRow, destCol)))
+					GD.PrintErr($"[NucleusLayer] переезд в клетку ({destRow},{destCol}) отменён — она уже занята; ядро возвращено в ({n.MoveFromRow},{n.MoveFromCol}).");
 				destRow = n.MoveFromRow;
 				destCol = n.MoveFromCol;
 			}
