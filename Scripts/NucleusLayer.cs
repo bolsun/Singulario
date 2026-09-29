@@ -222,6 +222,12 @@ public partial class NucleusLayer : Node2D
 	// на "серое как получатель" половину правила.
 	[Export] public bool GrayAcceptsAnySpin = true;
 
+	// Месторождение отдаёт частицы только атому своего тира и серому (T009,
+	// GDD «Законы → Правила передачи»): источник тира X — атому тира X или
+	// серому. Только захват из источника (шаг 3 SimTick); перенос между
+	// атомами не меняется. Оба режима.
+	[Export] public bool DepositGivesOwnTierOnly = true;
+
 	// --- захват энергии из источников частиц (EnergyClusterLayer) ---
 	// Интервал захвата ОДИНАКОВ для любого тира ядра (в отличие от
 	// TierTicks[CoreTier], который управляет только поворотом кольца этого
@@ -1045,13 +1051,15 @@ public partial class NucleusLayer : Node2D
 		{
 			if (mb.Pressed)
 			{
-				// ЛКМ по грузу — установить его на месте рабочим атомом (T006;
-				// инвентаря пока нет). Раньше инструмента: груз не затирается установкой.
+				// ЛКМ по грузу — установить его на месте рабочим атомом (T006,
+				// только песочница). В настоящем режиме груз — обломок (T009): ЛКМ
+				// ничего не делает, забрать — ПКМ в инвентарь. Раньше инструмента:
+				// груз не затирается установкой.
 				var mouse = GetGlobalMousePosition();
 				var cargoCell = (Mathf.FloorToInt(mouse.Y / CellSize), Mathf.FloorToInt(mouse.X / CellSize));
 				if (_entAt.TryGetValue(cargoCell, out var cargo) && cargo.IsCargo)
 				{
-					ActivateCargo(cargo);
+					if (Inventory.Sandbox) ActivateCargo(cargo);
 					_lastPlacedCell = cargoCell; // удержание ЛКМ не ставит атом поверх только что установленного
 					_leftMouseHeld = _selectedSpawnTier.HasValue;
 					GetViewport().SetInputAsHandled();
@@ -1780,6 +1788,7 @@ public partial class NucleusLayer : Node2D
 						int srcCol = Mathf.FloorToInt(neighborWorld.X / layer.CellSize);
 						int srcRow = Mathf.FloorToInt(neighborWorld.Y / layer.CellSize);
 						if (!layer.HasClusterAt(srcRow, srcCol)) continue;
+						if (DepositGivesOwnTierOnly && n.CoreTier != GrayCoreTier && n.CoreTier != layer.Tier) continue;
 
 						// Та же проверка цвета, что и у TransferAllowed для передачи
 						// между ядрами (RequireColorMatch/RequireOwnColorTier/серое
