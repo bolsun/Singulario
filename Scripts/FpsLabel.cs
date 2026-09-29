@@ -19,6 +19,9 @@ public partial class FpsLabel : Label
 		// в дереве лежит сам HUD/Label.
 		_nucleusLayer = GetNodeOrNull<NucleusLayer>("/root/Main/NucleusLayer");
 		_moleculeLayer = GetNodeOrNull<MoleculeLayer>("/root/Main/MoleculeLayer");
+
+		// Строка инвентаря (T008) — соседом в том же HUD, без правки сцены.
+		GetParent().CallDeferred(Node.MethodName.AddChild, new InventoryLabel { Name = "InventoryLabel" });
 	}
 
 	public override void _Process(double delta)

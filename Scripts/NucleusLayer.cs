@@ -355,6 +355,8 @@ public partial class NucleusLayer : Node2D
 	// Звёзды-сборщики (T006): данные — StarSet, приём ингредиентов, производство
 	// и выход — здесь (SimTick, FinishArrivedMoves), установка и отрисовка — StarLayer.
 	public StarSet Stars { get; private set; }
+	// Инвентарь игрока и режим песочница/настоящий (T008).
+	public Inventory Inventory { get; private set; }
 	// Время рецепта для звезды Ж (тиков) и скорость по тиру звезды Ж/К/С.
 	[Export] public int StarRecipeTicks = 256;
 	[Export] public int[] StarSpeedByTier = new int[] { 1, 2, 4 };
@@ -792,6 +794,7 @@ public partial class NucleusLayer : Node2D
 		Ports = ViewLayer.Layer2Enabled ? new PortSet(ChunkSize) : null;
 		BlackHoles = new BlackHoleSet();
 		Stars = new StarSet();
+		Inventory = new Inventory();
 		_starLayer = GetNodeOrNull<StarLayer>("../StarLayer");
 
 		_ready = true;
@@ -3697,7 +3700,7 @@ public partial class NucleusLayer : Node2D
 			foreach (int tier in ss.Output ?? new List<int>())
 			{
 				if (star.Output.Count >= StarOutputCapacity) break;
-				if (tier >= 0 && tier < BlackHoleSet.TierCount) star.Output.Enqueue(tier);
+				if (Inventory.IsAtomTier(tier)) star.Output.Enqueue(tier);
 			}
 			starsPlaced++;
 		}
