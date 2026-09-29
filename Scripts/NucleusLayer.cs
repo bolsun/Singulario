@@ -3491,6 +3491,10 @@ public partial class NucleusLayer : Node2D
 		public SavedAbsorbed Absorbed { get; set; }
 		// Звёзды-сборщики (T006). В старых сохранениях поля нет.
 		public List<SavedStar> Stars { get; set; } = new();
+		// Инвентарь и режим (T008). В старых сохранениях нет: пустой инвентарь,
+		// режим — настройка SandboxMode.
+		public List<SavedTierCount> Inventory { get; set; } = new();
+		public bool? Sandbox { get; set; }
 	}
 
 	private class SavedStar
@@ -3580,7 +3584,10 @@ public partial class NucleusLayer : Node2D
 	// в начале раздела о том, что НЕ сохраняется.
 	public string ExportFieldJson()
 	{
-		var data = new FieldSaveData();
+		var data = new FieldSaveData { Sandbox = Inventory.Sandbox };
+		for (int t = 0; t < Inventory.TierCount; t++)
+			if (Inventory.Count(t) != 0)
+				data.Inventory.Add(new SavedTierCount { Tier = t, Count = Inventory.Count(t) });
 
 		foreach (var n in _activeSet) data.Nuclei.Add(ToSavedNucleus(n));
 		foreach (var n in _sleepingSet) data.Nuclei.Add(ToSavedNucleus(n));
@@ -3664,6 +3671,10 @@ public partial class NucleusLayer : Node2D
 		}
 
 		ClearFieldForImport();
+
+		foreach (var tc in data.Inventory ?? new List<SavedTierCount>())
+			Inventory.Set(tc.Tier, tc.Count);
+		Inventory.Sandbox = data.Sandbox ?? SandboxMode;
 
 		int placed = 0;
 		var nucleiList = data.Nuclei ?? new List<SavedNucleus>();
@@ -3801,6 +3812,7 @@ public partial class NucleusLayer : Node2D
 		Ports?.Clear();
 		BlackHoles?.Clear();
 		Stars?.Clear();
+		Inventory?.Clear();
 
 		// По заданию — при загрузке тик должен быть 0, а вместе с ним и все
 		// производные величины часов симуляции, чтобы не осталось дробного
