@@ -1719,8 +1719,8 @@ public partial class NucleusLayer : Node2D
 			for (int idx = 0; idx < OrthogonalSlots.Length; idx++)
 			{
 				int k = OrthogonalSlots[idx];
-				int p = PhysicalSlotForCompass(n, k);
-				if (!n.Ring[p].Exists || !n.Ring[p].IsHole) continue;
+				if (!CanReceive(n, k)) continue;
+				int p = SideKey(n, k);
 				if (_claimed.Contains((n, p))) continue;
 
 				// Раньше тут ещё проверялось _activeSet.Contains(neighbor) —
@@ -1736,14 +1736,13 @@ public partial class NucleusLayer : Node2D
 				if (neighbor.IsCargo) continue; // груз частиц не отдаёт (T006)
 
 				int k2 = Opposite(k);
-				int p2 = PhysicalSlotForCompass(neighbor, k2);
-				ref var giverSlot = ref neighbor.Ring[p2];
-				if (!giverSlot.Exists || giverSlot.IsHole || giverSlot.Locked) continue;
+				if (!TryPeekGive(neighbor, k2, out var giverSlot)) continue;
+				int p2 = SideKey(neighbor, k2);
 				if (_claimed.Contains((neighbor, p2))) continue;
 				if (!TransferAllowed(receiver: n, giver: neighbor, giverSlot)) continue;
 
-				n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = giverSlot.ColorTier, Locked = true, IsItem = giverSlot.IsItem };
-				neighbor.Ring[p2] = new RingSlot { Exists = true, IsHole = true };
+				PutReceived(n, k, giverSlot);
+				TakeGiven(neighbor, k2);
 				_claimed.Add((n, p));
 				_claimed.Add((neighbor, p2));
 			}
@@ -1758,9 +1757,8 @@ public partial class NucleusLayer : Node2D
 			for (int idx = 0; idx < OrthogonalSlots.Length; idx++)
 			{
 				int k = OrthogonalSlots[idx];
-				int p = PhysicalSlotForCompass(n, k);
-				var giverSlot = n.Ring[p];
-				if (!giverSlot.Exists || giverSlot.IsHole || giverSlot.Locked) continue;
+				if (!TryPeekGive(n, k, out var giverSlot)) continue;
+				int p = SideKey(n, k);
 				if (_claimed.Contains((n, p))) continue;
 
 				// См. комментарий у прохода A выше — с _activeSet == "все живые
@@ -1771,13 +1769,13 @@ public partial class NucleusLayer : Node2D
 				if (neighbor.IsCargo) continue; // груз частиц не берёт (T006)
 
 				int k2 = Opposite(k);
-				int p2 = PhysicalSlotForCompass(neighbor, k2);
-				if (!neighbor.Ring[p2].Exists || !neighbor.Ring[p2].IsHole) continue;
+				if (!CanReceive(neighbor, k2)) continue;
+				int p2 = SideKey(neighbor, k2);
 				if (_claimed.Contains((neighbor, p2))) continue;
 				if (!TransferAllowed(receiver: neighbor, giver: n, giverSlot)) continue;
 
-				neighbor.Ring[p2] = new RingSlot { Exists = true, IsHole = false, ColorTier = giverSlot.ColorTier, Locked = true, IsItem = giverSlot.IsItem };
-				n.Ring[p] = new RingSlot { Exists = true, IsHole = true };
+				PutReceived(neighbor, k2, giverSlot);
+				TakeGiven(n, k);
 				_claimed.Add((n, p));
 				_claimed.Add((neighbor, p2));
 			}
@@ -1836,6 +1834,7 @@ public partial class NucleusLayer : Node2D
 				// перебирать все 4 ортогональных направления и дёргать
 				// ColorAccepted на каждое, просто чтобы получить тот же отказ.
 				if (n.CoreTier == RotatorCoreTier || n.CoreTier == ThrowerCoreTier) continue;
+				if (n.Cross != null) continue; // перекрёсток из месторождений не берёт (T010)
 				if (_globalTick < n.NextCaptureTick) continue;
 
 				for (int idx = 0; idx < OrthogonalSlots.Length; idx++)
@@ -1909,12 +1908,13 @@ public partial class NucleusLayer : Node2D
 					if (!_entAt.TryGetValue((row, col), out var n)) continue;
 					if (n.IsCargo) continue; // груз частиц не отдаёт (T006)
 					if (_globalTick < n.AsleepUntilTick) continue; // ещё не проснулся — не крутится
-					int p = PhysicalSlotForCompass(n, k);
-					var slot = n.Ring[p];
-					if (!slot.Exists || slot.IsHole || slot.Locked || _claimed.Contains((n, p))) continue;
+					// У перекрёстка (T010) — частица у выхода на сторону ЧД.
+					if (!TryPeekGive(n, k, out var slot)) continue;
+					int p = SideKey(n, k);
+					if (_claimed.Contains((n, p))) continue;
 					if (!TierSpinAllowed(GrayCoreTier, TransferRules.NoSpin, n.CoreTier, n.Dir)) continue;
 
-					n.Ring[p] = new RingSlot { Exists = true, IsHole = true };
+					TakeGiven(n, k);
 					_claimed.Add((n, p));
 					var (dr, dc) = Adj8[k];
 					var from = n.Center + new Vector2(dc, dr) * _orbitRadius;
@@ -1952,6 +1952,15 @@ public partial class NucleusLayer : Node2D
 			BlackHoles.AbsorbParticle(slot.ColorTier);
 			particles.Push(slot.ColorTier);
 		}
+		if (n.Cross != null) // частицы в пути перекрёстка (T010)
+			foreach (var axis in n.Cross.Axes)
+				for (int i = 0; i < axis.Count; i++)
+				{
+					var cp = axis.Items[i];
+					if (cp.IsItem) { BlackHoles.AbsorbAtom(cp.ColorTier); continue; }
+					BlackHoles.AbsorbParticle(cp.ColorTier);
+					particles.Push(cp.ColorTier);
+				}
 		BlackHoles.AbsorbAtom(n.CoreTier);
 		_blackHoleLayer?.OnAtomCaptured(hole, n.MoveToCenter, n.CoreTier, particles);
 		RemoveNucleusEntity(n);
@@ -1972,15 +1981,16 @@ public partial class NucleusLayer : Node2D
 			{
 				if (!_entAt.TryGetValue((row, col), out var n)) continue;
 				if (n.IsCargo || _globalTick < n.AsleepUntilTick) continue;
-				int p = PhysicalSlotForCompass(n, k);
-				var slot = n.Ring[p];
-				if (!slot.Exists || slot.IsHole || slot.Locked || _claimed.Contains((n, p))) continue;
+				// У перекрёстка (T010) — частица у выхода на сторону звезды.
+				if (!TryPeekGive(n, k, out var slot)) continue;
+				int p = SideKey(n, k);
+				if (_claimed.Contains((n, p))) continue;
 				// Атом-предмет (T007) — ингредиент-атом его тира, частица — по цвету.
 				int need = star.NeedIndex(slot.IsItem ? IngredientKind.Atom : IngredientKind.Particle, slot.ColorTier);
 				if (need < 0) continue;
 				if (!TierSpinAllowed(GrayCoreTier, TransferRules.NoSpin, n.CoreTier, n.Dir)) continue;
 
-				n.Ring[p] = new RingSlot { Exists = true, IsHole = true };
+				TakeGiven(n, k);
 				_claimed.Add((n, p));
 				star.Put(need);
 				var (dr, dc) = Adj8[k];
@@ -2020,12 +2030,13 @@ public partial class NucleusLayer : Node2D
 			if (n.IsCargo || _globalTick < n.AsleepUntilTick || (n.IsMoving && n.IsFlying)) continue;
 			if (IsSpinnerTier(n.CoreTier)) continue; // вращатели и бросатели ничего не хранят
 			int k = Opposite(star.OutputSide * 2); // из клетки выхода на звезду
-			int p = PhysicalSlotForCompass(n, k);
-			var slot = n.Ring[p];
-			if (!slot.Exists || !slot.IsHole || _claimed.Contains((n, p))) continue;
+			// Перекрёсток (T010) принимает со стороны звезды и везёт на противоположную.
+			if (!CanReceive(n, k)) continue;
+			int p = SideKey(n, k);
+			if (_claimed.Contains((n, p))) continue;
 			if (!TierSpinAllowed(n.CoreTier, n.Dir, GrayCoreTier, TransferRules.NoSpin)) continue;
 
-			n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = star.Output.Dequeue(), Locked = true, IsItem = true };
+			PutReceived(n, k, new RingSlot { Exists = true, IsHole = false, ColorTier = star.Output.Dequeue(), IsItem = true });
 			_claimed.Add((n, p));
 			// Место в буфере освободилось — ждущая готовая работа уходит туда же.
 			star.TryFinishToOutput(StarDuration(star), StarOutputCapacity);
@@ -2100,6 +2111,7 @@ public partial class NucleusLayer : Node2D
 					if (!Ports.SameChunk(key, nr, nc) || Ports.IsPortCell(nr, nc)) continue;
 					if (!_entAt.TryGetValue((nr, nc), out var n) || !_activeSet.Contains(n)) continue;
 					if (n.IsMoving && n.IsFlying) continue;
+					if (n.Cross != null) continue; // перекрёсток с портами не работает (T010, слой 2 заморожен)
 
 					int p = PhysicalSlotForCompass(n, Opposite(k));
 					if (_claimed.Contains((n, p))) continue;
@@ -2997,6 +3009,7 @@ public partial class NucleusLayer : Node2D
 			slot.Locked = false; // поворот завершил "остывание" — можно снова отдавать
 			n.Ring[i] = slot;
 		}
+		n.Cross?.Step(); // перекрёсток (T010): частицы в пути — на шаг по полукольцу
 	}
 
 	// НОД/НОК — вспомогательные для _pauseAlignTicks (см. поле и _Ready):
@@ -3030,6 +3043,53 @@ public partial class NucleusLayer : Node2D
 	private int PhysicalSlotForCompass(NucleusEntity n, int compassIndex) =>
 		((compassIndex - DiscreteRotationOffset(n)) % 8 + 8) % 8;
 
+	// --- сторона атома для передачи (T010): у обычного атома — физический слот,
+	// смотрящий на сторону k; у перекрёстка — вход или выход оси (k / 2 = N/E/S/W).
+
+	// Ключ стороны в _claimed: слот 0..7 или 8 + сторона у перекрёстка.
+	private int SideKey(NucleusEntity n, int k) =>
+		n.Cross != null ? 8 + k / 2 : PhysicalSlotForCompass(n, k);
+
+	// Спин для законов передачи: у перекрёстка вертикальные кольца — спина нет.
+	private static int SpinOf(NucleusEntity n) => n.Cross != null ? TransferRules.NoSpin : n.Dir;
+
+	// Незаблокированная частица или предмет, готовые уйти через сторону k.
+	private bool TryPeekGive(NucleusEntity n, int k, out RingSlot content)
+	{
+		if (n.Cross != null)
+		{
+			bool ready = n.Cross.TryPeekExit(k / 2, out var cp);
+			content = ready ? new RingSlot { Exists = true, IsHole = false, ColorTier = cp.ColorTier, IsItem = cp.IsItem } : default;
+			return ready;
+		}
+		content = n.Ring[PhysicalSlotForCompass(n, k)];
+		return content.Exists && !content.IsHole && !content.Locked;
+	}
+
+	// Есть ли место для частицы, входящей через сторону k.
+	private bool CanReceive(NucleusEntity n, int k)
+	{
+		if (n.Cross != null) return n.Cross.CanEnter(k / 2);
+		var slot = n.Ring[PhysicalSlotForCompass(n, k)];
+		return slot.Exists && slot.IsHole;
+	}
+
+	// Убрать отданное через сторону k (после TryPeekGive).
+	private void TakeGiven(NucleusEntity n, int k)
+	{
+		if (n.Cross != null) { n.Cross.TakeExit(k / 2); return; }
+		n.Ring[PhysicalSlotForCompass(n, k)] = new RingSlot { Exists = true, IsHole = true };
+	}
+
+	// Положить принятое через сторону k (после CanReceive); частица блокируется
+	// до поворота, у перекрёстка — занимает вход до следующего шага.
+	private void PutReceived(NucleusEntity n, int k, RingSlot content)
+	{
+		if (n.Cross != null) { n.Cross.Enter(k / 2, content.ColorTier, content.IsItem); return; }
+		n.Ring[PhysicalSlotForCompass(n, k)] = new RingSlot
+			{ Exists = true, IsHole = false, ColorTier = content.ColorTier, Locked = true, IsItem = content.IsItem };
+	}
+
 	// requireMatchingSpin=true — раньше не блокировало ничего (все ядра
 	// ставились с одним и тем же направлением, см. SpinDirection), теперь же
 	// направление можно переключить у любого уже стоящего ядра по R (см.
@@ -3043,7 +3103,7 @@ public partial class NucleusLayer : Node2D
 		// RequireSameCoreTier разные цветные тиры не взаимодействуют, серое с
 		// любой стороны — исключение. Dir у ядер всегда ±1.
 		if (!TransferRules.TierSpinAllowed(
-				receiver.CoreTier, receiver.Dir, giver.CoreTier, giver.Dir,
+				receiver.CoreTier, SpinOf(receiver), giver.CoreTier, SpinOf(giver),
 				GrayCoreTier, GrayAcceptsAnySpin, RequireSameCoreTier))
 			return false;
 
