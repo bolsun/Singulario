@@ -1,0 +1,150 @@
+{
+  "WidthChunks": 2,
+  "HeightChunks": 2,
+  "Nuclei": [
+    {
+      "Row": 9,
+      "Col": 21,
+      "CoreTier": 0,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": true
+    },
+    {
+      "Row": 10,
+      "Col": 25,
+      "CoreTier": 0,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": true
+    },
+    {
+      "Row": 11,
+      "Col": 19,
+      "CoreTier": 0,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": true
+    },
+    {
+      "Row": 11,
+      "Col": 28,
+      "CoreTier": 0,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": true
+    },
+    {
+      "Row": 12,
+      "Col": 22,
+      "CoreTier": 0,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": true
+    },
+    {
+      "Row": 15,
+      "Col": 18,
+      "CoreTier": 0,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": false
+    },
+    {
+      "Row": 15,
+      "Col": 20,
+      "CoreTier": 0,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": false
+    },
+    {
+      "Row": 15,
+      "Col": 22,
+      "CoreTier": 0,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": false
+    },
+    {
+      "Row": 15,
+      "Col": 23,
+      "CoreTier": 0,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": false
+    },
+    {
+      "Row": 15,
+      "Col": 24,
+      "CoreTier": 0,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": false
+    },
+    {
+      "Row": 15,
+      "Col": 26,
+      "CoreTier": 0,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": false
+    },
+    {
+      "Row": 15,
+      "Col": 27,
+      "CoreTier": 0,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": false
+    },
+    {
+      "Row": 15,
+      "Col": 28,
+      "CoreTier": 0,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": false
+    }
+  ],
+  "Sources": [
+    {
+      "Tier": 0,
+      "Row": 14,
+      "Col": 23,
+      "Amount": 500
+    },
+    {
+      "Tier": 0,
+      "Row": 14,
+      "Col": 24,
+      "Amount": 500
+    },
+    {
+      "Tier": 0,
+      "Row": 14,
+      "Col": 25,
+      "Amount": 500
+    },
+    {
+      "Tier": 0,
+      "Row": 14,
+      "Col": 26,
+      "Amount": 500
+    },
+    {
+      "Tier": 0,
+      "Row": 14,
+      "Col": 27,
+      "Amount": 500
+    }
+  ],
+  "BlackHoleCells": [
+    {
+      "Row": 14,
+      "Col": 14,
+      "Size": 4
+    }
+  ],
+  "Stars": []
+}

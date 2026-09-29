@@ -1,6 +1,7 @@
 using Godot;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 // Мир — не заранее заданное поле Rows x Cols, а разреженная сетка чанков:
 // Dictionary<(cx,cy), WorldChunk>. Чанк создаётся ЛЕНИВО — в первый момент,
@@ -879,6 +880,12 @@ public partial class NucleusLayer : Node2D
 				var mouse = GetGlobalMousePosition();
 				int cx = ChunkOf(Mathf.FloorToInt(mouse.X / CellSize)), cy = ChunkOf(Mathf.FloorToInt(mouse.Y / CellSize));
 				if (OpenChunks(new[] { (cx, cy) }) == 0) GD.Print($"[NucleusLayer] чанк ({cx},{cy}) уже открыт.");
+				GetViewport().SetInputAsHandled();
+			}
+			else if (key.Keycode == Key.B && !ViewLayer.IsLayer2)
+			{
+				// Шаблон чанков (T009): два нажатия — два угла прямоугольника.
+				TemplateCornerAtMouse();
 				GetViewport().SetInputAsHandled();
 			}
 			else if (key.Keycode == Key.Space)
@@ -3645,6 +3652,25 @@ public partial class NucleusLayer : Node2D
 		public int Tier { get; set; }
 		public int Row { get; set; }
 		public int Col { get; set; }
+		// Запас клетки (шаблоны, T009). В сохранениях нет — null, InitialAmount слоя.
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public long? Amount { get; set; }
+	}
+
+	// Шаблон чанков (T009): подмножество формата сохранения — атомы (и груз-
+	// обломки), источники с запасом, ЧД, звёзды. Без территории, режима,
+	// инвентаря и состояния (частицы, буферы звёзд, счётчики ЧД). Клетки —
+	// относительно левого верхнего угла шаблона; размер — целые чанки.
+	// Строится в песочнице (клавиша B, ExportTemplateJson), ставится с любого
+	// чанка — PlaceTemplate. Стартовая зона новой игры — StartZoneTemplatePath.
+	private class FieldTemplate
+	{
+		public int WidthChunks { get; set; } = 1;
+		public int HeightChunks { get; set; } = 1;
+		public List<SavedNucleus> Nuclei { get; set; } = new();
+		public List<SavedSource> Sources { get; set; } = new();
+		public List<SavedBlackHole> BlackHoleCells { get; set; } = new();
+		public List<SavedStar> Stars { get; set; } = new();
 	}
 
 	// Собирает текущее поле (ядра + источники) в JSON-строку — см. комментарий
@@ -3757,20 +3783,31 @@ public partial class NucleusLayer : Node2D
 			Territory.Reset(open);
 		}
 
+		ApplyFieldData(data, 0, 0, "поле загружено из JSON, тик сброшен в 0");
+		error = null;
+		return true;
+	}
+
+	// Расставляет объекты из данных сохранения (или шаблона, T009) поверх
+	// текущего поля со сдвигом (dRow, dCol) клеток — кратным чанку, если в
+	// данных есть порты. Территорию, режим и инвентарь не трогает — их задаёт
+	// вызывающий. Занятые клетки пропускаются с сообщением.
+	private void ApplyFieldData(FieldSaveData data, int dRow, int dCol, string what)
+	{
 		int placed = 0;
 		var nucleiList = data.Nuclei ?? new List<SavedNucleus>();
 		foreach (var sn in nucleiList)
 		{
-			if (Ports != null && Ports.IsPortCell(sn.Row, sn.Col))
+			if (Ports != null && Ports.IsPortCell(sn.Row + dRow, sn.Col + dCol))
 			{
-				GD.PrintErr($"[NucleusLayer] импорт: клетка ({sn.Row},{sn.Col}) — порт чанка, ядро пропущено.");
+				GD.PrintErr($"[NucleusLayer] импорт: клетка ({sn.Row + dRow},{sn.Col + dCol}) — порт чанка, ядро пропущено.");
 				continue;
 			}
 			bool ok = sn.Cargo
-				? PlaceCargo(sn.Row, sn.Col, sn.CoreTier, sn.HoleCount, sn.Dir)
-				: PlaceNucleusForImport(sn.Row, sn.Col, sn.CoreTier, sn.Dir, sn.HoleCount);
+				? PlaceCargo(sn.Row + dRow, sn.Col + dCol, sn.CoreTier, sn.HoleCount, sn.Dir)
+				: PlaceNucleusForImport(sn.Row + dRow, sn.Col + dCol, sn.CoreTier, sn.Dir, sn.HoleCount);
 			if (ok) placed++;
-			else GD.PrintErr($"[NucleusLayer] импорт: клетка ({sn.Row},{sn.Col}) уже занята — ядро пропущено.");
+			else GD.PrintErr($"[NucleusLayer] импорт: клетка ({sn.Row + dRow},{sn.Col + dCol}) уже занята — ядро пропущено.");
 		}
 
 		int sourcesPlaced = 0;
@@ -3781,7 +3818,7 @@ public partial class NucleusLayer : Node2D
 			foreach (var layer in _energyClusterLayers)
 			{
 				if (layer.Tier != ss.Tier) continue;
-				layer.PlaceClusterAt(ss.Row, ss.Col);
+				layer.PlaceClusterAt(ss.Row + dRow, ss.Col + dCol, ss.Amount);
 				sourcesPlaced++;
 				found = true;
 				break;
@@ -3803,7 +3840,7 @@ public partial class NucleusLayer : Node2D
 				continue;
 			}
 			var atom = sp.Mode == (int)PortMode.Closed ? default : Atom.FromColors(sp.Colors);
-			Ports.Restore(new PortKey(sp.Cx, sp.Cy, sp.Side), (PortMode)sp.Mode, atom);
+			Ports.Restore(new PortKey(sp.Cx + dCol / ChunkSize, sp.Cy + dRow / ChunkSize, sp.Side), (PortMode)sp.Mode, atom);
 			portsPlaced++;
 		}
 
@@ -3813,7 +3850,7 @@ public partial class NucleusLayer : Node2D
 		var holesList = data.BlackHoleCells ?? new List<SavedBlackHole>();
 		foreach (var sh in holesList)
 		{
-			if (_blackHoleLayer != null && _blackHoleLayer.TryPlace(sh.Row, sh.Col, sh.Size, log: false)) holesPlaced++;
+			if (_blackHoleLayer != null && _blackHoleLayer.TryPlace(sh.Row + dRow, sh.Col + dCol, sh.Size, log: false)) holesPlaced++;
 			else GD.PushWarning($"[NucleusLayer] импорт: ЧД в клетке ({sh.Row},{sh.Col}) размером {sh.Size} не ставится (занято) — пропущена.");
 		}
 		// Звёзды (T006) — после атомов, источников и ЧД, с проверками инструмента.
@@ -3822,7 +3859,7 @@ public partial class NucleusLayer : Node2D
 		foreach (var ss in starsList)
 		{
 			var star = ss.Recipe >= 0 && ss.Recipe < StarRecipes.Count
-				? _starLayer?.TryPlace(ss.Row, ss.Col, ss.Tier, log: false, recipe: ss.Recipe)
+				? _starLayer?.TryPlace(ss.Row + dRow, ss.Col + dCol, ss.Tier, log: false, recipe: ss.Recipe)
 				: null;
 			if (star == null)
 			{
@@ -3862,8 +3899,173 @@ public partial class NucleusLayer : Node2D
 			GD.PushWarning($"[NucleusLayer] импорт: слой 2 выключен — молекулы ({moleculesList.Count}) пропущены.");
 		int moleculesPlaced = _moleculeLayer?.ImportMolecules(moleculesList) ?? 0;
 
-		GD.Print($"[NucleusLayer] поле загружено из JSON: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, портов {portsPlaced}/{portsList.Count}, ЧД {holesPlaced}/{holesList.Count}, звёзд {starsPlaced}/{starsList.Count}, молекул {moleculesPlaced}/{moleculesList.Count}, тик сброшен в 0.");
-		error = null;
+		GD.Print($"[NucleusLayer] {what}: ядер {placed}/{nucleiList.Count}, источников {sourcesPlaced}/{sourcesList.Count}, портов {portsPlaced}/{portsList.Count}, ЧД {holesPlaced}/{holesList.Count}, звёзд {starsPlaced}/{starsList.Count}, молекул {moleculesPlaced}/{moleculesList.Count}.");
+	}
+
+	// --- шаблоны чанков и новая игра (T009) ---
+
+	// Стартовая зона новой игры: шаблон 2×2 чанка, ставится с чанка (-1,-1),
+	// то есть покрывает Territory.StartChunks (ЧД — в начале координат).
+	[Export] public string StartZoneTemplatePath = "res://Data/Templates/start_zone.json";
+	private const int StartZoneChunkX = -1, StartZoneChunkY = -1;
+	// Куда пишет экспорт шаблона (клавиша B); строка ещё и в буфер обмена.
+	private const string TemplateExportPath = "user://template_export.json";
+
+	// Первый угол прямоугольника чанков для экспорта шаблона (клавиша B).
+	private (int cx, int cy)? _templateCorner;
+
+	// B — первый раз запоминает чанк под курсором, второй раз экспортирует
+	// прямоугольник чанков между ними в шаблон.
+	private void TemplateCornerAtMouse()
+	{
+		var mouse = GetGlobalMousePosition();
+		var chunk = (cx: ChunkOf(Mathf.FloorToInt(mouse.X / CellSize)), cy: ChunkOf(Mathf.FloorToInt(mouse.Y / CellSize)));
+		if (!_templateCorner.HasValue)
+		{
+			_templateCorner = chunk;
+			GD.Print($"[NucleusLayer] шаблон: первый угол — чанк ({chunk.cx},{chunk.cy}). B на втором углу — экспорт.");
+			return;
+		}
+		var a = _templateCorner.Value;
+		_templateCorner = null;
+		int cx0 = System.Math.Min(a.cx, chunk.cx), cx1 = System.Math.Max(a.cx, chunk.cx);
+		int cy0 = System.Math.Min(a.cy, chunk.cy), cy1 = System.Math.Max(a.cy, chunk.cy);
+		string json = ExportTemplateJson(cx0, cy0, cx1, cy1);
+		using (var file = FileAccess.Open(TemplateExportPath, FileAccess.ModeFlags.Write))
+		{
+			if (file == null) GD.PrintErr($"[NucleusLayer] шаблон: не удалось записать {TemplateExportPath}: {FileAccess.GetOpenError()}");
+			else file.StoreString(json);
+		}
+		DisplayServer.ClipboardSet(json);
+		GD.Print($"[NucleusLayer] шаблон чанков ({cx0},{cy0})–({cx1},{cy1}) ({cx1 - cx0 + 1}×{cy1 - cy0 + 1}) сохранён в {ProjectSettings.GlobalizePath(TemplateExportPath)} и скопирован в буфер обмена.");
+	}
+
+	// Шаблон из прямоугольника чанков (cx0,cy0)–(cx1,cy1) включительно.
+	// Берутся объекты, целиком лежащие внутри (ЧД и звёзды на границе —
+	// пропускаются с предупреждением). Запас источника — доля клетки в
+	// текущем остатке её кластера.
+	public string ExportTemplateJson(int cx0, int cy0, int cx1, int cy1)
+	{
+		int row0 = cy0 * ChunkSize, col0 = cx0 * ChunkSize;
+		int rowEnd = (cy1 + 1) * ChunkSize, colEnd = (cx1 + 1) * ChunkSize;
+		bool Inside(int r, int c) => r >= row0 && r < rowEnd && c >= col0 && c < colEnd;
+
+		var t = new FieldTemplate { WidthChunks = cx1 - cx0 + 1, HeightChunks = cy1 - cy0 + 1 };
+		var atoms = new List<NucleusEntity>();
+		atoms.AddRange(_activeSet);
+		atoms.AddRange(_sleepingSet);
+		atoms.AddRange(_cargoSet);
+		foreach (var n in atoms)
+		{
+			if (!Inside(n.Row, n.Col)) continue;
+			var sn = ToSavedNucleus(n);
+			sn.Row -= row0;
+			sn.Col -= col0;
+			t.Nuclei.Add(sn);
+		}
+		// Порядок — по клетке, чтобы одно и то же поле давало одну и ту же строку.
+		t.Nuclei.Sort((a, b) => a.Row != b.Row ? a.Row.CompareTo(b.Row) : a.Col.CompareTo(b.Col));
+
+		foreach (var layer in _energyClusterLayers)
+			foreach (var (row, col) in layer.EnumerateCells())
+			{
+				if (!Inside(row, col)) continue;
+				int cells = System.Math.Max(1, layer.CellCountAt(row, col));
+				long amount = layer.AmountAt(row, col) / cells;
+				if (amount <= 0) continue;
+				t.Sources.Add(new SavedSource { Tier = layer.Tier, Row = row - row0, Col = col - col0, Amount = amount });
+			}
+		t.Sources.Sort((a, b) => a.Row != b.Row ? a.Row.CompareTo(b.Row) : a.Col != b.Col ? a.Col.CompareTo(b.Col) : a.Tier.CompareTo(b.Tier));
+
+		foreach (var hole in BlackHoles.Enumerate())
+		{
+			bool first = Inside(hole.Row, hole.Col), last = Inside(hole.Row + hole.Size - 1, hole.Col + hole.Size - 1);
+			if (first && last)
+				t.BlackHoleCells.Add(new SavedBlackHole { Row = hole.Row - row0, Col = hole.Col - col0, Size = hole.Size });
+			else if (first || last)
+				GD.PushWarning($"[NucleusLayer] шаблон: ЧД в клетке ({hole.Row},{hole.Col}) выходит за границу — пропущена.");
+		}
+
+		foreach (var star in Stars.All)
+		{
+			bool first = Inside(star.Row, star.Col), last = Inside(star.Row + Star.Size - 1, star.Col + Star.Size - 1);
+			if (first && last)
+				t.Stars.Add(new SavedStar { Row = star.Row - row0, Col = star.Col - col0, Tier = star.Tier, Recipe = star.Recipe, OutputSide = star.OutputSide });
+			else if (first || last)
+				GD.PushWarning($"[NucleusLayer] шаблон: звезда в клетке ({star.Row},{star.Col}) выходит за границу — пропущена.");
+		}
+
+		return JsonSerializer.Serialize(t, FieldJsonOptions);
+	}
+
+	// Читает шаблон из файла (res:// или user://). null — ошибка в error.
+	private static FieldTemplate LoadTemplate(string path, out string error)
+	{
+		if (!FileAccess.FileExists(path))
+		{
+			error = $"файл шаблона {path} не найден.";
+			return null;
+		}
+		using var file = FileAccess.Open(path, FileAccess.ModeFlags.Read);
+		if (file == null)
+		{
+			error = $"не удалось открыть {path}: {FileAccess.GetOpenError()}.";
+			return null;
+		}
+		try
+		{
+			var t = JsonSerializer.Deserialize<FieldTemplate>(file.GetAsText(), FieldJsonOptions);
+			error = t == null ? $"пустой шаблон {path}." : null;
+			return t;
+		}
+		catch (System.Exception e)
+		{
+			error = $"шаблон {path}: {e.Message}";
+			return null;
+		}
+	}
+
+	// Ставит шаблон из файла левым верхним углом в чанк (cx, cy) поверх
+	// текущего поля. Занятые клетки и клетки закрытых чанков пропускаются —
+	// при расширении территории сначала открыть чанки, потом ставить шаблон.
+	public bool PlaceTemplate(string path, int cx, int cy, out string error)
+	{
+		var t = LoadTemplate(path, out error);
+		if (t == null) return false;
+		PlaceTemplate(t, cx, cy, path);
+		return true;
+	}
+
+	private void PlaceTemplate(FieldTemplate t, int cx, int cy, string name)
+	{
+		var data = new FieldSaveData
+		{
+			Nuclei = t.Nuclei ?? new List<SavedNucleus>(),
+			Sources = t.Sources ?? new List<SavedSource>(),
+			BlackHoleCells = t.BlackHoleCells ?? new List<SavedBlackHole>(),
+			Stars = t.Stars ?? new List<SavedStar>(),
+		};
+		ApplyFieldData(data, cy * ChunkSize, cx * ChunkSize, $"шаблон {name} ({t.WidthChunks}×{t.HeightChunks}) поставлен с чанка ({cx},{cy})");
+	}
+
+	// Новая игра (T009, GDD «Прогрессия → Старт»): поле очищается, настоящий
+	// режим, пустой инвентарь, открыты только стартовые 2×2 чанка, в них —
+	// шаблон стартовой зоны. Шаблон читается до очистки: нет файла — поле
+	// не тронуто, false и ошибка.
+	public bool NewGame(out string error)
+	{
+		var t = LoadTemplate(StartZoneTemplatePath, out error);
+		if (t == null)
+		{
+			GD.PrintErr($"[NucleusLayer] новая игра: {error}");
+			return false;
+		}
+		ClearFieldForImport();
+		Inventory.Sandbox = false;
+		Territory.Reset(Territory.StartChunks);
+		_templateCorner = null;
+		PlaceTemplate(t, StartZoneChunkX, StartZoneChunkY, StartZoneTemplatePath);
+		GD.Print("[NucleusLayer] новая игра: настоящий режим, открыты стартовые 2×2 чанка.");
 		return true;
 	}
 
@@ -3936,12 +4138,15 @@ public partial class NucleusLayer : Node2D
 		_entAt[(row, col)] = nucleus;
 		RebuildChunkMeshes(chunk);
 
-		// _globalTick только что сброшен в 0 (см. ClearFieldForImport) — то
-		// есть мы всегда ровно на фазовой границе (0 % что угодно == 0), так
-		// что "сна" (см. TryPlaceNucleus/AsleepUntilTick) при загрузке не
-		// бывает вообще — ядро активно немедленно.
-		nucleus.AsleepUntilTick = _globalTick;
-		_activeSet.Add(nucleus);
+		// При загрузке _globalTick только что сброшен в 0 (ClearFieldForImport) —
+		// атом активен сразу. Шаблон (T009) может ставиться посреди игры — тогда
+		// атом спит до фазы 0 своего тира, как при ручной установке.
+		long ownPeriod = (long)OwnRotationTicks(tier) * 8;
+		nucleus.AsleepUntilTick = (ownPeriod > 0 && _globalTick % ownPeriod != 0)
+			? ((_globalTick / ownPeriod) + 1) * ownPeriod
+			: _globalTick;
+		if (_globalTick >= nucleus.AsleepUntilTick) _activeSet.Add(nucleus);
+		else _sleepingSet.Add(nucleus);
 
 		return true;
 	}

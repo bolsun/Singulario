@@ -303,7 +303,8 @@ public partial class EnergyClusterLayer : TileMapLayer
 	// только перекатывается картинка (как и раньше), но частицы повторно НЕ
 	// начисляются и кластер не трогается — иначе повторный клик по той же
 	// клетке был бы бесконечным источником энергии.
-	public void PlaceClusterAt(int row, int col)
+	// amount — запас этой клетки (шаблоны, T009); null — InitialAmount.
+	public void PlaceClusterAt(int row, int col, long? amount = null)
 	{
 		var key = (row, col);
 
@@ -333,7 +334,7 @@ public partial class EnergyClusterLayer : TileMapLayer
 				"НЕ ПОСТАВЛЕН (в атласе нет такого куска — проверьте VariantCount/AtlasColumns и разметку в TileSet).");
 		}
 
-		if (!alreadyOurs) RegisterNewCell(key);
+		if (!alreadyOurs) RegisterNewCell(key, amount is > 0 ? amount.Value : InitialAmount);
 
 		// Добавление клетки (новой или через слияние кластеров) могло
 		// изменить процент остатка кластера — вырос знаменатель (MaxAmount)
@@ -353,7 +354,7 @@ public partial class EnergyClusterLayer : TileMapLayer
 	// единственному найденному, либо — если новая клетка оказалась мостиком
 	// между несколькими РАЗНЫМИ кластерами — сливает их все в один
 	// (small-to-large, см. комментарий у _clusterOf).
-	private void RegisterNewCell((int row, int col) key)
+	private void RegisterNewCell((int row, int col) key, long amount)
 	{
 		HashSet<ParticleCluster> neighborClusters = null;
 		foreach (var (dr, dc) in NeighborOffsets)
@@ -394,8 +395,8 @@ public partial class EnergyClusterLayer : TileMapLayer
 		}
 
 		survivor.Cells.Add(key);
-		survivor.Amount += InitialAmount;
-		survivor.MaxAmount += InitialAmount;
+		survivor.Amount += amount;
+		survivor.MaxAmount += amount;
 		_clusterOf[key] = survivor;
 	}
 
