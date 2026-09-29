@@ -377,6 +377,16 @@ public partial class NucleusLayer : Node2D
 	// (TerritoryLayer). Песочница открывает всю карту.
 	public Territory Territory { get; private set; }
 	private TerritoryLayer _territoryLayer;
+	private CrossroadLayer _crossroadLayer;
+
+	// Атомы в режиме перекрёстка (T010) — только для отрисовки колец
+	// (CrossroadLayer), на симуляцию порядок набора не влияет.
+	private readonly HashSet<NucleusEntity> _crossSet = new();
+	public int CrossroadCount => _crossSet.Count;
+	public IEnumerable<(Vector2 center, int tier)> Crossroads()
+	{
+		foreach (var n in _crossSet) yield return (EffectiveCenter(n), n.CoreTier);
+	}
 
 	public int ChunkOf(int cell) => Mathf.FloorToInt((float)cell / ChunkSize);
 	public bool IsChunkOpen(int cx, int cy) => Inventory.Sandbox || Territory.IsOpen(cx, cy);
@@ -847,6 +857,9 @@ public partial class NucleusLayer : Node2D
 		// создаётся из кода (в сцене его нет).
 		_territoryLayer = new TerritoryLayer { Name = "TerritoryLayer", Layer = this };
 		GetParent().CallDeferred(Node.MethodName.AddChild, _territoryLayer);
+		// Кольца перекрёстков (T010) — тоже из кода, поверх атомов.
+		_crossroadLayer = new CrossroadLayer { Name = "CrossroadLayer", Layer = this };
+		GetParent().CallDeferred(Node.MethodName.AddChild, _crossroadLayer);
 		_starLayer = GetNodeOrNull<StarLayer>("../StarLayer");
 
 		_ready = true;
@@ -1298,6 +1311,7 @@ public partial class NucleusLayer : Node2D
 		int holeCount = HoleCountOf(n);
 		n.Ring = BuildFixedRing(holeCount);
 		n.Cross = n.Cross == null ? new Crossroad(holeCount) : null;
+		if (n.Cross != null) _crossSet.Add(n); else _crossSet.Remove(n);
 		GD.Print($"[NucleusLayer] атом ({n.Row},{n.Col}): {(n.Cross != null ? "перекрёсток" : "обычный режим")}.{(refunded > 0 ? $" В инвентарь: {refunded}." : "")}");
 	}
 
@@ -1322,6 +1336,7 @@ public partial class NucleusLayer : Node2D
 		_movingSet.Remove(nucleus); // защитная подстраховка — сюда не должны попадать едущие/летящие, но лишней не будет
 		_sleepingSet.Remove(nucleus); // на случай удаления ещё не проснувшегося ядра (см. AsleepUntilTick)
 		_cargoSet.Remove(nucleus);
+		_crossSet.Remove(nucleus);
 
 		if (!_chunks.TryGetValue((cx, cy), out var chunk))
 		{
@@ -3295,12 +3310,40 @@ public partial class NucleusLayer : Node2D
 
 	// Перекрёсток (T010): дырок нет, 8 инстансов частиц атома — частицы в пути
 	// (ось 0 — инстансы 0..3, ось 1 — 4..7).
+	// Частица летит дугой над центром по кольцу своей оси (CrossroadLayer.RingPoint):
+	// у концов дуги — меньше и тусклее, у вершины (ближе к камере) — крупнее и ярче.
 	private void UpdateCrossroadVisuals(NucleusEntity n, Vector2 center, MultiMesh holeMM, MultiMesh particleMM)
 	{
 		for (int k = 0; k < 8; k++)
 		{
 			holeMM?.SetInstanceTransform2D(n.LocalIndex * 8 + k, HiddenTransform);
 			particleMM?.SetInstanceTransform2D(n.LocalIndex * 8 + k, HiddenTransform);
+		}
+		if (particleMM == null) return;
+
+		int ticks = n.CoreTier < TierTicks.Length ? TierTicks[n.CoreTier] : TierTicks[TierTicks.Length - 1];
+		float fraction = ticks > 0 && _globalTick >= n.AsleepUntilTick
+			? (RingMath.TicksIntoStep(_globalTick, ticks) + _subTickFraction) / ticks
+			: 0f;
+		for (int a = 0; a < 2; a++)
+		{
+			var axis = n.Cross.Axes[a];
+			for (int i = 0; i < axis.Count; i++)
+			{
+				var cp = axis.Items[i];
+				// Та же очередь, что в Crossroad.Step: едет, только если впереди свободно.
+				int limit = i == 0 ? Crossroad.ExitPos : axis.Items[i - 1].Pos - 1;
+				float u = (cp.Pos + (cp.Pos < limit ? fraction : 0f)) / Crossroad.ExitPos;
+				float phi = Mathf.Pi * (axis.Dir > 0 ? u : 1f - u);
+				float height = Mathf.Sin(phi);
+				var pos = center + CrossroadLayer.RingPoint(a, phi, _orbitRadius);
+				float scale = 0.75f + 0.45f * height;
+				int instanceIdx = n.LocalIndex * 8 + a * 4 + i;
+				particleMM.SetInstanceTransform2D(instanceIdx, new Transform2D(0f, new Vector2(scale, scale), 0f, pos));
+				float rowUv = (cp.ColorTier + 0.5f) / _tierCount;
+				float dim = 0.45f * (1f - height);
+				particleMM.SetInstanceCustomData(instanceIdx, new Color(rowUv, 0f, dim, cp.IsItem ? 1f : 0f));
+			}
 		}
 	}
 
@@ -3951,7 +3994,10 @@ public partial class NucleusLayer : Node2D
 				: PlaceNucleusForImport(sn.Row + dRow, sn.Col + dCol, sn.CoreTier, sn.Dir, sn.HoleCount);
 			if (ok && sn.Crossroad && !sn.Cargo
 				&& _entAt.TryGetValue((sn.Row + dRow, sn.Col + dCol), out var imported) && CanBeCrossroad(imported))
+			{
 				imported.Cross = new Crossroad(HoleCountOf(imported));
+				_crossSet.Add(imported);
+			}
 			if (ok) placed++;
 			else GD.PrintErr($"[NucleusLayer] импорт: клетка ({sn.Row + dRow},{sn.Col + dCol}) уже занята — ядро пропущено.");
 		}
@@ -4234,6 +4280,7 @@ public partial class NucleusLayer : Node2D
 		_movingSet.Clear();
 		_sleepingSet.Clear();
 		_cargoSet.Clear();
+		_crossSet.Clear();
 		_claimed.Clear();
 
 		foreach (var layer in _energyClusterLayers) layer.ClearAll();
