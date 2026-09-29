@@ -1,6 +1,7 @@
+using System.Collections.Generic;
 using Godot;
 
-// Порты чанков на слое 1 (T002): ввод (переключение режима) и отрисовка.
+// Порты чанков на слое 1 (T002, T004): ввод (переключение режима) и отрисовка.
 // Данные и правила — PortSet (NucleusLayer.Ports), обмен частицами с ядрами —
 // NucleusLayer.SimTick, шаг 2в. Этот узел ничего не симулирует.
 //
@@ -10,21 +11,27 @@ using Godot;
 // переключает. Узел стоит в сцене после NucleusLayer, поэтому получает
 // _UnhandledInput раньше него и «съедает» клик по порту.
 //
-// Вид: половина дырки порта — полукруг радиусом в одну клетку с центром на
-// середине стороны чанка (порт 2×2 = две половины двух соседних чанков), по
-// полукругу 8 точек — набранные частицы своего цвета; полный атом — ещё и
-// белое кольцо внутри. Обод — режим: закрыт (приглушённо) / выход / вход.
-// Та же функция (DrawPortHalf) рисует дырки блока на слое 2 в тех же мировых
-// координатах, поэтому при переключении зума картинка не меняется.
+// Видимость (T004, GDD «Видимость портов»): порты видны только у блоков
+// (NucleusLayer.IsBlock). У остальных чанков порты скрыты, но клетки
+// зарезервированы: нажатие на них или попытка поставить туда ядро/источник —
+// короткая красная подсветка клеток порта (FlashPort), режим не меняется.
+//
+// Вид: обычный — целая серая дырка того же спрайта, размера и прозрачности,
+// что дырка молекулы (DrawPortHole), в ней атом, если есть. При включённой
+// сетке (GridDraw.Shown) поверх — подробный вид (DrawPortDetail): половина
+// дырки радиусом в клетку с точками частиц, обод по режиму и контур двух
+// клеток порта. Те же функции рисуют порты блоков на слое 2 (MoleculeLayer) в
+// тех же мировых координатах, поэтому при переключении зума картинка не меняется.
 public partial class PortLayer : Node2D
 {
-	// Сколько чанков в кадре ещё рисуем с закрытыми портами (дальше — только открытые).
-	[Export] public int MaxChunksForClosedPorts = 400;
+	// Длительность подсветки «сюда нельзя» у клеток порта, секунд.
+	[Export] public float FlashSeconds = 0.4f;
 
 	public static readonly Color OutputColor = new Color(1f, 0.6f, 0.15f);
 	public static readonly Color InputColor = new Color(0.25f, 0.85f, 1f);
 	public static readonly Color ClosedColor = new Color(0.6f, 0.6f, 0.65f);
 	private static readonly Color HoleColor = new Color(0.04f, 0.04f, 0.07f);
+	private static readonly Color FlashColor = new Color(1f, 0.2f, 0.2f);
 
 	private NucleusLayer _nucleusLayer;
 	private MoleculeLayer _moleculeLayer;
@@ -32,6 +39,9 @@ public partial class PortLayer : Node2D
 	private int _chunkSize;
 	private int _chunkWorldSize;
 	private bool _ready;
+	// Подсвеченные порты: оставшееся время подсветки, секунд.
+	private readonly Dictionary<PortKey, float> _flash = new();
+	private readonly List<PortKey> _flashKeys = new();
 
 	public override void _Ready()
 	{
@@ -66,12 +76,24 @@ public partial class PortLayer : Node2D
 			GD.Print($"[PortLayer] чанк ({key.Cx},{key.Cy}) занят объектом слоя 2 (молекула или ЧД) — порт не открыть.");
 			return;
 		}
+		if (!_nucleusLayer.IsBlock(key.Cx, key.Cy))
+		{
+			FlashPort(key);
+			GD.Print($"[PortLayer] чанк ({key.Cx},{key.Cy}) не блок — порт скрыт, клетки порта зарезервированы.");
+			return;
+		}
 
 		int dropped = ports.Get(key).Atom.Count;
 		var mode = ports.CycleMode(key);
 		string drop = dropped > 0 ? $", сброшено частиц: {dropped}" : "";
 		GD.Print($"[PortLayer] порт чанка ({key.Cx},{key.Cy}) сторона {(PortSide)key.Side}: {ModeName(mode)}{drop}.");
 		QueueRedraw();
+	}
+
+	// Короткая подсветка клеток порта: сюда ничего не ставится.
+	public void FlashPort(PortKey key)
+	{
+		if (_ready) _flash[key] = FlashSeconds;
 	}
 
 	public static string ModeName(PortMode mode) => mode switch
@@ -84,6 +106,17 @@ public partial class PortLayer : Node2D
 	public override void _Process(double delta)
 	{
 		if (!_ready) return;
+		if (_flash.Count > 0)
+		{
+			_flashKeys.Clear();
+			_flashKeys.AddRange(_flash.Keys);
+			foreach (var key in _flashKeys)
+			{
+				float left = _flash[key] - (float)delta;
+				if (left <= 0f) _flash.Remove(key);
+				else _flash[key] = left;
+			}
+		}
 		Visible = !ViewLayer.IsLayer2;
 		if (Visible) QueueRedraw();
 	}
@@ -96,34 +129,68 @@ public partial class PortLayer : Node2D
 
 		var size = GetViewportRect().Size / cam.Zoom;
 		var topLeft = cam.GetScreenCenterPosition() - size / 2f;
-		int minCx = Mathf.FloorToInt(topLeft.X / _chunkWorldSize);
-		int maxCx = Mathf.FloorToInt((topLeft.X + size.X) / _chunkWorldSize);
-		int minCy = Mathf.FloorToInt(topLeft.Y / _chunkWorldSize);
-		int maxCy = Mathf.FloorToInt((topLeft.Y + size.Y) / _chunkWorldSize);
+		// Дырка порта выходит за чанк — запас в чанк вокруг кадра.
+		var view = new Rect2(topLeft, size).Grow(_chunkWorldSize);
 
 		var ports = _nucleusLayer.Ports;
-		var holes = _nucleusLayer.BlackHoles;
 		var colors = _nucleusLayer.TierPreviewColors;
-		long chunkCount = (long)(maxCx - minCx + 1) * (maxCy - minCy + 1);
+		var holeTex = _nucleusLayer.HoleTexture;
+		float holeSize = _nucleusLayer.HoleSpriteSize * _chunkSize;
+		float holeAlpha = _nucleusLayer.HoleOpacity;
+		bool detail = GridDraw.Shown;
 
-		if (chunkCount <= MaxChunksForClosedPorts)
+		foreach (var (cx, cy) in _nucleusLayer.EnumerateBlocks())
 		{
-			for (int cy = minCy; cy <= maxCy; cy++)
-				for (int cx = minCx; cx <= maxCx; cx++)
-				{
-					if (holes.Contains(cx, cy)) continue; // дырки ЧД рисует BlackHoleLayer
-					for (int side = 0; side < PortSet.SideCount; side++)
-					{
-						var key = new PortKey(cx, cy, side);
-						DrawPortHalf(this, PortCenter(key, _chunkWorldSize), _cellSize, side, ports.Get(key), colors, 1f);
-					}
-				}
+			if (!view.HasPoint(new Vector2((cx + 0.5f) * _chunkWorldSize, (cy + 0.5f) * _chunkWorldSize))) continue;
+			for (int side = 0; side < PortSet.SideCount; side++)
+			{
+				var key = new PortKey(cx, cy, side);
+				var state = ports.Get(key);
+				DrawPortHole(this, PortCenter(key, _chunkWorldSize), holeTex, holeSize, holeAlpha, state.Atom, colors);
+				if (detail) DrawPortDetail(this, ports, key, state, _cellSize, _chunkWorldSize, colors);
+			}
 		}
-		else
+
+		foreach (var pair in _flash)
+			DrawPortCells(this, ports, pair.Key, _cellSize, new Color(FlashColor, Mathf.Clamp(pair.Value / FlashSeconds, 0f, 1f)), filled: true);
+	}
+
+	// Обычный вид порта (T004): целая дырка молекулы — тот же спрайт, размер
+	// (HoleSpriteSize × ChunkSize) и прозрачность, центр — середина стороны
+	// чанка; атом в порту — значком, как в гнезде молекулы.
+	public static void DrawPortHole(CanvasItem ci, Vector2 center, Texture2D holeTex, float holeSize, float alpha, Atom atom, Color[] tierColors)
+	{
+		if (holeTex != null)
 		{
-			foreach (var pair in ports.Enumerate())
-				DrawPortHalf(this, PortCenter(pair.Key, _chunkWorldSize), _cellSize, pair.Key.Side, pair.Value, colors, 1f);
+			var half = new Vector2(holeSize, holeSize) / 2f;
+			ci.DrawTextureRect(holeTex, new Rect2(center - half, half * 2f), false, new Color(1f, 1f, 1f, alpha));
 		}
+		if (!atom.IsEmpty)
+			MoleculeLayer.DrawAtom(ci, center, holeSize * 0.3f, atom, tierColors);
+	}
+
+	// Подробный вид порта (только при сетке): контур двух клеток порта и
+	// половина дырки с точками частиц и ободом по режиму (DrawPortHalf).
+	public static void DrawPortDetail(CanvasItem ci, PortSet ports, PortKey key, PortState state, float cellSize, float chunkWorldSize, Color[] tierColors)
+	{
+		var rim = state.Mode switch { PortMode.Output => OutputColor, PortMode.Input => InputColor, _ => ClosedColor };
+		DrawPortCells(ci, ports, key, cellSize, new Color(rim, state.Mode == PortMode.Closed ? 0.45f : 0.9f), filled: false);
+		DrawPortHalf(ci, PortCenter(key, chunkWorldSize), cellSize, key.Side, state, tierColors, 1f);
+	}
+
+	// Две клетки порта: контур или заливка с контуром (подсветка «нельзя»).
+	public static void DrawPortCells(CanvasItem ci, PortSet ports, PortKey key, float cellSize, Color color, bool filled)
+	{
+		var (r0, c0) = ports.Cell(key, 0);
+		var (r1, c1) = ports.Cell(key, 1);
+		var rect = new Rect2(Mathf.Min(c0, c1) * cellSize, Mathf.Min(r0, r1) * cellSize,
+			(Mathf.Abs(c1 - c0) + 1) * cellSize, (Mathf.Abs(r1 - r0) + 1) * cellSize);
+		if (filled)
+		{
+			ci.DrawRect(rect, new Color(color, color.A * 0.35f));
+			ci.DrawRect(rect, color, false, cellSize * 0.06f);
+		}
+		else ci.DrawRect(rect, color, false, cellSize * 0.04f);
 	}
 
 	// Середина стороны чанка — центр дырки порта 2×2 (в мировых координатах).

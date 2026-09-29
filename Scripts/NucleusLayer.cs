@@ -672,6 +672,7 @@ public partial class NucleusLayer : Node2D
 	private BlackHoleLayer _blackHoleLayer;
 	// Слой 2 — только для правила занятости: в чанк с молекулой объекты слоя 1 не ставятся.
 	private MoleculeLayer _moleculeLayer;
+	private PortLayer _portLayer; // подсветка клетки порта при попытке поставить ядро (T004)
 	// Порядок гнёзд (симметричные раскладки 2/4/8) — см. RingMath.HolePriority.
 
 	public override void _Ready()
@@ -727,6 +728,7 @@ public partial class NucleusLayer : Node2D
 		_energyLayer = GetNodeOrNull<EnergyLayer>("../TileMapLayer");
 		_blackHoleLayer = GetNodeOrNull<BlackHoleLayer>("../BlackHoleLayer");
 		_moleculeLayer = GetNodeOrNull<MoleculeLayer>("../MoleculeLayer");
+		_portLayer = GetNodeOrNull<PortLayer>("../PortLayer");
 		foreach (var child in GetParent().GetChildren())
 			if (child is EnergyClusterLayer clusterLayer)
 				_energyClusterLayers.Add(clusterLayer);
@@ -2962,8 +2964,9 @@ public partial class NucleusLayer : Node2D
 			return;
 		}
 
-		if (Ports != null && Ports.IsPortCell(row, col))
+		if (Ports != null && Ports.TryGetPortAtCell(row, col, out var portKey))
 		{
+			_portLayer?.FlashPort(portKey);
 			GD.Print($"[NucleusLayer] клетка ({row},{col}) — порт чанка, ядро сюда не ставится.");
 			return;
 		}
