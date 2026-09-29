@@ -834,6 +834,16 @@ public partial class NucleusLayer : Node2D
 	// тем же направлением, а не молча вернулась к старому.
 	private void ToggleSpinDirectionUnderMouse()
 	{
+		// R над звездой (T006) — выход на следующую сторону по часовой.
+		var mouse = GetGlobalMousePosition();
+		if (Stars.TryGetAt(Mathf.FloorToInt(mouse.Y / CellSize), Mathf.FloorToInt(mouse.X / CellSize), out var star))
+		{
+			star.OutputSide = (star.OutputSide + 1) % Star.SideCount;
+			var (orow, ocol) = star.OutputCell;
+			GD.Print($"[NucleusLayer] выход звезды ({star.Row},{star.Col}) — клетка ({orow},{ocol}).");
+			return;
+		}
+
 		var nucleus = FindNucleusUnderMouse(out int row, out int col);
 		if (nucleus == null)
 		{
@@ -1421,6 +1431,10 @@ public partial class NucleusLayer : Node2D
 		// вообще когда-либо проснуться.
 		if (_sleepingSet.Count > 0) WakeSleepingNuclei();
 
+		// Производство звёзд (T006) — до раннего выхода: звезда с набранным
+		// рецептом работает и выкладывает атом, даже если рабочих атомов нет.
+		if (Stars.Count > 0) TickStars();
+
 		if (_activeSet.Count == 0) return;
 
 		// Шаг 0: прибытие уже едущих ядер (см. StartMove/FinishArrivedMoves) —
@@ -1772,6 +1786,22 @@ public partial class NucleusLayer : Node2D
 				_claimed.Add((n, p));
 				star.Put(need);
 			}
+		}
+	}
+
+	// Один тик производства всех звёзд (T006): полный буфер уходит в работу,
+	// работа длится StarDuration тиков, готовый атом кладётся грузом на клетку
+	// выхода. Клетка занята — атом ждёт внутри, звезда стоит (буфер при этом
+	// набирается), попытка — каждый тик.
+	private void TickStars()
+	{
+		foreach (var star in Stars.All)
+		{
+			if (!star.Advance(StarDuration(star))) continue;
+			var (row, col) = star.OutputCell;
+			var recipe = star.RecipeData;
+			if (!PlaceCargo(row, col, recipe.ResultTier, recipe.ResultHoles)) continue;
+			star.FinishOutput();
 		}
 	}
 
