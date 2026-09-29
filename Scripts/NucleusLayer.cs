@@ -357,6 +357,24 @@ public partial class NucleusLayer : Node2D
 			if (pair.Value.Nuclei.Count > 0) yield return pair.Key;
 	}
 
+	// Блок (T004, GDD «Порты и блоки») — чанк хотя бы с одним ядром игрока или
+	// открытым портом. Источники (месторождения) блоком не делают. Признака
+	// «дикое ядро» в коде нет (случайные ядра — только отладочный
+	// RandomFillEnabled), поэтому все ядра считаются ядрами игрока.
+	// Единственное место истины: видимость портов (PortLayer) и блоки слоя 2
+	// (MoleculeLayer). На симуляцию не влияет.
+	public bool IsBlock(int cx, int cy) =>
+		ChunkHasNuclei(cx, cy) || (Ports != null && Ports.HasOpenPort(cx, cy));
+
+	// Все блоки, каждый ровно один раз. Порядок — только для отрисовки.
+	public IEnumerable<(int cx, int cy)> EnumerateBlocks()
+	{
+		foreach (var chunk in EnumerateOccupiedChunks()) yield return chunk;
+		if (Ports == null) yield break;
+		foreach (var chunk in Ports.EnumerateOpenPortChunks())
+			if (!ChunkHasNuclei(chunk.cx, chunk.cy)) yield return chunk;
+	}
+
 	private struct RingSlot
 	{
 		public bool Exists;   // false — физического слота тут вообще нет (не рисуется ни дыркой,

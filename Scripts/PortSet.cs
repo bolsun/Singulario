@@ -114,15 +114,16 @@ public sealed class PortSet
 	// Порты, отличные от «закрыт и пуст», в детерминированном порядке.
 	public IEnumerable<KeyValuePair<PortKey, PortState>> Enumerate() => _ports;
 
-	// Блок слоя 2 — чанк хотя бы с одним открытым портом.
-	public bool IsBlock(int cx, int cy)
+	// Есть ли у чанка открытый порт. Это одна из двух причин, по которым чанк —
+	// блок; полное правило — NucleusLayer.IsBlock (T004).
+	public bool HasOpenPort(int cx, int cy)
 	{
 		for (int side = 0; side < SideCount; side++)
 			if (ModeOf(new PortKey(cx, cy, side)) != PortMode.Closed) return true;
 		return false;
 	}
 
-	public IEnumerable<(int cx, int cy)> EnumerateBlocks()
+	public IEnumerable<(int cx, int cy)> EnumerateOpenPortChunks()
 	{
 		(int cx, int cy)? last = null;
 		foreach (var pair in _ports)

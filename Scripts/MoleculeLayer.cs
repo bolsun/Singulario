@@ -376,12 +376,11 @@ public partial class MoleculeLayer : Node2D
 
 	// --- правило занятости ---
 
-	// Есть ли в чанке (cx, cy) что-то из слоя 1: ядра, источники, открытый
-	// порт (такой чанк — блок слоя 2).
+	// Есть ли в чанке (cx, cy) что-то из слоя 1: блок (ядра или открытый
+	// порт, NucleusLayer.IsBlock) или источники.
 	public bool ChunkHasLayer1Content(int cx, int cy)
 	{
-		if (_nucleusLayer.ChunkHasNuclei(cx, cy)) return true;
-		if (_nucleusLayer.Ports != null && _nucleusLayer.Ports.IsBlock(cx, cy)) return true;
+		if (_nucleusLayer.IsBlock(cx, cy)) return true;
 
 		int row0 = cy * _chunkSize;
 		int col0 = cx * _chunkSize;
@@ -912,7 +911,7 @@ public partial class MoleculeLayer : Node2D
 		_fills.Clear();
 		_blocks.Clear();
 		if (_nucleusLayer.Ports != null)
-			foreach (var chunk in _nucleusLayer.Ports.EnumerateBlocks()) _blocks.Add(chunk);
+			foreach (var chunk in _nucleusLayer.Ports.EnumerateOpenPortChunks()) _blocks.Add(chunk);
 
 		var nucleiColor = new Color(NucleiFillColor.R, NucleiFillColor.G, NucleiFillColor.B, FillAlpha);
 		foreach (var chunk in _nucleusLayer.EnumerateOccupiedChunks())
