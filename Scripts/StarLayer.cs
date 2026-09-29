@@ -77,6 +77,8 @@ public partial class StarLayer : Node2D
 			Texture = _texture,
 			Material = _nucleusLayer.PaletteMaterial,
 			TextureFilter = TextureFilterEnum.Nearest,
+			// Спрайты — под _Draw этого узла (рецепт, дуга, превью), а не поверх.
+			ShowBehindParent = true,
 		});
 		SetProcessUnhandledInput(true);
 		_ready = true;
@@ -205,8 +207,19 @@ public partial class StarLayer : Node2D
 	public override void _Draw()
 	{
 		if (!_ready || ViewLayer.IsLayer2) return;
-		foreach (var star in _stars.All) DrawStarInfo(star);
+		var hovered = StarUnderMouse();
+		foreach (var star in _stars.All) DrawStarInfo(star, star == hovered);
 		if (_toolTier.HasValue) DrawPreview();
+	}
+
+	// Звезда, над одной из 9 клеток которой или над клеткой выхода которой курсор.
+	private Star StarUnderMouse()
+	{
+		var (row, col) = CellUnderMouse();
+		if (_stars.TryGetAt(row, col, out var star)) return star;
+		foreach (var s in _stars.All)
+			if (s.OutputCell == (row, col)) return s;
+		return null;
 	}
 
 	private Color TierColor(int tier)
@@ -216,16 +229,12 @@ public partial class StarLayer : Node2D
 	}
 
 	// Рецепт (атом-результат в центре), прогресс работы (дуга), буфер (подписи
-	// «набрано/нужно» цветом ингредиента) и клетка выхода (рамка).
-	private void DrawStarInfo(Star star)
+	// «набрано/нужно» цветом ингредиента) и клетка выхода (рамка). Дуга — всегда
+	// (статус), остальное — только у звезды под курсором (hovered).
+	private void DrawStarInfo(Star star, bool hovered)
 	{
 		var center = new Vector2((star.Col + Star.Size / 2f) * _cellSize, (star.Row + Star.Size / 2f) * _cellSize);
 		var recipe = star.RecipeData;
-
-		float icon = _cellSize * 0.8f;
-		var core = _nucleusLayer.CoreTexture;
-		if (core != null)
-			DrawTextureRect(core, new Rect2(center - new Vector2(icon, icon) / 2f, new Vector2(icon, icon)), false, TierColor(recipe.ResultTier));
 
 		if (star.Producing)
 		{
@@ -234,6 +243,12 @@ public partial class StarLayer : Node2D
 			var arcColor = t >= 1f ? new Color(1f, 0.35f, 0.3f, 0.9f) : new Color(1f, 1f, 1f, 0.85f); // красная — готово, выход занят
 			DrawArc(center, _cellSize * 0.6f, -Mathf.Pi / 2f, -Mathf.Pi / 2f + Mathf.Tau * t, 32, arcColor, _cellSize * 0.08f);
 		}
+		if (!hovered) return;
+
+		float icon = _cellSize * 0.8f;
+		var core = _nucleusLayer.CoreTexture;
+		if (core != null)
+			DrawTextureRect(core, new Rect2(center - new Vector2(icon, icon) / 2f, new Vector2(icon, icon)), false, TierColor(recipe.ResultTier));
 
 		var font = ThemeDB.FallbackFont;
 		int fontSize = Mathf.Max(6, Mathf.RoundToInt(_cellSize * 0.3f));
