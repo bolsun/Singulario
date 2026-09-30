@@ -400,6 +400,38 @@ public partial class NucleusLayer : Node2D
 		return added;
 	}
 
+	// Задания ЧД (T011): цепочка этапов из GoalsPath (данные — GoalChain),
+	// награды — здесь (CompleteGoalStage). Цепочка идёт только в игре с
+	// ограниченной территорией (после «Новой игры»); при открытой всей карте
+	// (запуск, старые сохранения) — стоит.
+	[Export] public string GoalsPath = "res://Data/goals.json";
+	public GoalChain Goals { get; private set; }
+	public bool GoalsActive => Goals != null && !Territory.AllOpen;
+
+	// Цепочка из файла; ошибка — пустая цепочка (заданий нет) и сообщение.
+	private GoalChain LoadGoals()
+	{
+		GoalChainData data = null;
+		string error;
+		if (!FileAccess.FileExists(GoalsPath)) error = $"файл {GoalsPath} не найден.";
+		else
+		{
+			using var file = FileAccess.Open(GoalsPath, FileAccess.ModeFlags.Read);
+			if (file == null) error = $"не удалось открыть {GoalsPath}: {FileAccess.GetOpenError()}.";
+			else data = GoalChainData.Parse(file.GetAsText(), out error);
+		}
+		if (data == null)
+		{
+			GD.PrintErr($"[NucleusLayer] задания: {error} Заданий нет.");
+			return new GoalChain(null);
+		}
+		foreach (var st in data.Stages)
+			foreach (var id in st.Reward.Recipes)
+				if (StarRecipes.IndexOf(id) < 0) GD.PushWarning($"[NucleusLayer] задания: этап «{st.Name}» открывает неизвестный рецепт «{id}».");
+		GD.Print($"[NucleusLayer] задания: {data.Stages.Count} этап(ов) из {GoalsPath}, seed {data.Seed}.");
+		return new GoalChain(data);
+	}
+
 	// Клетка в закрытом чанке — красная вспышка чанка, true. Для отказов ввода.
 	public bool DenyIfClosed(int row, int col)
 	{
@@ -853,6 +885,10 @@ public partial class NucleusLayer : Node2D
 		Stars = new StarSet();
 		Inventory = new Inventory { Sandbox = SandboxMode };
 		Territory = new Territory();
+		// Запуск — песочное поле (вся карта открыта): все рецепты открыты, цепочка стоит.
+		Goals = LoadGoals();
+		Goals.OpenAllRecipes();
+		Goals.BeginStage(0, BlackHoles);
 		// Затемнение закрытых чанков — отдельный узел поверх объектов слоя 1,
 		// создаётся из кода (в сцене его нет).
 		_territoryLayer = new TerritoryLayer { Name = "TerritoryLayer", Layer = this };

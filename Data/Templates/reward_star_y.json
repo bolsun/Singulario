@@ -1,0 +1,70 @@
+{
+  "WidthChunks": 1,
+  "HeightChunks": 1,
+  "Nuclei": [
+    {
+      "Row": 12,
+      "Col": 4,
+      "CoreTier": 0,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": true
+    },
+    {
+      "Row": 12,
+      "Col": 7,
+      "CoreTier": 0,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": true
+    },
+    {
+      "Row": 12,
+      "Col": 10,
+      "CoreTier": 0,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": true
+    }
+  ],
+  "Sources": [
+    {
+      "Tier": 0,
+      "Row": 6,
+      "Col": 3,
+      "Amount": 500
+    },
+    {
+      "Tier": 0,
+      "Row": 6,
+      "Col": 4,
+      "Amount": 500
+    },
+    {
+      "Tier": 0,
+      "Row": 7,
+      "Col": 3,
+      "Amount": 500
+    },
+    {
+      "Tier": 0,
+      "Row": 7,
+      "Col": 4,
+      "Amount": 500
+    }
+  ],
+  "BlackHoleCells": [],
+  "Stars": [
+    {
+      "Row": 6,
+      "Col": 6,
+      "Tier": 0,
+      "Recipe": 0,
+      "OutputSide": 2,
+      "Buffer": [],
+      "Producing": false,
+      "Elapsed": 0,
+      "Output": []
+    }
+  ]
+}
