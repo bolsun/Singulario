@@ -14,7 +14,7 @@ using System.Collections.Generic;
 // Облака → Дымка → Мрамор → Пыль → Выкл. При переключении на LabelSeconds
 // показывается название варианта. F5 (T016c) — режим света «Дизеринг» ↔
 // «Мягкий свет» для фона и свечения (T020), независимо от F4, тоже с надписью.
-// F8 (T020) — свечение вкл/выкл. «Выкл» у F4 гасит только туманность.
+// L (T020) — свечение вкл/выкл (F8 в редакторе Godot — «Остановить проект»). «Выкл» у F4 гасит только туманность.
 public partial class NebulaBackground : CanvasLayer
 {
 	private const string ShaderPath = "res://Resources/Shaders/nebula_background.gdshader";
@@ -127,7 +127,7 @@ public partial class NebulaBackground : CanvasLayer
 			SoftLight = !SoftLight;
 			ShowLabel(string.Format(Tr("Свет: {0}"), Tr(SoftLight ? "Мягкий свет" : "Дизеринг")));
 		}
-		else if (key.Keycode == Key.F8)
+		else if (key.Keycode == Key.L)
 		{
 			_glow.Enabled = !_glow.Enabled;
 			ShowLabel(string.Format(Tr("Свечение: {0}"), Tr(_glow.Enabled ? "Вкл" : "Выкл")));
