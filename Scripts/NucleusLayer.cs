@@ -4278,7 +4278,7 @@ public partial class NucleusLayer : Node2D
 	private void RecountCompositionSourcesIfNeeded()
 	{
 		int version = 0;
-		foreach (var layer in _energyClusterLayers) version += layer.Version;
+		foreach (var layer in _energyClusterLayers) version += layer.CellsVersion;
 		if (version == _compSourceVersion) return;
 		_compSourceVersion = version;
 		Composition.ClearSources();

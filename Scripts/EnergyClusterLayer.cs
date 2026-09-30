@@ -217,6 +217,9 @@ public partial class EnergyClusterLayer : TileMapLayer
 	// Счётчик изменений клеток (установка/стирание; исчерпание не считается) —
 	// NucleusLayer пересчитывает атомы рядом с месторождениями (T014).
 	public int Version { get; private set; }
+	// Любое изменение набора клеток, включая исчерпание (T015, состав чанков для
+	// туманностей). Отдельно от Version: симуляция по нему не пересчитывается.
+	public int CellsVersion { get; private set; }
 
 	public bool HasClusterAt(int row, int col) => _clusterOf.ContainsKey((row, col));
 	// Выбран ли инструмент установки этого тира (для подсветки запрета, см. MoleculeLayer).
@@ -311,6 +314,7 @@ public partial class EnergyClusterLayer : TileMapLayer
 	public void PlaceClusterAt(int row, int col, long? amount = null)
 	{
 		Version++;
+		CellsVersion++;
 		var key = (row, col);
 
 		// Клетка может нести частицы только одного тира одновременно (см.
@@ -497,7 +501,7 @@ public partial class EnergyClusterLayer : TileMapLayer
 	// с поля.
 	private void RemoveCluster(ParticleCluster cluster)
 	{
-		Version++; // исчерпание меняет набор клеток, как и удаление
+		CellsVersion++; // исчерпание меняет набор клеток (Version не трогаем — это кандидаты захвата)
 		foreach (var cellKey in cluster.Cells)
 		{
 			EraseCell(new Vector2I(cellKey.col, cellKey.row));
@@ -518,6 +522,7 @@ public partial class EnergyClusterLayer : TileMapLayer
 	public void EraseClusterAt(int row, int col)
 	{
 		Version++;
+		CellsVersion++;
 		var key = (row, col);
 		if (!_variantAt.Remove(key))
 		{
