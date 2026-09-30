@@ -4,6 +4,7 @@ using Godot;
 // прогресса под строкой инвентаря. Данные — NucleusLayer.Goals, счётчики —
 // NucleusLayer.BlackHoles. Создаётся FpsLabel (в сцене узла нет).
 // При смене этапа строка коротко вспыхивает (FlashSeconds).
+// Строка собирается каждый кадр из ключей перевода (Tr, T013), автоперевод Label выключен.
 public partial class GoalLabel : VBoxContainer
 {
 	[Export] public float FlashSeconds = 0.8f;
@@ -25,7 +26,7 @@ public partial class GoalLabel : VBoxContainer
 		MouseFilter = MouseFilterEnum.Ignore;
 		Alignment = AlignmentMode.Center;
 
-		_label = new Label { HorizontalAlignment = HorizontalAlignment.Center, MouseFilter = MouseFilterEnum.Ignore };
+		_label = new Label { HorizontalAlignment = HorizontalAlignment.Center, MouseFilter = MouseFilterEnum.Ignore, AutoTranslateMode = AutoTranslateModeEnum.Disabled };
 		_label.AddThemeColorOverride("font_color", Colors.White);
 		_label.AddThemeColorOverride("font_outline_color", Colors.Black);
 		_label.AddThemeConstantOverride("outline_size", 4);
@@ -63,20 +64,20 @@ public partial class GoalLabel : VBoxContainer
 
 		if (!_nucleusLayer.GoalsActive)
 		{
-			_label.Text = "Заданий нет: вся карта открыта (Новая игра — начать цепочку)";
+			_label.Text = Tr("Заданий нет: вся карта открыта (Esc → Новая игра — начать цепочку)");
 			_bar.Visible = false;
 			return;
 		}
 		if (goals.AllDone)
 		{
-			_label.Text = goals.StageCount > 0 ? "Все задания выполнены" : "Заданий нет";
+			_label.Text = Tr(goals.StageCount > 0 ? "Все задания выполнены" : "Заданий нет");
 			_bar.Visible = false;
 			return;
 		}
 
 		var stage = goals.Current;
 		_sb.Clear();
-		_sb.Append("Задание ").Append(goals.Stage + 1).Append('/').Append(goals.StageCount).Append(':');
+		_sb.Append(string.Format(Tr("Задание {0}/{1}:"), goals.Stage + 1, goals.StageCount));
 		long done = 0, need = 0;
 		for (int i = 0; i < stage.Requirements.Count; i++)
 		{
@@ -92,10 +93,10 @@ public partial class GoalLabel : VBoxContainer
 		_bar.Value = done;
 	}
 
-	private static string RequirementName(GoalRequirement req)
+	private string RequirementName(GoalRequirement req)
 	{
 		if (req.Kind == GoalKind.Particle)
-			return "частицы " + (req.Id >= 0 && req.Id < ColorNames.Length ? ColorNames[req.Id] : "#" + req.Id);
-		return "атомы " + (req.Id >= 0 && req.Id < TierNames.Length ? TierNames[req.Id] : "#" + req.Id);
+			return string.Format(Tr("частицы {0}"), req.Id >= 0 && req.Id < ColorNames.Length ? Tr(ColorNames[req.Id]) : "#" + req.Id);
+		return string.Format(Tr("атомы {0}"), req.Id >= 0 && req.Id < TierNames.Length ? Tr(TierNames[req.Id]) : "#" + req.Id);
 	}
 }

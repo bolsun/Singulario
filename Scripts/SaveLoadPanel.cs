@@ -163,7 +163,7 @@ public partial class SaveLoadPanel : Control
 			GD.PrintErr($"[SaveLoadPanel] импорт не удался: {error}");
 			// Открываем диалог заново с сообщением об ошибке, не теряя введённый
 			// пользователем текст — проще поправить и повторить.
-			_statusLabel.Text = $"Ошибка импорта: {error}";
+			_statusLabel.Text = Tr("Ошибка импорта:") + " " + error;
 			_dialog.PopupCentered();
 			return;
 		}

@@ -1,6 +1,6 @@
 # Singulario — английский перевод интерфейса (T013).
 # Ключ (msgid) — русская строка, как она написана в коде; русский язык перевода
-# не требует. Строки с {0}, {1} — шаблоны string.Format.
+# не требует. Строки с {0}, {1} — шаблоны string.Format. Логи (GD.Print) не переводятся.
 msgid ""
 msgstr ""
 "Language: en\n"
@@ -8,3 +8,205 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
+# --- Меню (GameMenu) ---
+msgid "Продолжить"
+msgstr "Continue"
+
+msgid "Новая игра"
+msgstr "New game"
+
+msgid "Язык"
+msgstr "Language"
+
+msgid "Полный экран"
+msgstr "Fullscreen"
+
+msgid "Громкость звука"
+msgstr "Sound volume"
+
+msgid "Громкость музыки"
+msgstr "Music volume"
+
+msgid "Автосохранение, мин"
+msgstr "Autosave, min"
+
+msgid "Выйти из игры"
+msgstr "Quit game"
+
+msgid "Начать новую игру? Текущая игра будет потеряна."
+msgstr "Start a new game? The current game will be lost."
+
+msgid "Выйти из игры? Игра будет сохранена."
+msgstr "Quit the game? Your game will be saved."
+
+msgid "Да"
+msgstr "Yes"
+
+msgid "Отмена"
+msgstr "Cancel"
+
+msgid "Ошибка:"
+msgstr "Error:"
+
+msgid "Сохранение не загружено"
+msgstr "Save not loaded"
+
+msgid "Новая игра не начата"
+msgstr "New game not started"
+
+# --- Подсказки управления (GameMenu, HintLabel) ---
+msgid "W, A, S, D — перемещение камеры"
+msgstr "W, A, S, D — move camera"
+
+msgid "Колесо мыши — масштаб"
+msgstr "Mouse wheel — zoom"
+
+msgid "G — сетка"
+msgstr "G — grid"
+
+msgid "ЛКМ — поставить, ПКМ — убрать"
+msgstr "LMB — place, RMB — remove"
+
+msgid "Q — взять атом под курсором как образец"
+msgstr "Q — pick the atom under the cursor as a template"
+
+msgid "R — направление вращения атома, выход звезды"
+msgstr "R — atom spin direction, star output side"
+
+msgid "ЛКМ по атому — перекрёсток"
+msgstr "LMB on an atom — crossroad"
+
+msgid "Ctrl / Shift + ЛКМ по звезде — забрать в инвентарь"
+msgstr "Ctrl / Shift + LMB on a star — take to inventory"
+
+msgid "H — скрыть дырки"
+msgstr "H — hide holes"
+
+msgid "M — песочница / настоящий режим"
+msgstr "M — sandbox / real mode"
+
+msgid "Пробел — пауза, Esc — меню"
+msgstr "Space — pause, Esc — menu"
+
+# --- Экспорт / Импорт (SaveLoadPanel) ---
+msgid "Экспорт"
+msgstr "Export"
+
+msgid "Импорт"
+msgstr "Import"
+
+msgid "Поле — JSON"
+msgstr "Field — JSON"
+
+msgid "Экспорт поля — скопируйте строку ниже"
+msgstr "Field export — copy the text below"
+
+msgid "Поле сохранено в JSON. Выделите текст (Ctrl+A) и скопируйте (Ctrl+C)."
+msgstr "The field is saved as JSON. Select the text (Ctrl+A) and copy it (Ctrl+C)."
+
+msgid "Импорт поля — вставьте JSON и нажмите OK"
+msgstr "Field import — paste JSON and press OK"
+
+msgid "Подставлена последняя сохранённая строка — при необходимости замените своей, затем нажмите OK."
+msgstr "The last saved text is filled in — replace it with your own if needed, then press OK."
+
+msgid "Ошибка импорта:"
+msgstr "Import error:"
+
+# --- Тиры и цвета (HUD, панель) ---
+msgid "Ж"
+msgstr "Y"
+
+msgid "К"
+msgstr "R"
+
+msgid "С"
+msgstr "B"
+
+msgid "Сер"
+msgstr "Gr"
+
+msgid "Пов"
+msgstr "Rot"
+
+msgid "Бр"
+msgstr "Thr"
+
+msgid "Э"
+msgstr "E"
+
+msgid "Ч"
+msgstr "P"
+
+msgid "ЧД"
+msgstr "BH"
+
+# --- Инвентарь (InventoryLabel) ---
+msgid "Инвентарь:"
+msgstr "Inventory:"
+
+msgid "Песочница"
+msgstr "Sandbox"
+
+msgid "Настоящий режим"
+msgstr "Real mode"
+
+# --- Задания ЧД (GoalLabel) ---
+msgid "Заданий нет: вся карта открыта (Esc → Новая игра — начать цепочку)"
+msgstr "No tasks: the whole map is open (Esc → New game to start the chain)"
+
+msgid "Все задания выполнены"
+msgstr "All tasks completed"
+
+msgid "Заданий нет"
+msgstr "No tasks"
+
+msgid "Задание {0}/{1}:"
+msgstr "Task {0}/{1}:"
+
+msgid "частицы {0}"
+msgstr "particles {0}"
+
+msgid "атомы {0}"
+msgstr "atoms {0}"
+
+msgid "серые"
+msgstr "gray"
+
+msgid "вращатели"
+msgstr "rotators"
+
+msgid "бросатели"
+msgstr "throwers"
+
+# --- Поле ---
+msgid "Кластер ({0}): частиц {1}, клеток {2}"
+msgstr "Cluster ({0}): {1} particles, {2} cells"
+
+msgid "в буфере: {0} / {1}"
+msgstr "in buffer: {0} / {1}"
+
+# --- Отладочная панель (FpsLabel) ---
+msgid "Атомы:"
+msgstr "Atoms:"
+
+msgid "Слой"
+msgstr "Layer"
+
+msgid "Порты: упак."
+msgstr "Ports: packed"
+
+msgid "атомов"
+msgstr "atoms"
+
+msgid "распак."
+msgstr "unpacked"
+
+msgid "выдано"
+msgstr "emitted"
+
+msgid "сброшено"
+msgstr "dropped"
+
+msgid "частиц"
+msgstr "particles"

@@ -4,7 +4,8 @@ using Godot;
 // камеры» и «G — сетка». Часть исчезает, когда игрок её выполнил: подвинул
 // камеру WASD (CameraController.PannedByPlayer) или переключил сетку
 // (GridDraw.Shown). Состояние — NucleusLayer.Hints (сохраняется с игрой).
-// Строки — через Tr(): ключ — сама русская строка, перевод добавит T013.
+// Строки — ключи перевода (русская строка), Label переводит их сам и при смене
+// языка (T013).
 // Создаётся FpsLabel (в сцене узла нет).
 public partial class HintLabel : VBoxContainer
 {
@@ -22,8 +23,8 @@ public partial class HintLabel : VBoxContainer
 		MouseFilter = MouseFilterEnum.Ignore;
 		Alignment = AlignmentMode.End;
 
-		_cameraLine = MakeLine(Tr("W, A, S, D — перемещение камеры"));
-		_gridLine = MakeLine(Tr("G — сетка"));
+		_cameraLine = MakeLine("W, A, S, D — перемещение камеры");
+		_gridLine = MakeLine("G — сетка");
 
 		SetAnchorsAndOffsetsPreset(LayoutPreset.CenterBottom, LayoutPresetMode.KeepSize);
 		GrowHorizontal = GrowDirection.Both;
