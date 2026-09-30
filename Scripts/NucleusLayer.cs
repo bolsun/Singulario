@@ -672,6 +672,8 @@ public partial class NucleusLayer : Node2D
 		// Работа по событиям (T014): место в _byTier, отметки «изменился» и
 		// «в очереди прохода A/B», флаг «в _activeSet», «рядом с источником».
 		public int TierIndex = -1;
+		public long OrderKey;
+		public long ClaimEpoch; public int ClaimMask; // занятые на тике стороны (IsClaimed/Claim) // CanonicalOrder без Id: чанк и клетка в чанке (UpdateOrderKey)
 		public long ChangedEpoch = -1, PassStampA = -1, PassStampB = -1;
 		public bool IsActiveSim;
 		public bool NearSource;
@@ -854,7 +856,7 @@ public partial class NucleusLayer : Node2D
 
 	public NucleusLayer()
 	{
-		_canonical = new CanonicalOrder(this);
+		_canonical = new CanonicalOrder();
 		_activeSet = new SortedSet<NucleusEntity>(_canonical);
 		_spinners = new SortedSet<NucleusEntity>(_canonical);
 		_captureCandidates = new SortedSet<NucleusEntity>(_canonical);
@@ -864,25 +866,24 @@ public partial class NucleusLayer : Node2D
 	// Фиксированный порядок обхода атомов (T014): чанк (cy, cx), клетка (row, col), Id.
 	private sealed class CanonicalOrder : IComparer<NucleusEntity>
 	{
-		private readonly NucleusLayer _layer;
-		public CanonicalOrder(NucleusLayer layer) { _layer = layer; }
-
 		public int Compare(NucleusEntity a, NucleusEntity b)
 		{
-			if (ReferenceEquals(a, b)) return 0;
-			int cs = _layer.ChunkSize;
-			int c = FloorDiv(a.Row, cs).CompareTo(FloorDiv(b.Row, cs));
-			if (c != 0) return c;
-			c = FloorDiv(a.Col, cs).CompareTo(FloorDiv(b.Col, cs));
-			if (c != 0) return c;
-			c = a.Row.CompareTo(b.Row);
-			if (c != 0) return c;
-			c = a.Col.CompareTo(b.Col);
-			if (c != 0) return c;
-			return a.Id.CompareTo(b.Id);
+			int c = a.OrderKey.CompareTo(b.OrderKey);
+			return c != 0 ? c : a.Id.CompareTo(b.Id);
 		}
 
-		private static int FloorDiv(int v, int d) => v >= 0 ? v / d : (v - d + 1) / d;
+		public static int FloorDiv(int v, int d) => v >= 0 ? v / d : (v - d + 1) / d;
+	}
+
+	// Ключ порядка (T014): (cy, cx, строка в чанке, столбец в чанке) в одном long —
+	// сравнение дешевле, чем пересчёт чанка на каждом сравнении. Пересчитывается
+	// при создании (RegisterEntity) и смене клетки (SetEntityCell).
+	private void UpdateOrderKey(NucleusEntity n)
+	{
+		int cs = ChunkSize;
+		int cy = CanonicalOrder.FloorDiv(n.Row, cs), cx = CanonicalOrder.FloorDiv(n.Col, cs);
+		n.OrderKey = ((long)(cy + 0x8000) << 48) | ((long)(cx + 0x8000) << 32)
+			| ((long)(n.Row - cy * cs) << 16) | (long)(n.Col - cx * cs);
 	}
 
 	// Порядок по номеру создания — для наборов, где клетка не ключ (в пути, спящие, груз).
@@ -903,6 +904,7 @@ public partial class NucleusLayer : Node2D
 		int oldCx = ChunkOf(n.Col), oldCy = ChunkOf(n.Row);
 		n.Row = row;
 		n.Col = col;
+		UpdateOrderKey(n);
 		n.Center = new Vector2(col * CellSize + CellSize / 2f, row * CellSize + CellSize / 2f);
 		if (active) _activeSet.Add(n);
 
@@ -964,6 +966,7 @@ public partial class NucleusLayer : Node2D
 
 	private readonly PriorityQueue<NucleusEntity, NucleusEntity> _passQueue;
 	private readonly List<NucleusEntity> _passBList = new();
+	private readonly List<NucleusEntity> _passSorted = new(); // основа прохода, отсортирована; добавленные по ходу — в _passQueue
 	private int _passPhase; // 0 — не в проходе, 1 — проход A, 2 — проход B
 	private NucleusEntity _passCur;
 	private long _passSerial, _serialA, _serialB;
@@ -977,6 +980,7 @@ public partial class NucleusLayer : Node2D
 	// Новый атом в поле (любой: рабочий, спящий, груз) — вызывается один раз при создании.
 	private void RegisterEntity(NucleusEntity n)
 	{
+		UpdateOrderKey(n);
 		var list = TierList(n.CoreTier);
 		n.TierIndex = list.Count;
 		list.Add(n);
@@ -1048,7 +1052,8 @@ public partial class NucleusLayer : Node2D
 		if (_passPhase == 1 && after && y.PassStampA != _serialA)
 		{
 			y.PassStampA = _serialA;
-			_passQueue.Enqueue(y, y);
+			if (_passCur == null) _passSorted.Add(y); // сбор основы прохода A
+			else _passQueue.Enqueue(y, y);
 		}
 	}
 
@@ -1060,29 +1065,45 @@ public partial class NucleusLayer : Node2D
 		_serialA = ++_passSerial;
 		_serialB = ++_passSerial;
 		_passBList.Clear();
+		_passSorted.Clear();
 		_passQueue.Clear();
 		_passCur = null;
 		_passPhase = 1;
 		foreach (var x in _changedPrev) AddToPassWithNeighbors(x);
 		foreach (var m in _movingSet) AddToPass(m);
 		foreach (var m in _detachedSet) AddToPass(m);
-
-		while (_passQueue.TryDequeue(out var n, out _))
-		{
-			_passCur = n;
-			if (TakesPartInPasses(n)) PullPass(n);
-		}
+		_passSorted.Sort(_canonical);
+		RunPass(pull: true);
 
 		_passPhase = 2;
 		_passCur = null;
-		foreach (var y in _passBList) _passQueue.Enqueue(y, y);
-		while (_passQueue.TryDequeue(out var n, out _))
-		{
-			_passCur = n;
-			if (TakesPartInPasses(n)) PushPass(n);
-		}
+		_passSorted.Clear();
+		_passSorted.AddRange(_passBList);
+		_passSorted.Sort(_canonical);
+		RunPass(pull: false);
 		_passPhase = 0;
 		_passCur = null;
+	}
+
+	// Обход прохода в порядке CanonicalOrder: слияние отсортированной основы
+	// (_passSorted) и атомов, добавленных по ходу (_passQueue, все — дальше текущего).
+	private void RunPass(bool pull)
+	{
+		int i = 0;
+		while (true)
+		{
+			NucleusEntity n;
+			bool fromList = i < _passSorted.Count;
+			if (_passQueue.TryPeek(out var head, out _))
+				n = fromList && _canonical.Compare(_passSorted[i], head) < 0 ? _passSorted[i++] : _passQueue.Dequeue();
+			else if (fromList)
+				n = _passSorted[i++];
+			else
+				break;
+			_passCur = n;
+			if (!TakesPartInPasses(n)) continue;
+			if (pull) PullPass(n); else PushPass(n);
+		}
 	}
 
 	// Начало передачи на тике: изменения «с прошлой передачи» уходят в _changedPrev.
@@ -1175,7 +1196,15 @@ public partial class NucleusLayer : Node2D
 	// Глобальные часы симуляции — независимы от FPS, шаг ровно PrototypeTickMs.
 	private double _tickAccumulatorMs;
 	private long _globalTick;
-	private readonly HashSet<(NucleusEntity ent, int slot)> _claimed = new();
+	// «Занятые» на этом тике стороны атомов (было HashSet<(атом, слот)>, T014 —
+	// отметка у самого атома): эпоха + маска бит, ключ — SideKey (0..7 слот, 8..11 сторона перекрёстка).
+	private long _claimEpoch = 1;
+	private bool IsClaimed(NucleusEntity n, int key) => n.ClaimEpoch == _claimEpoch && (n.ClaimMask & (1 << key)) != 0;
+	private void Claim(NucleusEntity n, int key)
+	{
+		if (n.ClaimEpoch != _claimEpoch) { n.ClaimEpoch = _claimEpoch; n.ClaimMask = 0; }
+		n.ClaimMask |= 1 << key;
+	}
 
 	// --- пауза по пробелу (см. _Input/_Process/TryPlaceAtMouseIfSelected) ---
 	// _paused=true — SimTick/_globalTick полностью заморожены (см. цикл в
@@ -2274,7 +2303,7 @@ public partial class NucleusLayer : Node2D
 		// "толкает" в ту же дырку). Проход A — PullPass, проход B — PushPass.
 		// По событиям (T014) — только изменившиеся атомы и соседи (RunEventPasses),
 		// в отладке — все рабочие атомы в том же порядке.
-		_claimed.Clear();
+		_claimEpoch++;
 		BeginChangeEpoch();
 		if (FullScanDebug)
 		{
@@ -2346,7 +2375,7 @@ public partial class NucleusLayer : Node2D
 			int k = OrthogonalSlots[idx];
 			if (!CanReceive(n, k)) continue;
 			int p = SideKey(n, k);
-			if (_claimed.Contains((n, p))) continue;
+			if (IsClaimed(n, p)) continue;
 
 			var (dr, dc) = Adj8[k];
 			if (!_entAt.TryGetValue((n.Row + dr, n.Col + dc), out var neighbor)) continue;
@@ -2355,13 +2384,13 @@ public partial class NucleusLayer : Node2D
 			int k2 = Opposite(k);
 			if (!TryPeekGive(neighbor, k2, out var giverSlot)) continue;
 			int p2 = SideKey(neighbor, k2);
-			if (_claimed.Contains((neighbor, p2))) continue;
+			if (IsClaimed(neighbor, p2)) continue;
 			if (!TransferAllowed(receiver: n, giver: neighbor, giverSlot)) continue;
 
 			PutReceived(n, k, giverSlot);
 			TakeGiven(neighbor, k2);
-			_claimed.Add((n, p));
-			_claimed.Add((neighbor, p2));
+			Claim(n, p);
+			Claim(neighbor, p2);
 		}
 	}
 
@@ -2374,7 +2403,7 @@ public partial class NucleusLayer : Node2D
 			int k = OrthogonalSlots[idx];
 			if (!TryPeekGive(n, k, out var giverSlot)) continue;
 			int p = SideKey(n, k);
-			if (_claimed.Contains((n, p))) continue;
+			if (IsClaimed(n, p)) continue;
 
 			var (dr, dc) = Adj8[k];
 			if (!_entAt.TryGetValue((n.Row + dr, n.Col + dc), out var neighbor)) continue;
@@ -2383,13 +2412,13 @@ public partial class NucleusLayer : Node2D
 			int k2 = Opposite(k);
 			if (!CanReceive(neighbor, k2)) continue;
 			int p2 = SideKey(neighbor, k2);
-			if (_claimed.Contains((neighbor, p2))) continue;
+			if (IsClaimed(neighbor, p2)) continue;
 			if (!TransferAllowed(receiver: neighbor, giver: n, giverSlot)) continue;
 
 			PutReceived(neighbor, k2, giverSlot);
 			TakeGiven(n, k);
-			_claimed.Add((n, p));
-			_claimed.Add((neighbor, p2));
+			Claim(n, p);
+			Claim(neighbor, p2);
 		}
 	}
 
@@ -2411,7 +2440,7 @@ public partial class NucleusLayer : Node2D
 			int k = OrthogonalSlots[idx];
 			int p = PhysicalSlotForCompass(n, k);
 			if (!n.Ring[p].Exists || !n.Ring[p].IsHole) continue;
-			if (_claimed.Contains((n, p))) continue;
+			if (IsClaimed(n, p)) continue;
 
 			// Мост между сетками: соседняя клетка атома → мировые пиксели → row/col
 			// каждого слоя частиц по его собственному CellSize.
@@ -2432,7 +2461,7 @@ public partial class NucleusLayer : Node2D
 
 				n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = layer.Tier, Locked = true };
 				Touch(n);
-				_claimed.Add((n, p));
+				Claim(n, p);
 				n.NextCaptureTick = _globalTick + _energyCaptureTicks;
 				return; // одна попытка захвата на атом за тик
 			}
@@ -2468,11 +2497,11 @@ public partial class NucleusLayer : Node2D
 					// У перекрёстка (T010) — частица у выхода на сторону ЧД.
 					if (!TryPeekGive(n, k, out var slot)) continue;
 					int p = SideKey(n, k);
-					if (_claimed.Contains((n, p))) continue;
+					if (IsClaimed(n, p)) continue;
 					if (!TierSpinAllowed(GrayCoreTier, TransferRules.NoSpin, n.CoreTier, n.Dir)) continue;
 
 					TakeGiven(n, k);
-					_claimed.Add((n, p));
+					Claim(n, p);
 					var (dr, dc) = Adj8[k];
 					var from = n.Center + new Vector2(dc, dr) * _orbitRadius;
 					if (slot.IsItem)
@@ -2541,14 +2570,14 @@ public partial class NucleusLayer : Node2D
 				// У перекрёстка (T010) — частица у выхода на сторону звезды.
 				if (!TryPeekGive(n, k, out var slot)) continue;
 				int p = SideKey(n, k);
-				if (_claimed.Contains((n, p))) continue;
+				if (IsClaimed(n, p)) continue;
 				// Атом-предмет (T007) — ингредиент-атом его тира, частица — по цвету.
 				int need = star.NeedIndex(slot.IsItem ? IngredientKind.Atom : IngredientKind.Particle, slot.ColorTier);
 				if (need < 0) continue;
 				if (!TierSpinAllowed(GrayCoreTier, TransferRules.NoSpin, n.CoreTier, n.Dir)) continue;
 
 				TakeGiven(n, k);
-				_claimed.Add((n, p));
+				Claim(n, p);
 				star.Put(need);
 				var (dr, dc) = Adj8[k];
 				var from = n.Center + new Vector2(dc, dr) * _orbitRadius;
@@ -2593,11 +2622,11 @@ public partial class NucleusLayer : Node2D
 			// Перекрёсток (T010) принимает со стороны звезды и везёт на противоположную.
 			if (!CanReceive(n, k)) continue;
 			int p = SideKey(n, k);
-			if (_claimed.Contains((n, p))) continue;
+			if (IsClaimed(n, p)) continue;
 			if (!TierSpinAllowed(n.CoreTier, n.Dir, GrayCoreTier, TransferRules.NoSpin)) continue;
 
 			PutReceived(n, k, new RingSlot { Exists = true, IsHole = false, ColorTier = star.Output.Dequeue(), IsItem = true });
-			_claimed.Add((n, p));
+			Claim(n, p);
 			// Место в буфере освободилось — ждущая готовая работа уходит туда же.
 			star.TryFinishToOutput(StarDuration(star), StarOutputCapacity);
 		}
@@ -2674,7 +2703,7 @@ public partial class NucleusLayer : Node2D
 					if (n.Cross != null) continue; // перекрёсток с портами не работает (T010, слой 2 заморожен)
 
 					int p = PhysicalSlotForCompass(n, Opposite(k));
-					if (_claimed.Contains((n, p))) continue;
+					if (IsClaimed(n, p)) continue;
 					var slot = n.Ring[p];
 					if (!slot.Exists) continue;
 
@@ -2697,7 +2726,7 @@ public partial class NucleusLayer : Node2D
 						n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = emitColor, Locked = true };
 						Touch(n);
 					}
-					_claimed.Add((n, p));
+					Claim(n, p);
 					done = true;
 				}
 			}
@@ -3576,8 +3605,29 @@ public partial class NucleusLayer : Node2D
 	// а так — все ядра тира всегда в одной фазе, независимо от истории.
 	private int DiscreteRotationOffset(NucleusEntity n)
 	{
-		int ticks = n.CoreTier < TierTicks.Length ? TierTicks[n.CoreTier] : TierTicks[TierTicks.Length - 1];
-		return RingMath.RotationStep(_globalTick, ticks, n.Dir);
+		// Кэш на тик (T014): та же формула RingMath.RotationStep по тиру и спину ±1.
+		if (_rotCacheTick != _globalTick || _rotCache.Length != TierTicks.Length * 2) RebuildRotationCache();
+		if (n.Dir != 1 && n.Dir != -1)
+		{
+			int t = n.CoreTier < TierTicks.Length ? TierTicks[n.CoreTier] : TierTicks[TierTicks.Length - 1];
+			return RingMath.RotationStep(_globalTick, t, n.Dir);
+		}
+		int tier = n.CoreTier < TierTicks.Length ? n.CoreTier : TierTicks.Length - 1;
+		return _rotCache[tier * 2 + (n.Dir > 0 ? 0 : 1)];
+	}
+
+	private long _rotCacheTick = long.MinValue;
+	private int[] _rotCache = System.Array.Empty<int>();
+
+	private void RebuildRotationCache()
+	{
+		if (_rotCache.Length != TierTicks.Length * 2) _rotCache = new int[TierTicks.Length * 2];
+		for (int tier = 0; tier < TierTicks.Length; tier++)
+		{
+			_rotCache[tier * 2] = RingMath.RotationStep(_globalTick, TierTicks[tier], 1);
+			_rotCache[tier * 2 + 1] = RingMath.RotationStep(_globalTick, TierTicks[tier], -1);
+		}
+		_rotCacheTick = _globalTick;
 	}
 
 	// Физический слот (индекс в Ring, он же индекс рендера), который у ЭТОГО
@@ -4901,7 +4951,7 @@ public partial class NucleusLayer : Node2D
 		_sleepingSet.Clear();
 		_cargoSet.Clear();
 		_crossSet.Clear();
-		_claimed.Clear();
+		_claimEpoch++;
 
 		// Показ расширения прежнего поля (T012) прерывается.
 		_showSession++;
