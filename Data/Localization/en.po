@@ -210,3 +210,18 @@ msgstr "dropped"
 
 msgid "частиц"
 msgstr "particles"
+
+msgid "видно"
+msgstr "visible"
+
+msgid "Тик, мс:"
+msgstr "Tick, ms:"
+
+msgid "Тиков за кадр:"
+msgstr "Ticks per frame:"
+
+msgid "Кадр, мс:"
+msgstr "Frame, ms:"
+
+msgid "Отрисовка атомов, мс:"
+msgstr "Atom render, ms:"

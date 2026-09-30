@@ -30,6 +30,29 @@ public partial class FpsLabel : Label
 		GetParent().CallDeferred(Node.MethodName.AddChild, new HintLabel { Name = "HintLabel" });
 	}
 
+	// F3 — блок замера производительности (T014).
+	private bool _showPerf;
+
+	public override void _Input(InputEvent @event)
+	{
+		if (@event is InputEventKey key && key.Pressed && !key.Echo && key.Keycode == Key.F3 && !key.ShiftPressed)
+		{
+			_showPerf = !_showPerf;
+			GetViewport().SetInputAsHandled();
+		}
+	}
+
+	private string PerfCounters()
+	{
+		if (!_showPerf || _nucleusLayer == null) return "";
+		var p = _nucleusLayer.Perf;
+		return "\n" + Tr("Атомы:") + $" {_nucleusLayer.TotalAtomCount}  " + Tr("видно") + $" {_nucleusLayer.VisibleAtomCount}"
+			+ "\n" + Tr("Тик, мс:") + $" {p.TickMsAvg:0.00}  max {p.TickMsMax:0.00}"
+			+ "\n" + Tr("Тиков за кадр:") + $" {p.TicksPerFrameAvg:0.0}  max {p.TicksPerFrameMax}"
+			+ "\n" + Tr("Кадр, мс:") + $" {p.FrameMsAvg:0.0}  FPS {Engine.GetFramesPerSecond()}"
+			+ "\n" + Tr("Отрисовка атомов, мс:") + $" {p.RenderMsAvg:0.00}  max {p.RenderMsMax:0.00}";
+	}
+
 	public override void _Process(double delta)
 	{
 		string extraInfo = _nucleusLayer != null
@@ -38,6 +61,7 @@ public partial class FpsLabel : Label
 			+ $"\n{Tr("Атомы:")} {_nucleusLayer.ActiveNucleusCount}"
 			+ PortCounters(_nucleusLayer.Ports)
 			+ BlackHoleCounters(_nucleusLayer.BlackHoles)
+			+ PerfCounters()
 			: "";
 		// Слой и k — только при включённом слое 2 (ViewLayer.Layer2Enabled, T005).
 		string layer = ViewLayer.Layer2Enabled ? $"  {Tr("Слой")} {ViewLayer.Current}" : "";
