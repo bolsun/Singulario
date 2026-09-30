@@ -192,6 +192,7 @@ public partial class StarLayer : Node2D
 			ShowBehindParent = true,
 		});
 		CreateShaderMesh();
+		CreateModeLabel();
 
 		_atomRadius = _cellSize * 0.4f;
 		_particleRadius = _cellSize * 0.1f;
@@ -250,6 +251,37 @@ public partial class StarLayer : Node2D
 		});
 	}
 
+	// Надпись режима F6 — как у F4/F5 (NebulaBackground): свой слой поверх поля и HUD, под меню.
+	private void CreateModeLabel()
+	{
+		var layer = new CanvasLayer { Name = "StarModeLabelLayer", Layer = 90 };
+		AddChild(layer);
+		_modeLabel = new Label
+		{
+			Name = "StarModeLabel",
+			AutoTranslateMode = AutoTranslateModeEnum.Disabled,
+			HorizontalAlignment = HorizontalAlignment.Center,
+			MouseFilter = Control.MouseFilterEnum.Ignore,
+			Visible = false,
+		};
+		_modeLabel.AddThemeColorOverride("font_color", Colors.White);
+		_modeLabel.AddThemeColorOverride("font_outline_color", Colors.Black);
+		_modeLabel.AddThemeConstantOverride("outline_size", 4);
+		_modeLabel.AddThemeFontSizeOverride("font_size", 22);
+		_modeLabel.SetAnchorsPreset(Control.LayoutPreset.CenterTop);
+		_modeLabel.GrowHorizontal = Control.GrowDirection.Both;
+		_modeLabel.OffsetTop = 64;
+		layer.AddChild(_modeLabel);
+	}
+
+	private void UpdateModeLabel(float delta)
+	{
+		if (_modeLabelLeft <= 0f) return;
+		_modeLabelLeft = Mathf.Max(0f, _modeLabelLeft - delta);
+		_modeLabel.Modulate = new Color(1f, 1f, 1f, Mathf.Clamp(_modeLabelLeft / ModeLabelFadeSeconds, 0f, 1f));
+		_modeLabel.Visible = _modeLabelLeft > 0f;
+	}
+
 	// --- инструмент (панель слоя 1) ---
 
 	public void SelectTool(int tier)
@@ -267,7 +299,19 @@ public partial class StarLayer : Node2D
 
 	public override void _UnhandledInput(InputEvent @event)
 	{
-		if (!_ready || ViewLayer.IsLayer2) return;
+		if (!_ready) return;
+		// F6 — звёзды: спрайт (как было) / шейдер (T017), для сравнения. Не сохраняется.
+		if (@event is InputEventKey key && key.Pressed && !key.Echo && key.Keycode == Key.F6)
+		{
+			UseShader = !UseShader;
+			_meshVersion = -1; // пересчитать число инстансов обоих MultiMesh
+			_modeLabel.Text = string.Format(Tr("Звёзды: {0}"), Tr(UseShader ? "Шейдер" : "Спрайт"));
+			_modeLabel.Visible = true;
+			_modeLabelLeft = ModeLabelSeconds;
+			GetViewport().SetInputAsHandled();
+			return;
+		}
+		if (ViewLayer.IsLayer2) return;
 		if (@event is not InputEventMouseButton mb || mb.ButtonIndex != MouseButton.Left || !mb.Pressed) return;
 		var (row, col) = CellUnderMouse();
 		// Ctrl+ЛКМ по звезде — весь выходной буфер в инвентарь, Shift+ЛКМ — один
@@ -626,6 +670,7 @@ public partial class StarLayer : Node2D
 		UpdateViewRect();
 		UpdateEffects((float)delta);
 		UpdatePickups((float)delta);
+		UpdateModeLabel((float)delta);
 		FillEffectMesh();
 		UpdateMesh();
 		bool preview = _toolTier.HasValue && !ViewLayer.IsLayer2;
