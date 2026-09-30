@@ -252,3 +252,12 @@ msgstr "Dithered"
 
 msgid "Мягкий свет"
 msgstr "Soft light"
+
+msgid "Звёзды: {0}"
+msgstr "Stars: {0}"
+
+msgid "Шейдер"
+msgstr "Shader"
+
+msgid "Спрайт"
+msgstr "Sprite"
