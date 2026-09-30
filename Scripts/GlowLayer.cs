@@ -269,7 +269,38 @@ public partial class GlowLayer : Node
 		_ => new Color(0f, 0f, 0f, 0f),
 	};
 
+	// Звёзды — каждый кадр (их немного): сила по состоянию, в работе «дышит»
+	// с фазой короны (StarLayer.LoopTicks, тик симуляции; на паузе стоит).
 	private void UpdateStars()
 	{
+		var stars = _layer.Stars?.All;
+		int count = stars?.Count ?? 0;
+		var mm = _stars.Multimesh;
+		if (mm == null || mm.InstanceCount != count)
+		{
+			mm = NewMultiMesh(count, new Aabb(new Vector3(-1e9f, -1e9f, -1f), new Vector3(2e9f, 2e9f, 2f)));
+			_stars.Multimesh = mm;
+		}
+		if (count == 0) return;
+
+		int loop = Mathf.Max(256, _starLayer?.LoopTicks ?? 512);
+		float phase = ((float)(_layer.GlobalTick % loop) + _layer.SubTickFraction) / loop;
+		float breath = 1f + StarBreath * Mathf.Sin(Mathf.Tau * phase * StarBreathCycles);
+		float cell = _layer.CellSize;
+		float side = 2f * StarRadiusCells * cell;
+		for (int i = 0; i < count; i++)
+		{
+			var s = stars[i];
+			var state = _starLayer?.StateOf(s) ?? StarLayer.StarState.Working;
+			float strength = state switch
+			{
+				StarLayer.StarState.Working => StarStrength * breath,
+				StarLayer.StarState.Blocked => StarBlockedStrength,
+				_ => StarIdleStrength,
+			};
+			var center = new Vector2((s.Col + Star.Size / 2f) * cell, (s.Row + Star.Size / 2f) * cell);
+			mm.SetInstanceTransform2D(i, new Transform2D(new Vector2(side, 0f), new Vector2(0f, side), center));
+			mm.SetInstanceCustomData(i, TierWeights(s.Tier, strength));
+		}
 	}
 }
