@@ -3885,6 +3885,16 @@ public partial class NucleusLayer : Node2D
 		public bool? Sandbox { get; set; }
 		// Открытые чанки (T009). null — вся карта открыта (старые сохранения).
 		public List<SavedChunk> OpenChunks { get; set; }
+		// Задания ЧД (T011). null — старое сохранение: этап 1, прогресс с нуля.
+		public SavedGoals Goals { get; set; }
+	}
+
+	private class SavedGoals
+	{
+		public int Stage { get; set; }             // индекс этапа (0 — первый)
+		public List<long> Baseline { get; set; } = new(); // счётчики ЧД на начало этапа, по пунктам
+		public List<string> Recipes { get; set; } = new(); // открытые рецепты (StarRecipe.Id)
+		public ulong Seed { get; set; }
 	}
 
 	private class SavedChunk
@@ -4001,7 +4011,15 @@ public partial class NucleusLayer : Node2D
 	// в начале раздела о том, что НЕ сохраняется.
 	public string ExportFieldJson()
 	{
-		var data = new FieldSaveData { Sandbox = Inventory.Sandbox };
+		var data = new FieldSaveData
+		{
+			Sandbox = Inventory.Sandbox,
+			Goals = new SavedGoals
+			{
+				Stage = Goals.Stage, Baseline = new List<long>(Goals.Baseline),
+				Recipes = Goals.SortedRecipes(), Seed = Goals.Seed,
+			},
+		};
 		if (!Territory.AllOpen)
 		{
 			data.OpenChunks = new List<SavedChunk>();
@@ -4113,8 +4131,32 @@ public partial class NucleusLayer : Node2D
 		}
 
 		ApplyFieldData(data, 0, 0, "поле загружено из JSON, тик сброшен в 0");
+		// Задания — после объектов: счётчики ЧД уже восстановлены.
+		RestoreGoals(data.Goals, Inventory.Sandbox);
 		error = null;
 		return true;
+	}
+
+	// Задания из сохранения (T011). Нет данных (старое сохранение) — этап 1,
+	// прогресс с текущих счётчиков ЧД, рецепты: песочница — все, иначе нет.
+	private void RestoreGoals(SavedGoals saved, bool sandbox)
+	{
+		Goals.ClearRecipes();
+		if (saved == null)
+		{
+			Goals.Seed = Goals.Data.Seed;
+			if (sandbox) Goals.OpenAllRecipes();
+			Goals.BeginStage(0, BlackHoles);
+			return;
+		}
+		Goals.Seed = saved.Seed;
+		foreach (var id in saved.Recipes ?? new List<string>())
+		{
+			if (StarRecipes.IndexOf(id) >= 0) Goals.OpenRecipe(id);
+			else GD.PushWarning($"[NucleusLayer] импорт: неизвестный рецепт «{id}» — пропущен.");
+		}
+		Goals.Restore(saved.Stage, saved.Baseline);
+		GD.Print($"[NucleusLayer] задания: этап {System.Math.Min(Goals.Stage + 1, Goals.StageCount)}/{Goals.StageCount}{(Goals.AllDone ? " (все выполнены)" : "")}, рецептов открыто {Goals.SortedRecipes().Count}.");
 	}
 
 	// Расставляет объекты из данных сохранения (или шаблона, T009) поверх
@@ -4398,6 +4440,10 @@ public partial class NucleusLayer : Node2D
 		ClearFieldForImport();
 		Inventory.Sandbox = false;
 		Territory.Reset(Territory.StartChunks);
+		// Задания (T011): этап 1, рецептов нет, seed — из цепочки.
+		Goals.Seed = Goals.Data.Seed;
+		Goals.ClearRecipes();
+		Goals.BeginStage(0, BlackHoles);
 		_templateCorner = null;
 		PlaceTemplate(t, StartZoneChunkX, StartZoneChunkY, StartZoneTemplatePath);
 		GD.Print("[NucleusLayer] новая игра: настоящий режим, открыты стартовые 2×2 чанка.");
