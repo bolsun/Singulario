@@ -194,11 +194,18 @@ public partial class StarLayer : Node2D
 			GetViewport().SetInputAsHandled();
 			return;
 		}
-		// ЛКМ по звезде — следующий рецепт (Ж → К → С → …), с любым инструментом.
+		// ЛКМ по звезде — следующий доступный рецепт (в настоящем режиме —
+		// только открытые заданиями, T011; в песочнице — все), с любым инструментом.
 		if (_stars.TryGetAt(row, col, out var star))
 		{
-			bool burned = star.SetRecipe(star.Recipe + 1);
-			GD.Print($"[StarLayer] звезда ({star.Row},{star.Col}): рецепт «{star.RecipeData.Name}».{(burned ? " Ингредиенты в работе и в буфере сгорели." : "")}");
+			int next = NextAvailableRecipe(star.Recipe);
+			if (next < 0)
+				GD.Print($"[StarLayer] звезда ({star.Row},{star.Col}): других открытых рецептов нет (текущий «{star.RecipeData.Name}»).");
+			else
+			{
+				bool burned = star.SetRecipe(next);
+				GD.Print($"[StarLayer] звезда ({star.Row},{star.Col}): рецепт «{star.RecipeData.Name}».{(burned ? " Ингредиенты в работе и в буфере сгорели." : "")}");
+			}
 			GetViewport().SetInputAsHandled();
 			return;
 		}
@@ -323,11 +330,32 @@ public partial class StarLayer : Node2D
 		return star;
 	}
 
-	private static int DefaultRecipe(int tier)
+	// Следующий после current доступный рецепт по кругу; -1 — кроме current доступных нет.
+	private int NextAvailableRecipe(int current)
 	{
+		for (int step = 1; step < StarRecipes.Count; step++)
+		{
+			int i = (current + step) % StarRecipes.Count;
+			if (_nucleusLayer.IsRecipeAvailable(i)) return i;
+		}
+		return -1;
+	}
+
+	// Рецепт новой звезды: доступный «атом тира звезды», иначе первый доступный,
+	// иначе «атом тира звезды» (рецепты ещё не открыты — звезда ждёт).
+	private int DefaultRecipe(int tier)
+	{
+		int own = -1, firstAvailable = -1;
 		for (int i = 0; i < StarRecipes.Count; i++)
-			if (StarRecipes.All[i].ResultTier == tier) return i;
-		return 0;
+		{
+			var r = StarRecipes.All[i];
+			bool isOwn = r.Kind == RecipeResult.Atom && r.ResultTier == tier;
+			if (isOwn && own < 0) own = i;
+			if (!_nucleusLayer.IsRecipeAvailable(i)) continue;
+			if (isOwn) return i;
+			if (firstAvailable < 0) firstAvailable = i;
+		}
+		return firstAvailable >= 0 ? firstAvailable : System.Math.Max(0, own);
 	}
 
 	// ПКМ по любой клетке звезды (вызывает NucleusLayer.RemoveAllAtMouse).

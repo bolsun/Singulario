@@ -432,6 +432,95 @@ public partial class NucleusLayer : Node2D
 		return new GoalChain(data);
 	}
 
+	// Рецепт звезды доступен игроку: в песочнице — все, иначе — открытые заданиями.
+	public bool IsRecipeAvailable(int index) =>
+		index >= 0 && index < StarRecipes.Count && (Inventory.Sandbox || Goals.IsRecipeOpen(StarRecipes.All[index].Id));
+
+	// После каждого тика: этап выполнен — награда и следующий этап.
+	private void CheckGoals()
+	{
+		if (GoalsActive && !Goals.AllDone && Goals.IsStageComplete(BlackHoles)) CompleteGoalStage();
+	}
+
+	// Награда текущего этапа (GDD «Задания ЧД и расширение»): открыть рецепты,
+	// кольцо чанков, поставить шаблоны в свободные чанки нового кольца; затем
+	// следующий этап (прогресс — с текущих счётчиков ЧД).
+	private void CompleteGoalStage()
+	{
+		int stage = Goals.Stage;
+		var st = Goals.Current;
+		GD.Print($"[NucleusLayer] задание {stage + 1} «{st.Name}» выполнено.");
+		var reward = st.Reward;
+		foreach (var id in reward.Recipes)
+		{
+			int index = StarRecipes.IndexOf(id);
+			if (index < 0) { GD.PushWarning($"[NucleusLayer] награда: неизвестный рецепт «{id}» — пропущен."); continue; }
+			if (Goals.OpenRecipe(id)) GD.Print($"[NucleusLayer] открыт рецепт «{StarRecipes.All[index].Name}».");
+		}
+		if (reward.Ring)
+		{
+			var ring = Territory.NextRing();
+			OpenChunks(ring);
+			_territoryLayer?.RevealChunks(ring);
+			PlaceRewardTemplates(reward.Templates, ring, Goals.PlacementSeed(stage));
+		}
+		else if (reward.Templates.Count > 0)
+			GD.PushWarning($"[NucleusLayer] награда этапа {stage + 1}: шаблоны без кольца не ставятся.");
+		Goals.BeginStage(stage + 1, BlackHoles);
+		_blackHoleLayer?.FlashAll();
+		GD.Print(Goals.AllDone ? "[NucleusLayer] все задания выполнены." : $"[NucleusLayer] задание {Goals.Stage + 1}: «{Goals.Current.Name}».");
+	}
+
+	// Шаблоны награды — в случайные места нового кольца (seed — явный): шаблон
+	// целиком внутри кольца, не пересекается с другими шаблонами и с чанками,
+	// где уже что-то есть. Места нет — сообщение, шаблон пропускается.
+	private void PlaceRewardTemplates(List<string> paths, List<(int cx, int cy)> ring, ulong seed)
+	{
+		if (paths.Count == 0) return;
+		var free = new HashSet<(int cx, int cy)>();
+		foreach (var c in ring) if (!ChunkHasContent(c.cx, c.cy)) free.Add(c);
+		var rng = new Rng(seed);
+		var candidates = new List<(int cx, int cy)>();
+		foreach (var path in paths)
+		{
+			var t = LoadTemplate(path, out string error);
+			if (t == null) { GD.PrintErr($"[NucleusLayer] награда: {error}"); continue; }
+			int w = System.Math.Max(1, t.WidthChunks), h = System.Math.Max(1, t.HeightChunks);
+			candidates.Clear();
+			// Кандидаты — в порядке кольца (cy, cx): выбор зависит только от seed.
+			foreach (var (cx, cy) in ring)
+			{
+				bool fits = true;
+				for (int dy = 0; dy < h && fits; dy++)
+					for (int dx = 0; dx < w && fits; dx++)
+						fits = free.Contains((cx + dx, cy + dy));
+				if (fits) candidates.Add((cx, cy));
+			}
+			if (candidates.Count == 0)
+			{
+				GD.PushWarning($"[NucleusLayer] награда: для шаблона {path} ({w}×{h}) нет места в новом кольце — пропущен.");
+				continue;
+			}
+			var at = candidates[rng.NextInt(candidates.Count)];
+			for (int dy = 0; dy < h; dy++)
+				for (int dx = 0; dx < w; dx++)
+					free.Remove((at.cx + dx, at.cy + dy));
+			PlaceTemplate(t, at.cx, at.cy, path);
+		}
+	}
+
+	// В чанке есть атом, источник, ЧД или звезда.
+	private bool ChunkHasContent(int cx, int cy)
+	{
+		if (_chunks.TryGetValue((cx, cy), out var chunk) && chunk.Nuclei.Count > 0) return true;
+		int row0 = cy * ChunkSize, col0 = cx * ChunkSize;
+		if (BlackHoles.Overlaps(row0, col0, ChunkSize) || Stars.Overlaps(row0, col0, ChunkSize)) return true;
+		foreach (var layer in _energyClusterLayers)
+			foreach (var (row, col) in layer.EnumerateCells())
+				if (ChunkOf(row) == cy && ChunkOf(col) == cx) return true;
+		return false;
+	}
+
 	// Клетка в закрытом чанке — красная вспышка чанка, true. Для отказов ввода.
 	public bool DenyIfClosed(int row, int col)
 	{
@@ -934,6 +1023,13 @@ public partial class NucleusLayer : Node2D
 				var mouse = GetGlobalMousePosition();
 				int cx = ChunkOf(Mathf.FloorToInt(mouse.X / CellSize)), cy = ChunkOf(Mathf.FloorToInt(mouse.Y / CellSize));
 				if (OpenChunks(new[] { (cx, cy) }) == 0) GD.Print($"[NucleusLayer] чанк ({cx},{cy}) уже открыт.");
+				GetViewport().SetInputAsHandled();
+			}
+			else if (key.Keycode == Key.P)
+			{
+				// Отладка (T011): засчитать текущее задание.
+				if (GoalsActive && !Goals.AllDone) CompleteGoalStage();
+				else GD.Print("[NucleusLayer] засчитывать нечего: заданий нет или все выполнены.");
 				GetViewport().SetInputAsHandled();
 			}
 			else if (key.Keycode == Key.B && !ViewLayer.IsLayer2)
@@ -1508,6 +1604,7 @@ public partial class NucleusLayer : Node2D
 				_tickAccumulatorMs -= PrototypeTickMs;
 				_globalTick++;
 				SimTick();
+				CheckGoals();
 				// Слой 2 (перенос атомов молекулами) — на тех же часах, после
 				// слоя 1: порты уже обменялись частицами на этом тике.
 				_moleculeLayer?.SimTick(_globalTick);
