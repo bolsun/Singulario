@@ -261,3 +261,9 @@ msgstr "Shader"
 
 msgid "Спрайт"
 msgstr "Sprite"
+
+msgid "Свечение: {0}"
+msgstr "Glow: {0}"
+
+msgid "Вкл"
+msgstr "On"

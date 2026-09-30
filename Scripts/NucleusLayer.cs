@@ -646,6 +646,27 @@ public partial class NucleusLayer : Node2D
 	public bool ChunkHasNuclei(int cx, int cy) =>
 		_chunks.TryGetValue((cx, cy), out var chunk) && chunk.Nuclei.Count > 0;
 
+	// Свечение (T020) — только чтение для отрисовки: видимые чанки, версия
+	// атомов чанка (растёт при каждой перестройке его MultiMesh) и рабочие
+	// атомы Ж/К/С/серые (без обломков, вращателей, бросателей) — центр и тир.
+	public IReadOnlyCollection<(int cx, int cy)> VisibleChunks => _visible;
+
+	public bool TryGetChunkGlowVersion(int cx, int cy, out int version)
+	{
+		version = 0;
+		if (!_chunks.TryGetValue((cx, cy), out var chunk)) return false;
+		version = chunk.Version;
+		return true;
+	}
+
+	public void CollectGlowAtoms(int cx, int cy, List<(Vector2 center, int tier)> into)
+	{
+		into.Clear();
+		if (!_chunks.TryGetValue((cx, cy), out var chunk)) return;
+		foreach (var n in chunk.Nuclei)
+			if (!n.IsCargo && ChunkComposition.IsCountedTier(n.CoreTier)) into.Add((n.Center, n.CoreTier));
+	}
+
 	public IEnumerable<(int cx, int cy)> EnumerateOccupiedChunks()
 	{
 		foreach (var pair in _chunks)
@@ -854,6 +875,7 @@ public partial class NucleusLayer : Node2D
 		public float[] BodyBuf, HoleBuf, ParticleBuf;
 		public bool Dots; // тела нарисованы точками (дальний зум, AtomDotZoom)
 		public int Cx, Cy;
+		public int Version; // +1 при каждой перестройке (свечение T020)
 	}
 
 	private readonly Dictionary<(int cx, int cy), WorldChunk> _chunks = new();
@@ -4200,6 +4222,7 @@ public partial class NucleusLayer : Node2D
 	// раз перестраиваем целиком (для размеров чанка это дёшево).
 	private void RebuildChunkMeshes(WorldChunk chunk)
 	{
+		chunk.Version++;
 		RecountChunkAtoms(chunk);
 		int nucleusCount = chunk.Nuclei.Count;
 		int slotCount = nucleusCount * 8;

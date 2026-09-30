@@ -714,9 +714,10 @@ public partial class StarLayer : Node2D
 		}
 	}
 
-	private enum StarState { Working = 0, Idle = 1, Blocked = 2 }
+	public enum StarState { Working = 0, Idle = 1, Blocked = 2 }
 
-	private StarState StateOf(Star s) =>
+	// Публично — для свечения звезды (T020).
+	public StarState StateOf(Star s) =>
 		!s.Producing ? StarState.Idle
 		: s.Elapsed < _nucleusLayer.StarDuration(s) ? StarState.Working
 		: StarState.Blocked;

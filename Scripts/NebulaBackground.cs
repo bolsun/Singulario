@@ -13,7 +13,8 @@ using System.Collections.Generic;
 // F4 — отладочный переключатель вариантов текстуры по кругу (не сохраняется):
 // Облака → Дымка → Мрамор → Пыль → Выкл. При переключении на LabelSeconds
 // показывается название варианта. F5 (T016c) — режим света «Дизеринг» ↔
-// «Мягкий свет», независимо от F4, тоже с надписью.
+// «Мягкий свет» для фона и свечения (T020), независимо от F4, тоже с надписью.
+// F8 (T020) — свечение вкл/выкл. «Выкл» у F4 гасит только туманность.
 public partial class NebulaBackground : CanvasLayer
 {
 	private const string ShaderPath = "res://Resources/Shaders/nebula_background.gdshader";
@@ -60,6 +61,7 @@ public partial class NebulaBackground : CanvasLayer
 	[Export] public Color Color3 = new("#272038");
 
 	private NucleusLayer _layer;
+	private GlowLayer _glow;
 	private ColorRect _rect;
 	private ShaderMaterial _material;
 	private Texture2D _texture;
@@ -84,6 +86,9 @@ public partial class NebulaBackground : CanvasLayer
 		};
 		_rect.SetAnchorsPreset(Control.LayoutPreset.FullRect);
 		AddChild(_rect);
+		// Буфер свечения (T020) — финальный проход в шейдере фона.
+		_glow = new GlowLayer { Name = "GlowLayer" };
+		AddChild(_glow);
 
 		// Надпись варианта — свой слой поверх поля и HUD, под меню (CanvasLayer 100).
 		var labelLayer = new CanvasLayer { Name = "NebulaLabelLayer", Layer = 90 };
@@ -122,6 +127,11 @@ public partial class NebulaBackground : CanvasLayer
 			SoftLight = !SoftLight;
 			ShowLabel(string.Format(Tr("Свет: {0}"), Tr(SoftLight ? "Мягкий свет" : "Дизеринг")));
 		}
+		else if (key.Keycode == Key.F8)
+		{
+			_glow.Enabled = !_glow.Enabled;
+			ShowLabel(string.Format(Tr("Свечение: {0}"), Tr(_glow.Enabled ? "Вкл" : "Выкл")));
+		}
 		else return;
 		GetViewport().SetInputAsHandled();
 	}
@@ -135,8 +145,9 @@ public partial class NebulaBackground : CanvasLayer
 
 	private void ApplyVariant()
 	{
+		// «Выкл» гасит только туманность: узел фона несёт и свечение (T020).
 		string file = Variants[_variant].file;
-		_rect.Visible = file != null;
+		_material.SetShaderParameter("nebula_on", file != null);
 		if (file == null) return;
 		_texture = GD.Load<Texture2D>(TextureDir + file);
 		_material.SetShaderParameter("density", _texture);
@@ -150,7 +161,6 @@ public partial class NebulaBackground : CanvasLayer
 			_label.Modulate = new Color(1f, 1f, 1f, Mathf.Clamp(_labelLeft / LabelFadeSeconds, 0f, 1f));
 			_label.Visible = _labelLeft > 0f;
 		}
-		if (!_rect.Visible) return;
 		var camera = GetViewport().GetCamera2D();
 		if (camera == null) return;
 
@@ -175,6 +185,8 @@ public partial class NebulaBackground : CanvasLayer
 		_material.SetShaderParameter("color2", Color2);
 		_material.SetShaderParameter("color3", Color3);
 		UpdateLights(camPos);
+		_glow.UpdateView(screen, camPos, zoom, Mathf.Max(1f, DitherPixel));
+		_glow.ApplyToMaterial(_material, zoom);
 	}
 
 	// 1 при zoom ≥ FadeZoom, 0 при zoom ≤ FadeZoom / FadeRatio, между — по логарифму.
