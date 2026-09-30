@@ -37,14 +37,14 @@ public partial class GridDraw : Node2D
     [Export] public float GridHideZoom = 0.025f;
 
     // Цвета из палитры Singulario 32 (T018): тише на тёмном фоне «Бездна».
-    [Export] public Color LineColor = new Color("#1b1629");
+    [Export] public Color LineColor = new Color("#272038");
     // По заданию клиента: на близком зуме, когда рисуется сетка КЛЕТОК (шаг
     // CellSize), линии, совпадающие с границей чанка, должны быть заметно
     // светлее обычных — иначе на частой сетке клеток границу чанка не видно
     // вообще. На дальнем зуме, когда сетка уже сама ЧАНКОВ (шаг
     // CellSize*ChunkSize, см. _Process), разделять нечего — там и так каждая
     // линия это граница чанка, красится как раньше, одним LineColor.
-    [Export] public Color ChunkLineColor = new Color("#372d4d");
+    [Export] public Color ChunkLineColor = new Color("#4d4268");
 
     private int _chunkSize = 16;
     private int _minCol, _maxCol, _minRow, _maxRow;
