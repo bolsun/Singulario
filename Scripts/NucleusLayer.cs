@@ -63,10 +63,10 @@ public partial class NucleusLayer : Node2D
 	[Export] public string ShaderPath = "res://Resources/Shaders/nucleus_palette.gdshader";
 	[Export] public string[] PalettePaths = new string[]
 	{
-		"res://Resources/Textures/palette_yellow.png",
-		"res://Resources/Textures/palette_red.png",
-		"res://Resources/Textures/palette_blue.png",
-		"res://Resources/Textures/palette_gray.png",   // тир 3 — экспериментальное серое ядро, см. GrayCoreTier
+		"res://Resources/palettes/singulario32/palette_yellow.png",
+		"res://Resources/palettes/singulario32/palette_red.png",
+		"res://Resources/palettes/singulario32/palette_blue.png",
+		"res://Resources/palettes/singulario32/palette_gray.png",   // тир 3 — экспериментальное серое ядро, см. GrayCoreTier
 		"res://Resources/Textures/palette_green.png",  // тир 4 — экспериментальный "поворачиватель", см. RotatorCoreTier
 		"res://Resources/Textures/palette_violet.png", // тир 5 — экспериментальный "бросатель", см. ThrowerCoreTier
 	};

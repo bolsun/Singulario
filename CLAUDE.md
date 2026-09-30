@@ -117,6 +117,8 @@ https://claude.ai/code/artifact/9cf8f132-726d-4cf1-b623-86551e34a7c4
     (`CargoDim`), кольцо на фазе 0. ЛКМ по грузу — `ActivateCargo` (рабочий атом, сон до фазы 0).
     Класть груз — `PlaceCargo` (проверка клетки — `IsCellFreeForAtom`). В сохранении — `Cargo`.
   - Шейдер палитр: `INSTANCE_CUSTOM.y` — свечение, `.z` — приглушение (0 — без изменений).
+  - Таблицы тиров атомов/частиц (`NucleusLayer.PalettePaths`): Ж/К/С/серое — `Resources/palettes/singulario32/palette_*.png`
+    (Singulario 32); зелёная и фиолетовая (замороженные вращатель/бросатель) — старые `Resources/Textures/palette_*.png`.
   - `StarSet.cs` — чистые данные: `StarRecipes.All` (рецепты — только здесь), `Star` (3×3,
     верхняя левая клетка, тир, рецепт, сторона выхода 0..3 = N/E/S/W, буфер на 1 рецепт,
     `Producing`/`Elapsed`), `StarSet` (порядок по (Row, Col)). Экземпляр — `NucleusLayer.Stars`.
