@@ -9,11 +9,27 @@ using System.Collections.Generic;
 // Туманность видна только в свете ЧД: L = 1/(1+(d/R)²), сумма по MaxLights
 // ближайшим к центру экрана ЧД, ограничена 1. Ниже FadeZoom гаснет к ровному
 // первому цвету (к FadeZoom / FadeRatio — полностью, в лог-шкале).
+//
+// F4 — отладочный переключатель вариантов текстуры по кругу (не сохраняется):
+// Облака → Дымка → Мрамор → Пыль → Выкл. При переключении на LabelSeconds
+// показывается название варианта.
 public partial class NebulaBackground : CanvasLayer
 {
 	private const string ShaderPath = "res://Resources/Shaders/nebula_background.gdshader";
 	private const string TextureDir = "res://Resources/Textures/Nebula/";
 	private const int ShaderMaxLights = 8;
+	private const float LabelSeconds = 1.5f;
+	private const float LabelFadeSeconds = 0.4f;
+
+	// Варианты для F4: ключ перевода и файл; null — фон выключен.
+	private static readonly (string name, string file)[] Variants =
+	{
+		("Облака", "nebula_clouds_512.png"),
+		("Дымка", "nebula_filaments_512.png"),
+		("Мрамор", "nebula_flow_512.png"),
+		("Пыль", "nebula_dust_512.png"),
+		("Выкл", null),
+	};
 
 	// Мировых единиц на тексель текстуры плотности (512 текселей × 15 ≈ 5 чанков).
 	[Export] public float TexelWorldSize = 15f;
@@ -39,6 +55,9 @@ public partial class NebulaBackground : CanvasLayer
 	private ColorRect _rect;
 	private ShaderMaterial _material;
 	private Texture2D _texture;
+	private int _variant;
+	private Label _label;
+	private float _labelLeft;
 	private readonly List<(float dist2, Vector3 light)> _candidates = new();
 	private readonly Vector3[] _lights = new Vector3[ShaderMaxLights];
 
@@ -58,13 +77,58 @@ public partial class NebulaBackground : CanvasLayer
 		_rect.SetAnchorsPreset(Control.LayoutPreset.FullRect);
 		AddChild(_rect);
 
-		_texture = GD.Load<Texture2D>(TextureDir + "nebula_clouds_512.png");
+		// Надпись варианта — свой слой поверх поля и HUD, под меню (CanvasLayer 100).
+		var labelLayer = new CanvasLayer { Name = "NebulaLabelLayer", Layer = 90 };
+		AddChild(labelLayer);
+		_label = new Label
+		{
+			Name = "NebulaVariantLabel",
+			AutoTranslateMode = Node.AutoTranslateModeEnum.Disabled,
+			HorizontalAlignment = HorizontalAlignment.Center,
+			MouseFilter = Control.MouseFilterEnum.Ignore,
+			Visible = false,
+		};
+		_label.AddThemeColorOverride("font_color", Colors.White);
+		_label.AddThemeColorOverride("font_outline_color", Colors.Black);
+		_label.AddThemeConstantOverride("outline_size", 4);
+		_label.AddThemeFontSizeOverride("font_size", 22);
+		_label.SetAnchorsPreset(Control.LayoutPreset.CenterTop);
+		_label.GrowHorizontal = Control.GrowDirection.Both;
+		_label.OffsetTop = 64;
+		labelLayer.AddChild(_label);
+
+		ApplyVariant();
+	}
+
+	public override void _UnhandledInput(InputEvent @event)
+	{
+		if (@event is not InputEventKey key || !key.Pressed || key.Echo || key.Keycode != Key.F4) return;
+		_variant = (_variant + 1) % Variants.Length;
+		ApplyVariant();
+		_label.Text = string.Format(Tr("Фон: {0}"), Tr(Variants[_variant].name));
+		_label.Visible = true;
+		_labelLeft = LabelSeconds;
+		GetViewport().SetInputAsHandled();
+	}
+
+	private void ApplyVariant()
+	{
+		string file = Variants[_variant].file;
+		_rect.Visible = file != null;
+		if (file == null) return;
+		_texture = GD.Load<Texture2D>(TextureDir + file);
 		_material.SetShaderParameter("density", _texture);
 	}
 
 	public override void _Process(double delta)
 	{
-		if (!Visible) return;
+		if (_labelLeft > 0f)
+		{
+			_labelLeft = Mathf.Max(0f, _labelLeft - (float)delta);
+			_label.Modulate = new Color(1f, 1f, 1f, Mathf.Clamp(_labelLeft / LabelFadeSeconds, 0f, 1f));
+			_label.Visible = _labelLeft > 0f;
+		}
+		if (!_rect.Visible) return;
 		var camera = GetViewport().GetCamera2D();
 		if (camera == null) return;
 
