@@ -54,7 +54,8 @@ https://claude.ai/code/artifact/9cf8f132-726d-4cf1-b623-86551e34a7c4
 - `Scripts/` — весь C#-код. Основная симуляция и отрисовка ядер — `NucleusLayer.cs`
   (очень большой файл, логика и рендер смешаны). Источники — `EnergyClusterLayer.cs`,
   чёрные дыры — `BlackHoleLayer.cs` (см. ниже), сохранение/загрузка JSON — `SaveLoadPanel.cs`,
-  панель ядер — `NucleusSpawnPanel.cs`, сетка — `GridDraw.cs`.
+  панель ядер — `NucleusSpawnPanel.cs`, сетка — `GridDraw.cs` (цвета — настройки `LineColor` `#1b1629`,
+  `ChunkLineColor` `#372d4d` из палитры, T018).
 - Выключатель слоя 2 (T005): `ViewLayer.Layer2Enabled` (статическое поле, по умолчанию
   `false`) — единственное место. При `false` зум не переключает на слой 2, `MoleculeLayer` и
   `PortLayer` не готовы (не тикают, не рисуются, без ввода, `K` не работает),
