@@ -24,6 +24,8 @@ public partial class FpsLabel : Label
 		GetParent().CallDeferred(Node.MethodName.AddChild, new InventoryLabel { Name = "InventoryLabel" });
 		// Задание ЧД (T011) — под строкой инвентаря.
 		GetParent().CallDeferred(Node.MethodName.AddChild, new GoalLabel { Name = "GoalLabel" });
+		// Подсказка управления (T012) — внизу по центру.
+		GetParent().CallDeferred(Node.MethodName.AddChild, new HintLabel { Name = "HintLabel" });
 	}
 
 	public override void _Process(double delta)

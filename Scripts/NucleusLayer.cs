@@ -378,6 +378,8 @@ public partial class NucleusLayer : Node2D
 	public Territory Territory { get; private set; }
 	private TerritoryLayer _territoryLayer;
 	private CameraController _camera;
+	// Подсказка управления (T012): данные — ControlHints, вид — HintLabel.
+	public ControlHints Hints { get; } = new();
 
 	// Показ расширения камерой (T012): первые ExpansionCameraShows расширений
 	// камера летит в центр и отдаляется до всей открытой области, затем сходит
@@ -3931,6 +3933,14 @@ public partial class NucleusLayer : Node2D
 		public List<SavedChunk> OpenChunks { get; set; }
 		// Задания ЧД (T011). null — старое сохранение: этап 1, прогресс с нуля.
 		public SavedGoals Goals { get; set; }
+		// Подсказка управления (T012). null — старое сохранение: пройдена.
+		public SavedHints Hints { get; set; }
+	}
+
+	private class SavedHints
+	{
+		public bool Camera { get; set; } // W, A, S, D выполнено
+		public bool Grid { get; set; }   // G выполнено
 	}
 
 	private class SavedGoals
@@ -4063,6 +4073,7 @@ public partial class NucleusLayer : Node2D
 				Stage = Goals.Stage, Baseline = new List<long>(Goals.Baseline),
 				Recipes = Goals.SortedRecipes(), Seed = Goals.Seed,
 			},
+			Hints = new SavedHints { Camera = Hints.CameraDone, Grid = Hints.GridDone },
 		};
 		if (!Territory.AllOpen)
 		{
@@ -4177,6 +4188,8 @@ public partial class NucleusLayer : Node2D
 		ApplyFieldData(data, 0, 0, "поле загружено из JSON, тик сброшен в 0");
 		// Задания — после объектов: счётчики ЧД уже восстановлены.
 		RestoreGoals(data.Goals, Inventory.Sandbox);
+		// Подсказка (T012): нет поля — пройдена.
+		Hints.Set(data.Hints?.Camera ?? true, data.Hints?.Grid ?? true);
 		error = null;
 		return true;
 	}
@@ -4488,6 +4501,7 @@ public partial class NucleusLayer : Node2D
 		Goals.Seed = Goals.Data.Seed;
 		Goals.ClearRecipes();
 		Goals.BeginStage(0, BlackHoles);
+		Hints.Reset();
 		_templateCorner = null;
 		PlaceTemplate(t, StartZoneChunkX, StartZoneChunkY, StartZoneTemplatePath);
 		// Камера — на все стартовые чанки (T012).
