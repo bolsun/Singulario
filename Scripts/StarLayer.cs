@@ -12,7 +12,13 @@ using Godot;
 //     атомов (общий материал NucleusLayer, строка палитры в INSTANCE_CUSTOM.x);
 //     во время производства звезда пульсирует ярче (INSTANCE_CUSTOM.y, яркость
 //     с сохранением оттенка), в простое — ровно цвета палитры (приглушение
-//     INSTANCE_CUSTOM.z = IdleDim, по умолчанию 0). Все звёзды — один MultiMesh;
+//     INSTANCE_CUSTOM.z = IdleDim, по умолчанию 0). Все звёзды — один MultiMesh.
+//     Это режим «спрайт» (F6); по умолчанию — шейдер (T017, star_assembler.gdshader,
+//     производная PixelPlanets): свой MultiMesh, тир/состояние/пиксели — в custom
+//     data, фаза анимации — от тика симуляции (LoopTicks), все звёзды тира синхронны.
+//     Состояния: работает — дрейф и «дыхание» короны; простаивает — замерла, на
+//     ступень темнее, без короны; выход забит — замерла, красная дуга, после цикла
+//     рецепта — пульс шеврона выхода. Ниже StarLodZoom — диск;
 //   - эффект поглощения (T006c).
 //
 // Эффект поглощения — только визуал: частица или атом, которых забрала звезда
@@ -27,6 +33,35 @@ using Godot;
 public partial class StarLayer : Node2D
 {
 	public const string TexturePath = "res://Resources/Textures/star_gray_96px.png";
+	public const string ShaderPath = "res://Resources/Shaders/ThirdParty/PixelPlanets/star_assembler.gdshader";
+
+	// --- звезда на шейдере (T017) ---
+	// F6 — переключение «спрайт (как было) / шейдер»; стартовый режим — шейдер, не сохраняется.
+	[Export] public bool UseShader = true;
+	// Цикл анимации в тиках симуляции (кратен 256): фаза = (тик mod LoopTicks) / LoopTicks.
+	[Export] public int LoopTicks = 512;
+	// Диаметр тела в клетках; квад с короной — CoronaScale диаметров тела.
+	[Export] public float BodyDiameterCells = 2.2f;
+	[Export] public float CoronaScale = 2f;
+	// Только вид (занимаемые клетки не меняются): 2 — посмотреть гиганта 6×6.
+	[Export] public float DebugVisualScale = 1f;
+	// Ниже этого зума — диск тона 3 с краем тона 1, без поверхности и короны.
+	[Export] public float StarLodZoom = 0.15f;
+	// Сид на тир (Ж, К, С, З), как в мастерской PixelPlanets.
+	[Export] public int[] TierSeeds = { 753, 753, 753, 753 };
+	// Шеврон выхода у давно забитой звезды: тиков на ступень пульса.
+	[Export] public int ChevronStepTicks = 24;
+
+	// Рампы тиров Singulario 32 (Resources/palettes/singulario-32.gpl): тир × тоны 0..4 (0 — темнее).
+	private static readonly Color[] TierTones =
+	{
+		new("5e2a1e"), new("a8501c"), new("e8911f"), new("ffc93c"), new("fff09a"), // Ж
+		new("4a1030"), new("8c1c3a"), new("d23a4a"), new("ff6e5e"), new("ffb09a"), // К
+		new("1a1f5c"), new("26479e"), new("3a7fe0"), new("69b8ff"), new("c2ecff"), // С
+		new("0d3b3f"), new("146e4e"), new("25a860"), new("6ddb5e"), new("b4f2a0"), // З
+	};
+	private static readonly Color BlockedArcColor = new("d23a4a");
+	private static readonly Color[] ChevronPulse = { new("ff6e5e"), new("d23a4a"), new("8c1c3a"), new("d23a4a") };
 
 	// Свечение во время производства — прибавка яркости (0.5 — в 1.5 раза ярче):
 	// база и размах пульсации, частота (Гц).
@@ -98,6 +133,19 @@ public partial class StarLayer : Node2D
 	private int _meshVersion = -1;
 	private float _time;
 
+	private MultiMesh _shaderMesh;
+	private MultiMeshInstance2D _shaderNode;
+	private ShaderMaterial _shaderMaterial;
+	// Тик, с которого выход звезды забит (только вид: шеврон после одного цикла рецепта).
+	private readonly System.Collections.Generic.Dictionary<Star, long> _blockedSince = new();
+	private readonly System.Collections.Generic.List<Star> _blockedToRemove = new();
+	private int _blockedVersion = -1;
+
+	private Label _modeLabel;
+	private float _modeLabelLeft;
+	private const float ModeLabelSeconds = 1.5f;
+	private const float ModeLabelFadeSeconds = 0.4f;
+
 	private int? _toolTier;
 	private bool _hadPreview;
 	private bool _hadStars;
@@ -143,6 +191,7 @@ public partial class StarLayer : Node2D
 			// Спрайты — под _Draw этого узла (рецепт, дуга, превью), а не поверх.
 			ShowBehindParent = true,
 		});
+		CreateShaderMesh();
 
 		_atomRadius = _cellSize * 0.4f;
 		_particleRadius = _cellSize * 0.1f;
@@ -164,6 +213,41 @@ public partial class StarLayer : Node2D
 		});
 		SetProcessUnhandledInput(true);
 		_ready = true;
+	}
+
+	// Звёзды на шейдере (T017): один MultiMesh, квад 1×1 масштабируется трансформом
+	// инстанса (размер зависит от зума — пиксельная сетка), данные — в custom data.
+	private void CreateShaderMesh()
+	{
+		var shader = GD.Load<Shader>(ShaderPath);
+		if (shader == null) GD.PrintErr($"[StarLayer] не загрузился шейдер {ShaderPath}.");
+		_shaderMaterial = new ShaderMaterial { Shader = shader };
+		var tones = new Color[TierTones.Length];
+		System.Array.Copy(TierTones, tones, tones.Length);
+		_shaderMaterial.SetShaderParameter("tones", tones);
+		var seeds = new float[4];
+		for (int i = 0; i < seeds.Length; i++)
+		{
+			int sd = TierSeeds != null && i < TierSeeds.Length ? TierSeeds[i] : 753;
+			seeds[i] = sd % 1000 / 100f; // как set_seed в PixelPlanets
+		}
+		_shaderMaterial.SetShaderParameter("seeds", seeds);
+
+		_shaderMesh = new MultiMesh
+		{
+			TransformFormat = MultiMesh.TransformFormatEnum.Transform2D,
+			UseCustomData = true,
+			Mesh = new QuadMesh { Size = Vector2.One },
+			CustomAabb = new Aabb(new Vector3(-1e7f, -1e7f, -1f), new Vector3(2e7f, 2e7f, 2f)),
+		};
+		AddChild(_shaderNode = new MultiMeshInstance2D
+		{
+			Name = "StarsShader",
+			Multimesh = _shaderMesh,
+			Material = _shaderMaterial,
+			TextureFilter = TextureFilterEnum.Nearest,
+			ShowBehindParent = true,
+		});
 	}
 
 	// --- инструмент (панель слоя 1) ---
@@ -560,9 +644,17 @@ public partial class StarLayer : Node2D
 		if (_meshVersion != _stars.Version)
 		{
 			_meshVersion = _stars.Version;
-			_mesh.InstanceCount = stars.Count;
+			_mesh.InstanceCount = UseShader ? 0 : stars.Count;
+			_shaderMesh.InstanceCount = UseShader ? stars.Count : 0;
 		}
-		_meshNode.Visible = !ViewLayer.IsLayer2;
+		_meshNode.Visible = !ViewLayer.IsLayer2 && !UseShader;
+		_shaderNode.Visible = !ViewLayer.IsLayer2 && UseShader;
+		if (UseShader) UpdateShaderMesh(stars);
+		else UpdateSpriteMesh(stars);
+	}
+
+	private void UpdateSpriteMesh(System.Collections.Generic.IReadOnlyList<Star> stars)
+	{
 		float pulse = 0.5f + 0.5f * Mathf.Sin(_time * Mathf.Tau * PulseHz);
 		for (int i = 0; i < stars.Count; i++)
 		{
@@ -575,6 +667,78 @@ public partial class StarLayer : Node2D
 			float dim = working ? 0f : IdleDim;
 			_mesh.SetInstanceCustomData(i, new Color(rowUv, glow, dim, 0f));
 		}
+	}
+
+	private enum StarState { Working = 0, Idle = 1, Blocked = 2 }
+
+	private StarState StateOf(Star s) =>
+		!s.Producing ? StarState.Idle
+		: s.Elapsed < _nucleusLayer.StarDuration(s) ? StarState.Working
+		: StarState.Blocked;
+
+	// Звезда на шейдере. Пиксель — 1 пиксель мира; при отдалении — не мельче пикселя
+	// экрана, ступенями степени двойки (иначе сетка «плывёт» с зумом — рябь). Тело —
+	// чётное число пикселей, квад — тело + целое число пикселей с каждой стороны.
+	private void UpdateShaderMesh(System.Collections.Generic.IReadOnlyList<Star> stars)
+	{
+		var cam = GetViewport().GetCamera2D();
+		float zoom = cam != null ? cam.Zoom.X : 1f;
+		float pixel = 1f;
+		if (zoom < 1f) pixel = Mathf.Pow(2f, Mathf.Ceil(Mathf.Log(1f / zoom) / Mathf.Log(2f) - 1e-4f));
+		float diameter = BodyDiameterCells * _cellSize * Mathf.Max(DebugVisualScale, 0.01f);
+		int bodyPx = Mathf.Max(2, 2 * Mathf.RoundToInt(diameter / pixel / 2f));
+		int margin = Mathf.Max(0, Mathf.RoundToInt(bodyPx * (Mathf.Max(CoronaScale, 1f) - 1f) / 2f));
+		int quadPx = bodyPx + 2 * margin;
+		float side = quadPx * pixel;
+
+		int loop = Mathf.Max(256, LoopTicks);
+		long tick = _nucleusLayer.GlobalTick;
+		float phase = ((float)(tick % loop) + _nucleusLayer.SubTickFraction) / loop;
+		_shaderMaterial.SetShaderParameter("phase", phase);
+		_shaderMaterial.SetShaderParameter("lod", zoom < StarLodZoom);
+
+		for (int i = 0; i < stars.Count; i++)
+		{
+			var s = stars[i];
+			_shaderMesh.SetInstanceTransform2D(i, new Transform2D(new Vector2(side, 0f), new Vector2(0f, side), StarCenter(s)));
+			_shaderMesh.SetInstanceCustomData(i, new Color(s.Tier, (int)StateOf(s), bodyPx, quadPx));
+		}
+	}
+
+	// Сколько тиков выход звезды уже забит (0 — не забит). Только вид.
+	private long BlockedTicks(Star s)
+	{
+		if (_blockedVersion != _stars.Version)
+		{
+			_blockedVersion = _stars.Version;
+			_blockedToRemove.Clear();
+			var alive = new System.Collections.Generic.HashSet<Star>(_stars.All);
+			foreach (var key in _blockedSince.Keys)
+				if (!alive.Contains(key)) _blockedToRemove.Add(key);
+			foreach (var key in _blockedToRemove) _blockedSince.Remove(key);
+		}
+		long now = _nucleusLayer.GlobalTick;
+		if (StateOf(s) != StarState.Blocked)
+		{
+			_blockedSince.Remove(s);
+			return 0;
+		}
+		if (!_blockedSince.TryGetValue(s, out long since)) _blockedSince[s] = since = now;
+		return now - since;
+	}
+
+	// Шеврон стороны выхода: на краю звезды, остриём наружу.
+	private void DrawOutputChevron(Star star, Vector2 center, Color color)
+	{
+		var (orow, ocol) = star.OutputCell;
+		var outCenter = new Vector2((ocol + 0.5f) * _cellSize, (orow + 0.5f) * _cellSize);
+		var dir = (outCenter - center).Normalized();
+		var perp = new Vector2(-dir.Y, dir.X);
+		float edge = Star.Size / 2f * _cellSize;
+		float h = _cellSize * 0.22f;
+		var tip = center + dir * (edge + h * 0.5f);
+		var back = center + dir * (edge - h * 0.5f);
+		DrawPolyline(new[] { back + perp * h, tip, back - perp * h }, color, _cellSize * 0.08f);
 	}
 
 	public override void _Draw()
@@ -596,6 +760,9 @@ public partial class StarLayer : Node2D
 		return null;
 	}
 
+	private static Color TierTone(int tier, int tone) =>
+		TierTones[System.Math.Clamp(tier, 0, TierTones.Length / 5 - 1) * 5 + System.Math.Clamp(tone, 0, 4)];
+
 	private Color TierColor(int tier)
 	{
 		var colors = _nucleusLayer.TierPreviewColors;
@@ -615,7 +782,16 @@ public partial class StarLayer : Node2D
 			int duration = _nucleusLayer.StarDuration(star);
 			float t = Mathf.Clamp((float)star.Elapsed / duration, 0f, 1f);
 			var arcColor = t >= 1f ? new Color(1f, 0.35f, 0.3f, 0.9f) : new Color(1f, 1f, 1f, 0.85f); // красная — готово, выходной буфер полон
+			// Шейдер (T017): цвета из палитры — тон 3 тира, забитый выход — #d23a4a.
+			if (UseShader) arcColor = t >= 1f ? BlockedArcColor : TierTone(star.Tier, 3);
 			DrawArc(center, _cellSize * 0.6f, -Mathf.Pi / 2f, -Mathf.Pi / 2f + Mathf.Tau * t, 32, arcColor, _cellSize * 0.08f);
+		}
+		// Выход забит дольше одного цикла рецепта — шеврон выхода мягко пульсирует (без наведения).
+		if (UseShader && BlockedTicks(star) > _nucleusLayer.StarDuration(star))
+		{
+			int step = System.Math.Max(1, ChevronStepTicks);
+			int i = (int)(_nucleusLayer.GlobalTick / step % ChevronPulse.Length);
+			DrawOutputChevron(star, center, ChevronPulse[i]);
 		}
 		if (!hovered) return;
 
