@@ -7,7 +7,7 @@
       "Col": 4,
       "CoreTier": 0,
       "Dir": 1,
-      "HoleCount": 4,
+      "HoleCount": 8,
       "Cargo": true
     },
     {
@@ -15,7 +15,7 @@
       "Col": 7,
       "CoreTier": 0,
       "Dir": 1,
-      "HoleCount": 4,
+      "HoleCount": 8,
       "Cargo": true
     },
     {
@@ -23,7 +23,7 @@
       "Col": 10,
       "CoreTier": 0,
       "Dir": 1,
-      "HoleCount": 4,
+      "HoleCount": 8,
       "Cargo": true
     }
   ],

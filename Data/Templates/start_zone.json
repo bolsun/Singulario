@@ -7,7 +7,7 @@
       "Col": 21,
       "CoreTier": 0,
       "Dir": 1,
-      "HoleCount": 4,
+      "HoleCount": 8,
       "Cargo": true
     },
     {
@@ -15,7 +15,7 @@
       "Col": 25,
       "CoreTier": 0,
       "Dir": 1,
-      "HoleCount": 4,
+      "HoleCount": 8,
       "Cargo": true
     },
     {
@@ -23,7 +23,7 @@
       "Col": 19,
       "CoreTier": 0,
       "Dir": 1,
-      "HoleCount": 4,
+      "HoleCount": 8,
       "Cargo": true
     },
     {
@@ -31,7 +31,7 @@
       "Col": 28,
       "CoreTier": 0,
       "Dir": 1,
-      "HoleCount": 4,
+      "HoleCount": 8,
       "Cargo": true
     },
     {
@@ -39,7 +39,7 @@
       "Col": 22,
       "CoreTier": 0,
       "Dir": 1,
-      "HoleCount": 4,
+      "HoleCount": 8,
       "Cargo": true
     },
     {
@@ -47,7 +47,7 @@
       "Col": 18,
       "CoreTier": 0,
       "Dir": 1,
-      "HoleCount": 4,
+      "HoleCount": 8,
       "Cargo": false
     },
     {
@@ -55,7 +55,7 @@
       "Col": 20,
       "CoreTier": 0,
       "Dir": 1,
-      "HoleCount": 4,
+      "HoleCount": 8,
       "Cargo": false
     },
     {
@@ -63,7 +63,7 @@
       "Col": 22,
       "CoreTier": 0,
       "Dir": 1,
-      "HoleCount": 4,
+      "HoleCount": 8,
       "Cargo": false
     },
     {
@@ -71,7 +71,7 @@
       "Col": 23,
       "CoreTier": 0,
       "Dir": 1,
-      "HoleCount": 4,
+      "HoleCount": 8,
       "Cargo": false
     },
     {
@@ -79,7 +79,7 @@
       "Col": 24,
       "CoreTier": 0,
       "Dir": 1,
-      "HoleCount": 4,
+      "HoleCount": 8,
       "Cargo": false
     },
     {
@@ -87,7 +87,7 @@
       "Col": 26,
       "CoreTier": 0,
       "Dir": 1,
-      "HoleCount": 4,
+      "HoleCount": 8,
       "Cargo": false
     },
     {
@@ -95,7 +95,7 @@
       "Col": 27,
       "CoreTier": 0,
       "Dir": 1,
-      "HoleCount": 4,
+      "HoleCount": 8,
       "Cargo": false
     },
     {
@@ -103,7 +103,7 @@
       "Col": 28,
       "CoreTier": 0,
       "Dir": 1,
-      "HoleCount": 4,
+      "HoleCount": 8,
       "Cargo": false
     }
   ],

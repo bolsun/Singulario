@@ -49,14 +49,13 @@ public sealed class Territory
 		return added;
 	}
 
-	// Следующее кольцо (T011): прямоугольник вокруг открытых чанков, расширенный
-	// на 1 со всех сторон, без уже открытых (2×2 → 4×4 → 6×6 …). Порядок —
-	// (cy, cx). Пусто, если вся карта открыта или набор пуст.
-	public List<(int cx, int cy)> NextRing()
+	// Прямоугольник открытых чанков включительно (T012 — камера на старте и при
+	// расширении). false, если вся карта открыта или набор пуст.
+	public bool TryGetBounds(out int x0, out int y0, out int x1, out int y1)
 	{
-		var ring = new List<(int cx, int cy)>();
-		if (AllOpen || _open.Count == 0) return ring;
-		int x0 = int.MaxValue, y0 = int.MaxValue, x1 = int.MinValue, y1 = int.MinValue;
+		x0 = y0 = int.MaxValue;
+		x1 = y1 = int.MinValue;
+		if (AllOpen || _open.Count == 0) return false;
 		foreach (var (cx, cy) in _open)
 		{
 			if (cx < x0) x0 = cx;
@@ -64,6 +63,16 @@ public sealed class Territory
 			if (cy < y0) y0 = cy;
 			if (cy > y1) y1 = cy;
 		}
+		return true;
+	}
+
+	// Следующее кольцо (T011): прямоугольник вокруг открытых чанков, расширенный
+	// на 1 со всех сторон, без уже открытых (2×2 → 4×4 → 6×6 …). Порядок —
+	// (cy, cx). Пусто, если вся карта открыта или набор пуст.
+	public List<(int cx, int cy)> NextRing()
+	{
+		var ring = new List<(int cx, int cy)>();
+		if (!TryGetBounds(out int x0, out int y0, out int x1, out int y1)) return ring;
 		for (int cy = y0 - 1; cy <= y1 + 1; cy++)
 			for (int cx = x0 - 1; cx <= x1 + 1; cx++)
 				if (!_open.Contains((cx, cy))) ring.Add((cx, cy));

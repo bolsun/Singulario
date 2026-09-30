@@ -377,6 +377,16 @@ public partial class NucleusLayer : Node2D
 	// (TerritoryLayer). Песочница открывает всю карту.
 	public Territory Territory { get; private set; }
 	private TerritoryLayer _territoryLayer;
+	private CameraController _camera;
+	// Подсказка управления (T012): данные — ControlHints, вид — HintLabel.
+	public ControlHints Hints { get; } = new();
+
+	// Показ расширения камерой (T012): первые ExpansionCameraShows расширений
+	// камера летит в центр и отдаляется до всей открытой области, затем сходит
+	// затемнение нового кольца, на середине схода — вспышка ЧД. Дальше —
+	// расширение без движения камеры.
+	[Export] public int ExpansionCameraShows = 4;
+	[Export] public float ExpansionFlightSeconds = 1.2f;
 	private CrossroadLayer _crossroadLayer;
 
 	// Атомы в режиме перекрёстка (T010) — только для отрисовки колец
@@ -457,18 +467,53 @@ public partial class NucleusLayer : Node2D
 			if (index < 0) { GD.PushWarning($"[NucleusLayer] награда: неизвестный рецепт «{id}» — пропущен."); continue; }
 			if (Goals.OpenRecipe(id)) GD.Print($"[NucleusLayer] открыт рецепт «{StarRecipes.All[index].Name}».");
 		}
+		bool shown = false;
 		if (reward.Ring)
 		{
 			var ring = Territory.NextRing();
 			OpenChunks(ring);
-			_territoryLayer?.RevealChunks(ring);
 			PlaceRewardTemplates(reward.Templates, ring, Goals.PlacementSeed(stage));
+			shown = ShowExpansion(ring);
+			if (!shown) _territoryLayer?.RevealChunks(ring);
 		}
 		else if (reward.Templates.Count > 0)
 			GD.PushWarning($"[NucleusLayer] награда этапа {stage + 1}: шаблоны без кольца не ставятся.");
 		Goals.BeginStage(stage + 1, BlackHoles);
-		_blackHoleLayer?.FlashAll();
+		if (!shown) _blackHoleLayer?.FlashAll();
 		GD.Print(Goals.AllDone ? "[NucleusLayer] все задания выполнены." : $"[NucleusLayer] задание {Goals.Stage + 1}: «{Goals.Current.Name}».");
+	}
+
+	// Показ расширения камерой (см. ExpansionCameraShows). Номер расширения —
+	// из размера территории: 2×2 — старт, 4×4 — первое, 6×6 — второе…
+	// Логика (чанки, шаблоны) уже применена; здесь — только вид.
+	private bool ShowExpansion(List<(int cx, int cy)> ring)
+	{
+		if (_camera == null || _territoryLayer == null || ring.Count == 0) return false;
+		if (!Territory.TryGetBounds(out int x0, out int y0, out int x1, out int y1)) return false;
+		int expansion = (System.Math.Max(x1 - x0, y1 - y0) + 1 - 2) / 2;
+		if (expansion < 1 || expansion > ExpansionCameraShows) return false;
+		_territoryLayer.HoldChunks(ring);
+		int session = _showSession;
+		_camera.ShowRect(ChunkRectWorld(x0, y0, x1, y1), ExpansionFlightSeconds, () =>
+		{
+			if (session != _showSession) return;
+			_territoryLayer.RevealChunks(ring);
+			GetTree().CreateTimer(TerritoryLayer.RevealSeconds * 0.5f).Timeout += () =>
+			{
+				if (session == _showSession) _blackHoleLayer?.FlashAll();
+			};
+		});
+		return true;
+	}
+
+	// Меняется при очистке поля — отложенные шаги показа прежнего поля не выполняются.
+	private int _showSession;
+
+	// Прямоугольник чанков [x0..x1]×[y0..y1] в мировых координатах.
+	private Rect2 ChunkRectWorld(int x0, int y0, int x1, int y1)
+	{
+		float chunkWorld = ChunkSize * CellSize;
+		return new Rect2(x0 * chunkWorld, y0 * chunkWorld, (x1 - x0 + 1) * chunkWorld, (y1 - y0 + 1) * chunkWorld);
 	}
 
 	// Шаблоны награды — в случайные места нового кольца (seed — явный): шаблон
@@ -981,6 +1026,7 @@ public partial class NucleusLayer : Node2D
 		// Затемнение закрытых чанков — отдельный узел поверх объектов слоя 1,
 		// создаётся из кода (в сцене его нет).
 		_territoryLayer = new TerritoryLayer { Name = "TerritoryLayer", Layer = this };
+		_camera = GetNodeOrNull<CameraController>("../Camera2D");
 		GetParent().CallDeferred(Node.MethodName.AddChild, _territoryLayer);
 		// Кольца перекрёстков (T010) — тоже из кода, поверх атомов.
 		_crossroadLayer = new CrossroadLayer { Name = "CrossroadLayer", Layer = this };
@@ -3887,6 +3933,14 @@ public partial class NucleusLayer : Node2D
 		public List<SavedChunk> OpenChunks { get; set; }
 		// Задания ЧД (T011). null — старое сохранение: этап 1, прогресс с нуля.
 		public SavedGoals Goals { get; set; }
+		// Подсказка управления (T012). null — старое сохранение: пройдена.
+		public SavedHints Hints { get; set; }
+	}
+
+	private class SavedHints
+	{
+		public bool Camera { get; set; } // W, A, S, D выполнено
+		public bool Grid { get; set; }   // G выполнено
 	}
 
 	private class SavedGoals
@@ -4019,6 +4073,7 @@ public partial class NucleusLayer : Node2D
 				Stage = Goals.Stage, Baseline = new List<long>(Goals.Baseline),
 				Recipes = Goals.SortedRecipes(), Seed = Goals.Seed,
 			},
+			Hints = new SavedHints { Camera = Hints.CameraDone, Grid = Hints.GridDone },
 		};
 		if (!Territory.AllOpen)
 		{
@@ -4133,6 +4188,8 @@ public partial class NucleusLayer : Node2D
 		ApplyFieldData(data, 0, 0, "поле загружено из JSON, тик сброшен в 0");
 		// Задания — после объектов: счётчики ЧД уже восстановлены.
 		RestoreGoals(data.Goals, Inventory.Sandbox);
+		// Подсказка (T012): нет поля — пройдена.
+		Hints.Set(data.Hints?.Camera ?? true, data.Hints?.Grid ?? true);
 		error = null;
 		return true;
 	}
@@ -4444,8 +4501,12 @@ public partial class NucleusLayer : Node2D
 		Goals.Seed = Goals.Data.Seed;
 		Goals.ClearRecipes();
 		Goals.BeginStage(0, BlackHoles);
+		Hints.Reset();
 		_templateCorner = null;
 		PlaceTemplate(t, StartZoneChunkX, StartZoneChunkY, StartZoneTemplatePath);
+		// Камера — на все стартовые чанки (T012).
+		if (_camera != null && Territory.TryGetBounds(out int x0, out int y0, out int x1, out int y1))
+			_camera.ShowRect(ChunkRectWorld(x0, y0, x1, y1));
 		GD.Print("[NucleusLayer] новая игра: настоящий режим, открыты стартовые 2×2 чанка.");
 		return true;
 	}
@@ -4471,6 +4532,11 @@ public partial class NucleusLayer : Node2D
 		_cargoSet.Clear();
 		_crossSet.Clear();
 		_claimed.Clear();
+
+		// Показ расширения прежнего поля (T012) прерывается.
+		_showSession++;
+		_camera?.CancelFlight();
+		_territoryLayer?.ClearEffects();
 
 		foreach (var layer in _energyClusterLayers) layer.ClearAll();
 		_moleculeLayer?.ClearAll();

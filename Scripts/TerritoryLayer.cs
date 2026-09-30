@@ -22,9 +22,12 @@ public partial class TerritoryLayer : Node2D
 	private readonly List<(int cx, int cy)> _flashKeys = new();
 
 	// Расширение (T011): затемнение только что открытых чанков плавно сходит.
-	private const float RevealSeconds = 1.5f;
+	public const float RevealSeconds = 1.5f;
 	private readonly List<(int cx, int cy)> _revealed = new();
 	private float _reveal;
+	// Показ расширения камерой (T012): пока камера летит, новые чанки остаются
+	// под полным затемнением (HoldChunks), сход начинается в RevealChunks.
+	private bool _holding;
 
 	public override void _Ready()
 	{
@@ -36,15 +39,34 @@ public partial class TerritoryLayer : Node2D
 
 	public void RevealChunks(IEnumerable<(int cx, int cy)> chunks)
 	{
+		_holding = false;
 		_revealed.Clear();
 		_revealed.AddRange(chunks);
 		_reveal = RevealSeconds;
 	}
 
+	// Держать затемнение над чанками, пока не вызван RevealChunks.
+	public void HoldChunks(IEnumerable<(int cx, int cy)> chunks)
+	{
+		_revealed.Clear();
+		_revealed.AddRange(chunks);
+		_reveal = RevealSeconds;
+		_holding = true;
+	}
+
+	// Снять все эффекты (новая игра, загрузка).
+	public void ClearEffects()
+	{
+		_holding = false;
+		_reveal = 0f;
+		_revealed.Clear();
+		_flashes.Clear();
+	}
+
 	public override void _Process(double delta)
 	{
 		Visible = !ViewLayer.IsLayer2;
-		if (_reveal > 0f)
+		if (_reveal > 0f && !_holding)
 		{
 			_reveal = Mathf.Max(0f, _reveal - (float)delta);
 			if (_reveal <= 0f) _revealed.Clear();
