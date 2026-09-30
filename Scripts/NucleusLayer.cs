@@ -397,6 +397,10 @@ public partial class NucleusLayer : Node2D
 	// IsCellBlockedForLayer1/CanPlaceBlackHoleCell), рисуется затемнённым
 	// (TerritoryLayer). Песочница открывает всю карту.
 	public Territory Territory { get; private set; }
+	// Состав чанков для туманностей дальнего зума (T015): атомы и источники по тиру.
+	public readonly ChunkComposition Composition = new();
+	private readonly int[] _compScratch = new int[ChunkComposition.TierCount];
+	private int _compSourceVersion = -1;
 	private TerritoryLayer _territoryLayer;
 	private CameraController _camera;
 	// Подсказка управления (T012): данные — ControlHints, вид — HintLabel.
@@ -836,6 +840,7 @@ public partial class NucleusLayer : Node2D
 		// Буферы MultiMesh тел, дырок и частиц (T014) — пишутся целиком, см. RebuildChunkMeshes.
 		public float[] BodyBuf, HoleBuf, ParticleBuf;
 		public bool Dots; // тела нарисованы точками (дальний зум, AtomDotZoom)
+		public int Cx, Cy;
 	}
 
 	private readonly Dictionary<(int cx, int cy), WorldChunk> _chunks = new();
@@ -4105,7 +4110,9 @@ public partial class NucleusLayer : Node2D
 			HoleNode = holeNode,
 			ParticleNode = particleNode,
 			WorldRect = worldRect,
-			Nuclei = nuclei
+			Nuclei = nuclei,
+			Cx = cx,
+			Cy = cy
 		};
 
 		_chunks[key] = chunk;
@@ -4126,6 +4133,7 @@ public partial class NucleusLayer : Node2D
 	// раз перестраиваем целиком (для размеров чанка это дёшево).
 	private void RebuildChunkMeshes(WorldChunk chunk)
 	{
+		RecountChunkAtoms(chunk);
 		int nucleusCount = chunk.Nuclei.Count;
 		int slotCount = nucleusCount * 8;
 		// Границы отсечения — чанк с запасом (едущие атомы выходят за край на
@@ -4185,6 +4193,31 @@ public partial class NucleusLayer : Node2D
 			RenderingServer.MultimeshSetBuffer(chunk.ParticleNode.Multimesh.GetRid(), chunk.ParticleBuf);
 		}
 		UpdateChunkVisuals(chunk);
+	}
+
+	// Состав чанка (T015) заново из chunk.Nuclei: рабочие атомы Ж/К/С и серые
+	// (перекрёстки — по своему тиру); обломки, вращатели и бросатели не считаются.
+	// Через RebuildChunkMeshes проходит любое изменение списка атомов чанка.
+	private void RecountChunkAtoms(WorldChunk chunk)
+	{
+		System.Array.Clear(_compScratch);
+		foreach (var n in chunk.Nuclei)
+			if (!n.IsCargo && ChunkComposition.IsCountedTier(n.CoreTier)) _compScratch[n.CoreTier]++;
+		Composition.SetAtoms(chunk.Cx, chunk.Cy, _compScratch);
+	}
+
+	// Источники в составе чанков (T015) — полный пересчёт, только когда
+	// месторождения поменялись (установка, удаление, исчерпание, загрузка).
+	private void RecountCompositionSourcesIfNeeded()
+	{
+		int version = 0;
+		foreach (var layer in _energyClusterLayers) version += layer.Version;
+		if (version == _compSourceVersion) return;
+		_compSourceVersion = version;
+		Composition.ClearSources();
+		foreach (var layer in _energyClusterLayers)
+			foreach (var (row, col) in layer.EnumerateCells())
+				Composition.AddSource(CanonicalOrder.FloorDiv(col, ChunkSize), CanonicalOrder.FloorDiv(row, ChunkSize), layer.Tier);
 	}
 
 	// Строит кольцо ровно с holeCount реальными гнёздами (из 8 возможных

@@ -497,6 +497,7 @@ public partial class EnergyClusterLayer : TileMapLayer
 	// с поля.
 	private void RemoveCluster(ParticleCluster cluster)
 	{
+		Version++; // исчерпание меняет набор клеток, как и удаление
 		foreach (var cellKey in cluster.Cells)
 		{
 			EraseCell(new Vector2I(cellKey.col, cellKey.row));
