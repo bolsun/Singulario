@@ -26,4 +26,4 @@ project/assembly_name="Singulario"
 [rendering]
 
 rendering_device/driver.windows="d3d12"
-environment/defaults/default_clear_color=Color(0.09061069, 0.061291233, 0.09305779, 1)
+environment/defaults/default_clear_color=Color(0.05564989, 0.03483996, 0.05864413, 1)
