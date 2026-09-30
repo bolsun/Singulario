@@ -39,7 +39,7 @@ public sealed class Territory
 		Version++;
 	}
 
-	// Открыть чанки (T010 — расширение по награде). Возвращает, сколько новых.
+	// Открыть чанки (расширение по награде заданий — T011). Возвращает, сколько новых.
 	public int Open(IEnumerable<(int cx, int cy)> chunks)
 	{
 		int added = 0;
@@ -47,6 +47,27 @@ public sealed class Territory
 			if (_open.Add(c)) added++;
 		if (added > 0) Version++;
 		return added;
+	}
+
+	// Следующее кольцо (T011): прямоугольник вокруг открытых чанков, расширенный
+	// на 1 со всех сторон, без уже открытых (2×2 → 4×4 → 6×6 …). Порядок —
+	// (cy, cx). Пусто, если вся карта открыта или набор пуст.
+	public List<(int cx, int cy)> NextRing()
+	{
+		var ring = new List<(int cx, int cy)>();
+		if (AllOpen || _open.Count == 0) return ring;
+		int x0 = int.MaxValue, y0 = int.MaxValue, x1 = int.MinValue, y1 = int.MinValue;
+		foreach (var (cx, cy) in _open)
+		{
+			if (cx < x0) x0 = cx;
+			if (cx > x1) x1 = cx;
+			if (cy < y0) y0 = cy;
+			if (cy > y1) y1 = cy;
+		}
+		for (int cy = y0 - 1; cy <= y1 + 1; cy++)
+			for (int cx = x0 - 1; cx <= x1 + 1; cx++)
+				if (!_open.Contains((cx, cy))) ring.Add((cx, cy));
+		return ring;
 	}
 
 	// Открытые чанки в детерминированном порядке (cy, cx) — для сохранения.

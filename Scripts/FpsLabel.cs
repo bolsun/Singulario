@@ -22,6 +22,8 @@ public partial class FpsLabel : Label
 
 		// Строка инвентаря (T008) — соседом в том же HUD, без правки сцены.
 		GetParent().CallDeferred(Node.MethodName.AddChild, new InventoryLabel { Name = "InventoryLabel" });
+		// Задание ЧД (T011) — под строкой инвентаря.
+		GetParent().CallDeferred(Node.MethodName.AddChild, new GoalLabel { Name = "GoalLabel" });
 	}
 
 	public override void _Process(double delta)

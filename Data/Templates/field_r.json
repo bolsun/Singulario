@@ -1,0 +1,58 @@
+{
+  "WidthChunks": 1,
+  "HeightChunks": 1,
+  "Nuclei": [
+    {
+      "Row": 11,
+      "Col": 4,
+      "CoreTier": 1,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": true
+    },
+    {
+      "Row": 11,
+      "Col": 8,
+      "CoreTier": 1,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": true
+    },
+    {
+      "Row": 11,
+      "Col": 12,
+      "CoreTier": 1,
+      "Dir": 1,
+      "HoleCount": 4,
+      "Cargo": true
+    }
+  ],
+  "Sources": [
+    {
+      "Tier": 1,
+      "Row": 6,
+      "Col": 6,
+      "Amount": 500
+    },
+    {
+      "Tier": 1,
+      "Row": 6,
+      "Col": 7,
+      "Amount": 500
+    },
+    {
+      "Tier": 1,
+      "Row": 7,
+      "Col": 6,
+      "Amount": 500
+    },
+    {
+      "Tier": 1,
+      "Row": 7,
+      "Col": 7,
+      "Amount": 500
+    }
+  ],
+  "BlackHoleCells": [],
+  "Stars": []
+}

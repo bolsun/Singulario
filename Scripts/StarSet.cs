@@ -21,19 +21,48 @@ public enum IngredientKind { Particle, Atom }
 // Atom: Id — тир атома-переносчика (CoreTier).
 public readonly record struct Ingredient(IngredientKind Kind, int Id, int Count);
 
-public sealed record StarRecipe(string Name, int ResultTier, int ResultHoles, Ingredient[] Ingredients);
+// Результат рецепта: атом-предмет (едет по линии) или звезда-предмет (T011) —
+// звезда 3×3 по дыркам не едет, только в выходной буфер и оттуда в инвентарь.
+public enum RecipeResult { Atom, Star }
 
-// Рецепты — данные в одном месте. Любая звезда может делать любой рецепт.
+// Id — стабильное имя (по нему рецепты открываются заданиями и сохраняются).
+public sealed record StarRecipe(string Id, string Name, RecipeResult Kind, int ResultTier, int ResultHoles, Ingredient[] Ingredients);
+
+// Рецепты — данные в одном месте. Любая звезда может делать любой рецепт
+// (в настоящем режиме игрок выбирает только открытые, T011).
 public static class StarRecipes
 {
+	// Сколько атомов Ж стоит звезда Ж (умеренно — звёзд нужно много, GDD).
+	public const int StarYellowAtoms = 8;
+
 	public static readonly StarRecipe[] All =
 	{
-		new("атом Ж", 0, 8, new[] { new Ingredient(IngredientKind.Particle, 0, 8) }),
-		new("атом К", 1, 8, new[] { new Ingredient(IngredientKind.Atom, 0, 1), new Ingredient(IngredientKind.Particle, 1, 8) }),
-		new("атом С", 2, 8, new[] { new Ingredient(IngredientKind.Atom, 0, 1), new Ingredient(IngredientKind.Particle, 2, 8) }),
+		new("atom_y", "атом Ж", RecipeResult.Atom, 0, 8, new[] { new Ingredient(IngredientKind.Particle, 0, 8) }),
+		new("atom_r", "атом К", RecipeResult.Atom, 1, 8, new[] { new Ingredient(IngredientKind.Atom, 0, 1), new Ingredient(IngredientKind.Particle, 1, 8) }),
+		new("atom_b", "атом С", RecipeResult.Atom, 2, 8, new[] { new Ingredient(IngredientKind.Atom, 0, 1), new Ingredient(IngredientKind.Particle, 2, 8) }),
+		new("star_y", "звезда Ж", RecipeResult.Star, 0, 0, new[] { new Ingredient(IngredientKind.Atom, 0, StarYellowAtoms) }),
 	};
 
 	public static int Count => All.Length;
+
+	// Индекс рецепта по Id или -1.
+	public static int IndexOf(string id)
+	{
+		for (int i = 0; i < All.Length; i++) if (All[i].Id == id) return i;
+		return -1;
+	}
+}
+
+// Предмет выходного буфера звезды — целый код (так он и сохраняется):
+// 0..StarBase-1 — атом тира (как до T011), StarBase + тир — звезда тира.
+public static class StarItem
+{
+	public const int StarBase = 16;
+
+	public static int Of(StarRecipe recipe) =>
+		recipe.Kind == RecipeResult.Star ? StarBase + recipe.ResultTier : recipe.ResultTier;
+	public static bool IsStar(int code) => code >= StarBase;
+	public static int Tier(int code) => IsStar(code) ? code - StarBase : code;
 }
 
 public sealed class Star
@@ -50,7 +79,8 @@ public sealed class Star
 	public int[] Buffer { get; private set; }
 	public bool Producing;
 	public int Elapsed; // тиков работы; == Duration — готово, ждёт места в выходном буфере
-	// Выходной буфер (T008): тиры готовых атомов, голова — самый старый.
+	// Выходной буфер (T008): коды готовых предметов (StarItem — атом или
+	// звезда, T011), голова — самый старый.
 	// Смена рецепта его не сжигает — атомы уже сделаны.
 	public readonly Queue<int> Output = new();
 
@@ -143,7 +173,7 @@ public sealed class Star
 	public bool TryFinishToOutput(int duration, int capacity)
 	{
 		if (!Producing || Elapsed < duration || Output.Count >= capacity) return false;
-		Output.Enqueue(RecipeData.ResultTier);
+		Output.Enqueue(StarItem.Of(RecipeData));
 		Producing = false;
 		Elapsed = 0;
 		TryStart();

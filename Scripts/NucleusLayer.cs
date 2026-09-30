@@ -400,6 +400,127 @@ public partial class NucleusLayer : Node2D
 		return added;
 	}
 
+	// Задания ЧД (T011): цепочка этапов из GoalsPath (данные — GoalChain),
+	// награды — здесь (CompleteGoalStage). Цепочка идёт только в игре с
+	// ограниченной территорией (после «Новой игры»); при открытой всей карте
+	// (запуск, старые сохранения) — стоит.
+	[Export] public string GoalsPath = "res://Data/goals.json";
+	public GoalChain Goals { get; private set; }
+	public bool GoalsActive => Goals != null && !Territory.AllOpen;
+
+	// Цепочка из файла; ошибка — пустая цепочка (заданий нет) и сообщение.
+	private GoalChain LoadGoals()
+	{
+		GoalChainData data = null;
+		string error;
+		if (!FileAccess.FileExists(GoalsPath)) error = $"файл {GoalsPath} не найден.";
+		else
+		{
+			using var file = FileAccess.Open(GoalsPath, FileAccess.ModeFlags.Read);
+			if (file == null) error = $"не удалось открыть {GoalsPath}: {FileAccess.GetOpenError()}.";
+			else data = GoalChainData.Parse(file.GetAsText(), out error);
+		}
+		if (data == null)
+		{
+			GD.PrintErr($"[NucleusLayer] задания: {error} Заданий нет.");
+			return new GoalChain(null);
+		}
+		foreach (var st in data.Stages)
+			foreach (var id in st.Reward.Recipes)
+				if (StarRecipes.IndexOf(id) < 0) GD.PushWarning($"[NucleusLayer] задания: этап «{st.Name}» открывает неизвестный рецепт «{id}».");
+		GD.Print($"[NucleusLayer] задания: {data.Stages.Count} этап(ов) из {GoalsPath}, seed {data.Seed}.");
+		return new GoalChain(data);
+	}
+
+	// Рецепт звезды доступен игроку: в песочнице — все, иначе — открытые заданиями.
+	public bool IsRecipeAvailable(int index) =>
+		index >= 0 && index < StarRecipes.Count && (Inventory.Sandbox || Goals.IsRecipeOpen(StarRecipes.All[index].Id));
+
+	// После каждого тика: этап выполнен — награда и следующий этап.
+	private void CheckGoals()
+	{
+		if (GoalsActive && !Goals.AllDone && Goals.IsStageComplete(BlackHoles)) CompleteGoalStage();
+	}
+
+	// Награда текущего этапа (GDD «Задания ЧД и расширение»): открыть рецепты,
+	// кольцо чанков, поставить шаблоны в свободные чанки нового кольца; затем
+	// следующий этап (прогресс — с текущих счётчиков ЧД).
+	private void CompleteGoalStage()
+	{
+		int stage = Goals.Stage;
+		var st = Goals.Current;
+		GD.Print($"[NucleusLayer] задание {stage + 1} «{st.Name}» выполнено.");
+		var reward = st.Reward;
+		foreach (var id in reward.Recipes)
+		{
+			int index = StarRecipes.IndexOf(id);
+			if (index < 0) { GD.PushWarning($"[NucleusLayer] награда: неизвестный рецепт «{id}» — пропущен."); continue; }
+			if (Goals.OpenRecipe(id)) GD.Print($"[NucleusLayer] открыт рецепт «{StarRecipes.All[index].Name}».");
+		}
+		if (reward.Ring)
+		{
+			var ring = Territory.NextRing();
+			OpenChunks(ring);
+			_territoryLayer?.RevealChunks(ring);
+			PlaceRewardTemplates(reward.Templates, ring, Goals.PlacementSeed(stage));
+		}
+		else if (reward.Templates.Count > 0)
+			GD.PushWarning($"[NucleusLayer] награда этапа {stage + 1}: шаблоны без кольца не ставятся.");
+		Goals.BeginStage(stage + 1, BlackHoles);
+		_blackHoleLayer?.FlashAll();
+		GD.Print(Goals.AllDone ? "[NucleusLayer] все задания выполнены." : $"[NucleusLayer] задание {Goals.Stage + 1}: «{Goals.Current.Name}».");
+	}
+
+	// Шаблоны награды — в случайные места нового кольца (seed — явный): шаблон
+	// целиком внутри кольца, не пересекается с другими шаблонами и с чанками,
+	// где уже что-то есть. Места нет — сообщение, шаблон пропускается.
+	private void PlaceRewardTemplates(List<string> paths, List<(int cx, int cy)> ring, ulong seed)
+	{
+		if (paths.Count == 0) return;
+		var free = new HashSet<(int cx, int cy)>();
+		foreach (var c in ring) if (!ChunkHasContent(c.cx, c.cy)) free.Add(c);
+		var rng = new Rng(seed);
+		var candidates = new List<(int cx, int cy)>();
+		foreach (var path in paths)
+		{
+			var t = LoadTemplate(path, out string error);
+			if (t == null) { GD.PrintErr($"[NucleusLayer] награда: {error}"); continue; }
+			int w = System.Math.Max(1, t.WidthChunks), h = System.Math.Max(1, t.HeightChunks);
+			candidates.Clear();
+			// Кандидаты — в порядке кольца (cy, cx): выбор зависит только от seed.
+			foreach (var (cx, cy) in ring)
+			{
+				bool fits = true;
+				for (int dy = 0; dy < h && fits; dy++)
+					for (int dx = 0; dx < w && fits; dx++)
+						fits = free.Contains((cx + dx, cy + dy));
+				if (fits) candidates.Add((cx, cy));
+			}
+			if (candidates.Count == 0)
+			{
+				GD.PushWarning($"[NucleusLayer] награда: для шаблона {path} ({w}×{h}) нет места в новом кольце — пропущен.");
+				continue;
+			}
+			var at = candidates[rng.NextInt(candidates.Count)];
+			for (int dy = 0; dy < h; dy++)
+				for (int dx = 0; dx < w; dx++)
+					free.Remove((at.cx + dx, at.cy + dy));
+			PlaceTemplate(t, at.cx, at.cy, path);
+		}
+	}
+
+	// В чанке есть атом, источник, ЧД или звезда.
+	private bool ChunkHasContent(int cx, int cy)
+	{
+		if (_chunks.TryGetValue((cx, cy), out var chunk) && chunk.Nuclei.Count > 0) return true;
+		int row0 = cy * ChunkSize, col0 = cx * ChunkSize;
+		if (BlackHoles.Overlaps(row0, col0, ChunkSize) || Stars.Overlaps(row0, col0, ChunkSize)) return true;
+		foreach (var layer in _energyClusterLayers)
+			foreach (var (row, col) in layer.EnumerateCells())
+				if (ChunkOf(row) == cy && ChunkOf(col) == cx) return true;
+		return false;
+	}
+
 	// Клетка в закрытом чанке — красная вспышка чанка, true. Для отказов ввода.
 	public bool DenyIfClosed(int row, int col)
 	{
@@ -853,6 +974,10 @@ public partial class NucleusLayer : Node2D
 		Stars = new StarSet();
 		Inventory = new Inventory { Sandbox = SandboxMode };
 		Territory = new Territory();
+		// Запуск — песочное поле (вся карта открыта): все рецепты открыты, цепочка стоит.
+		Goals = LoadGoals();
+		Goals.OpenAllRecipes();
+		Goals.BeginStage(0, BlackHoles);
 		// Затемнение закрытых чанков — отдельный узел поверх объектов слоя 1,
 		// создаётся из кода (в сцене его нет).
 		_territoryLayer = new TerritoryLayer { Name = "TerritoryLayer", Layer = this };
@@ -898,6 +1023,13 @@ public partial class NucleusLayer : Node2D
 				var mouse = GetGlobalMousePosition();
 				int cx = ChunkOf(Mathf.FloorToInt(mouse.X / CellSize)), cy = ChunkOf(Mathf.FloorToInt(mouse.Y / CellSize));
 				if (OpenChunks(new[] { (cx, cy) }) == 0) GD.Print($"[NucleusLayer] чанк ({cx},{cy}) уже открыт.");
+				GetViewport().SetInputAsHandled();
+			}
+			else if (key.Keycode == Key.P)
+			{
+				// Отладка (T011): засчитать текущее задание.
+				if (GoalsActive && !Goals.AllDone) CompleteGoalStage();
+				else GD.Print("[NucleusLayer] засчитывать нечего: заданий нет или все выполнены.");
 				GetViewport().SetInputAsHandled();
 			}
 			else if (key.Keycode == Key.B && !ViewLayer.IsLayer2)
@@ -1472,6 +1604,7 @@ public partial class NucleusLayer : Node2D
 				_tickAccumulatorMs -= PrototypeTickMs;
 				_globalTick++;
 				SimTick();
+				CheckGoals();
 				// Слой 2 (перенос атомов молекулами) — на тех же часах, после
 				// слоя 1: порты уже обменялись частицами на этом тике.
 				_moleculeLayer?.SimTick(_globalTick);
@@ -2040,6 +2173,9 @@ public partial class NucleusLayer : Node2D
 		foreach (var star in Stars.All)
 		{
 			if (star.Output.Count == 0) continue;
+			// Звезда-предмет (T011) по дыркам не едет — ждёт в буфере, пока игрок
+			// не заберёт её в инвентарь; до тех пор выдача в линию стоит.
+			if (StarItem.IsStar(star.Output.Peek())) continue;
 			var (row, col) = star.OutputCell;
 			if (!_entAt.TryGetValue((row, col), out var n)) continue;
 			if (n.IsCargo || _globalTick < n.AsleepUntilTick || (n.IsMoving && n.IsFlying)) continue;
@@ -3744,9 +3880,21 @@ public partial class NucleusLayer : Node2D
 		// Инвентарь и режим (T008). В старых сохранениях нет: пустой инвентарь,
 		// режим — настройка SandboxMode.
 		public List<SavedTierCount> Inventory { get; set; } = new();
+		// Звёзды-предметы в инвентаре (T011). В старых сохранениях нет — пусто.
+		public List<SavedTierCount> InventoryStars { get; set; } = new();
 		public bool? Sandbox { get; set; }
 		// Открытые чанки (T009). null — вся карта открыта (старые сохранения).
 		public List<SavedChunk> OpenChunks { get; set; }
+		// Задания ЧД (T011). null — старое сохранение: этап 1, прогресс с нуля.
+		public SavedGoals Goals { get; set; }
+	}
+
+	private class SavedGoals
+	{
+		public int Stage { get; set; }             // индекс этапа (0 — первый)
+		public List<long> Baseline { get; set; } = new(); // счётчики ЧД на начало этапа, по пунктам
+		public List<string> Recipes { get; set; } = new(); // открытые рецепты (StarRecipe.Id)
+		public ulong Seed { get; set; }
 	}
 
 	private class SavedChunk
@@ -3765,7 +3913,7 @@ public partial class NucleusLayer : Node2D
 		public List<int> Buffer { get; set; } = new(); // набрано по ингредиентам рецепта
 		public bool Producing { get; set; }
 		public int Elapsed { get; set; }
-		// Выходной буфер (T008): тиры готовых атомов, первый — самый старый. В старых сохранениях нет.
+		// Выходной буфер (T008): коды предметов (StarItem: тир атома или звезда, T011), первый — самый старый. В старых сохранениях нет.
 		public List<int> Output { get; set; } = new();
 	}
 
@@ -3863,7 +4011,15 @@ public partial class NucleusLayer : Node2D
 	// в начале раздела о том, что НЕ сохраняется.
 	public string ExportFieldJson()
 	{
-		var data = new FieldSaveData { Sandbox = Inventory.Sandbox };
+		var data = new FieldSaveData
+		{
+			Sandbox = Inventory.Sandbox,
+			Goals = new SavedGoals
+			{
+				Stage = Goals.Stage, Baseline = new List<long>(Goals.Baseline),
+				Recipes = Goals.SortedRecipes(), Seed = Goals.Seed,
+			},
+		};
 		if (!Territory.AllOpen)
 		{
 			data.OpenChunks = new List<SavedChunk>();
@@ -3873,6 +4029,9 @@ public partial class NucleusLayer : Node2D
 		for (int t = 0; t < Inventory.TierCount; t++)
 			if (Inventory.Count(t) != 0)
 				data.Inventory.Add(new SavedTierCount { Tier = t, Count = Inventory.Count(t) });
+		for (int t = 0; t < Inventory.TierCount; t++)
+			if (Inventory.StarCount(t) != 0)
+				data.InventoryStars.Add(new SavedTierCount { Tier = t, Count = Inventory.StarCount(t) });
 
 		foreach (var n in _activeSet) data.Nuclei.Add(ToSavedNucleus(n));
 		foreach (var n in _sleepingSet) data.Nuclei.Add(ToSavedNucleus(n));
@@ -3959,6 +4118,8 @@ public partial class NucleusLayer : Node2D
 
 		foreach (var tc in data.Inventory ?? new List<SavedTierCount>())
 			Inventory.Set(tc.Tier, tc.Count);
+		foreach (var tc in data.InventoryStars ?? new List<SavedTierCount>())
+			Inventory.SetStars(tc.Tier, tc.Count);
 		Inventory.Sandbox = data.Sandbox ?? SandboxMode;
 		// Территория — до объектов: в закрытый чанк ничего не ставится.
 		if (data.OpenChunks == null) Territory.OpenAll();
@@ -3970,8 +4131,32 @@ public partial class NucleusLayer : Node2D
 		}
 
 		ApplyFieldData(data, 0, 0, "поле загружено из JSON, тик сброшен в 0");
+		// Задания — после объектов: счётчики ЧД уже восстановлены.
+		RestoreGoals(data.Goals, Inventory.Sandbox);
 		error = null;
 		return true;
+	}
+
+	// Задания из сохранения (T011). Нет данных (старое сохранение) — этап 1,
+	// прогресс с текущих счётчиков ЧД, рецепты: песочница — все, иначе нет.
+	private void RestoreGoals(SavedGoals saved, bool sandbox)
+	{
+		Goals.ClearRecipes();
+		if (saved == null)
+		{
+			Goals.Seed = Goals.Data.Seed;
+			if (sandbox) Goals.OpenAllRecipes();
+			Goals.BeginStage(0, BlackHoles);
+			return;
+		}
+		Goals.Seed = saved.Seed;
+		foreach (var id in saved.Recipes ?? new List<string>())
+		{
+			if (StarRecipes.IndexOf(id) >= 0) Goals.OpenRecipe(id);
+			else GD.PushWarning($"[NucleusLayer] импорт: неизвестный рецепт «{id}» — пропущен.");
+		}
+		Goals.Restore(saved.Stage, saved.Baseline);
+		GD.Print($"[NucleusLayer] задания: этап {System.Math.Min(Goals.Stage + 1, Goals.StageCount)}/{Goals.StageCount}{(Goals.AllDone ? " (все выполнены)" : "")}, рецептов открыто {Goals.SortedRecipes().Count}.");
 	}
 
 	// Расставляет объекты из данных сохранения (или шаблона, T009) поверх
@@ -4062,10 +4247,10 @@ public partial class NucleusLayer : Node2D
 			star.RestoreBuffer(ss.Buffer);
 			star.Producing = ss.Producing;
 			star.Elapsed = ss.Producing ? System.Math.Clamp(ss.Elapsed, 0, StarDuration(star)) : 0;
-			foreach (int tier in ss.Output ?? new List<int>())
+			foreach (int code in ss.Output ?? new List<int>())
 			{
 				if (star.Output.Count >= StarOutputCapacity) break;
-				if (Inventory.IsAtomTier(tier)) star.Output.Enqueue(tier);
+				if (Inventory.IsAtomTier(StarItem.Tier(code))) star.Output.Enqueue(code);
 			}
 			starsPlaced++;
 		}
@@ -4255,6 +4440,10 @@ public partial class NucleusLayer : Node2D
 		ClearFieldForImport();
 		Inventory.Sandbox = false;
 		Territory.Reset(Territory.StartChunks);
+		// Задания (T011): этап 1, рецептов нет, seed — из цепочки.
+		Goals.Seed = Goals.Data.Seed;
+		Goals.ClearRecipes();
+		Goals.BeginStage(0, BlackHoles);
 		_templateCorner = null;
 		PlaceTemplate(t, StartZoneChunkX, StartZoneChunkY, StartZoneTemplatePath);
 		GD.Print("[NucleusLayer] новая игра: настоящий режим, открыты стартовые 2×2 чанка.");

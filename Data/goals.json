@@ -1,0 +1,41 @@
+{
+  "Seed": 20260930,
+  "Stages": [
+    {
+      "Name": "Накормить ЧД частицами Ж",
+      "Requirements": [ { "Kind": "Particle", "Id": 0, "Count": 64 } ],
+      "Reward": {
+        "Ring": true,
+        "Templates": [ "res://Data/Templates/reward_star_y.json" ],
+        "Recipes": [ "atom_y" ]
+      }
+    },
+    {
+      "Name": "Отправить в ЧД атомы Ж",
+      "Requirements": [ { "Kind": "Atom", "Id": 0, "Count": 8 } ],
+      "Reward": {
+        "Ring": true,
+        "Templates": [ "res://Data/Templates/field_r.json" ],
+        "Recipes": [ "star_y" ]
+      }
+    },
+    {
+      "Name": "Накормить ЧД частицами К",
+      "Requirements": [ { "Kind": "Particle", "Id": 1, "Count": 64 } ],
+      "Reward": {
+        "Ring": true,
+        "Templates": [ "res://Data/Templates/field_c.json" ],
+        "Recipes": [ "atom_r" ]
+      }
+    },
+    {
+      "Name": "Накормить ЧД частицами С",
+      "Requirements": [ { "Kind": "Particle", "Id": 2, "Count": 64 } ],
+      "Reward": {
+        "Ring": true,
+        "Templates": [],
+        "Recipes": [ "atom_b" ]
+      }
+    }
+  ]
+}

@@ -263,15 +263,23 @@ public partial class BlackHoleLayer : Node2D
 		_viewRect = new Rect2(cam.GetScreenCenterPosition() - size / 2f, size);
 	}
 
+	// Вспышка всех ЧД при выполнении задания (T011): кольцо расходится от диска
+	// и тает. Только визуал, по времени кадра.
+	[Export] public float RewardFlashSeconds = 1.2f;
+	private float _rewardFlash;
+
+	public void FlashAll() => _rewardFlash = RewardFlashSeconds;
+
 	public override void _Process(double delta)
 	{
 		if (!_ready) return;
+		if (_rewardFlash > 0f) _rewardFlash = Mathf.Max(0f, _rewardFlash - (float)delta);
 		UpdateViewRect();
 		UpdateEffects((float)delta);
 		FillEffectMesh();
 		// Последнюю удалённую ЧД и погасшее превью тоже нужно стереть.
 		bool preview = _toolSelected && !ViewLayer.IsLayer2;
-		if (_holes.Count > 0 || _hadHoles || preview || _hadPreview) QueueRedraw();
+		if (_holes.Count > 0 || _hadHoles || preview || _hadPreview || _rewardFlash > 0f) QueueRedraw();
 		_hadHoles = _holes.Count > 0;
 		_hadPreview = preview;
 	}
@@ -319,6 +327,7 @@ public partial class BlackHoleLayer : Node2D
 			if (!_viewRect.Intersects(rect)) continue;
 			if (_texture != null) DrawTextureRect(_texture, rect, false);
 			if (ShowHitFlash && _fx.TryGetValue(hole, out var fx) && fx.Flash > 0f) DrawFlash(hole, fx.Flash);
+			if (_rewardFlash > 0f) DrawRewardFlash(hole);
 		}
 		if (_toolSelected && !ViewLayer.IsLayer2) DrawPreview();
 	}
@@ -340,6 +349,16 @@ public partial class BlackHoleLayer : Node2D
 		var center = HoleCenter(hole);
 		DrawArc(center, side * 0.47f, 0f, Mathf.Tau, 48, new Color(FlashColor, 0.8f * flash), _cellSize * 0.1f);
 		DrawCircle(center, side * 0.08f * (1f + flash), new Color(HotColor, 0.35f * flash));
+	}
+
+	private void DrawRewardFlash(BlackHole hole)
+	{
+		float t = 1f - _rewardFlash / Mathf.Max(0.01f, RewardFlashSeconds); // 0 → 1
+		float side = hole.Size * _cellSize;
+		var center = HoleCenter(hole);
+		float alpha = 1f - t;
+		DrawCircle(center, side * 0.5f, new Color(FlashColor, 0.35f * alpha * alpha));
+		DrawArc(center, side * (0.5f + 1.5f * t), 0f, Mathf.Tau, 64, new Color(FlashColor, 0.9f * alpha), _cellSize * 0.15f);
 	}
 
 	// Всё летящее видимых ЧД → буфер MultiMesh (порядок экземпляров =

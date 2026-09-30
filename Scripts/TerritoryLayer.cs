@@ -21,6 +21,11 @@ public partial class TerritoryLayer : Node2D
 	private readonly Dictionary<(int cx, int cy), float> _flashes = new();
 	private readonly List<(int cx, int cy)> _flashKeys = new();
 
+	// Расширение (T011): затемнение только что открытых чанков плавно сходит.
+	private const float RevealSeconds = 1.5f;
+	private readonly List<(int cx, int cy)> _revealed = new();
+	private float _reveal;
+
 	public override void _Ready()
 	{
 		ZIndex = 50;
@@ -29,9 +34,21 @@ public partial class TerritoryLayer : Node2D
 
 	public void FlashChunk(int cx, int cy) => _flashes[(cx, cy)] = FlashSeconds;
 
+	public void RevealChunks(IEnumerable<(int cx, int cy)> chunks)
+	{
+		_revealed.Clear();
+		_revealed.AddRange(chunks);
+		_reveal = RevealSeconds;
+	}
+
 	public override void _Process(double delta)
 	{
 		Visible = !ViewLayer.IsLayer2;
+		if (_reveal > 0f)
+		{
+			_reveal = Mathf.Max(0f, _reveal - (float)delta);
+			if (_reveal <= 0f) _revealed.Clear();
+		}
 		if (_flashes.Count > 0)
 		{
 			_flashKeys.Clear();
@@ -77,6 +94,15 @@ public partial class TerritoryLayer : Node2D
 					}
 				}
 			}
+		}
+
+		if (_reveal > 0f && !Layer.Inventory.Sandbox)
+		{
+			var fog = FogColor;
+			float k = _reveal / RevealSeconds;
+			fog.A *= k * k; // быстро светлеет, мягко доходит до нуля
+			foreach (var (cx, cy) in _revealed)
+				DrawRect(new Rect2(cx * chunkWorld, cy * chunkWorld, chunkWorld, chunkWorld), fog);
 		}
 
 		foreach (var pair in _flashes)
