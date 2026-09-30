@@ -45,12 +45,16 @@ uniform float glow_clamp = 1.0;
 uniform vec4 tier_tones[12];
 uniform vec4 bh_tones[3];
 uniform vec4 sing_tones[3];
-uniform float bh_glow_radius = 288.0;
+uniform float bh_glow_radius = 1152.0;
+uniform float bh_inner = 0.7;
+uniform float bh_reach = 1.0;
 uniform float bh_glow_strength = 0.8;
 uniform float sing_t = 0.0;
 // Свет ЧД: xy — центр ЧД относительно cam_pos (мир), z — радиус R (мир).
 uniform int light_count = 0;
 uniform vec3 lights[8];
+// Полусторона ЧД (мир) — свечение ЧД в границах её клеток (T020b).
+uniform float light_half[8];
 uniform vec4 color0 : source_color = vec4(0.039, 0.031, 0.071, 1.0);
 uniform vec4 color1 : source_color = vec4(0.071, 0.055, 0.114, 1.0);
 uniform vec4 color2 : source_color = vec4(0.106, 0.086, 0.161, 1.0);
@@ -95,8 +99,13 @@ vec4 apply_glow(vec4 c, vec2 p, vec2 half_screen) {
 	for (int i = 0; i < 8; i++) {
 		if (i >= light_count) break;
 		vec2 dd = off - lights[i].xy;
+		// ЧД — скруглённый квадрат в пределах Size×Size (T020b); Сингулярность —
+		// прежнее круглое пятно, переход по sing_t.
+		vec2 a = abs(dd) / max(light_half[i], 1.0);
+		float n = pow(pow(a.x, 4.0) + pow(a.y, 4.0), 0.25);
+		float sq = 1.0 - smoothstep(bh_inner, bh_reach, n);
 		float f = max(0.0, 1.0 - dot(dd, dd) / (bh_glow_radius * bh_glow_radius));
-		bh += f * f;
+		bh += mix(sq, f * f, sing_t);
 	}
 	float lb = min(bh * bh_glow_strength, 1.0) * 3.0;
 

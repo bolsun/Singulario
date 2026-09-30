@@ -298,6 +298,9 @@ https://claude.ai/code/artifact/9cf8f132-726d-4cf1-b623-86551e34a7c4
   `SingularityZoom` — Сингулярность (радиус ≥ `SingularityMinScreenPx`, акцентная рампа, смена рампы Байером);
   с фоном — «светлее из двух». Настройки — `[Export]` на `GlowLayer`. F5 — режим всего света, L — свечение вкл/выкл (F8 занята редактором Godot: «Стоп»);
   F4 «Выкл» гасит только туманность.
+  T020b: свет в границах клеток объекта — скруглённый квадрат (норма 4), спад `1 − smoothstep(Inner, Reach, n)`:
+  атом — своя клетка (`AtomGlowInner` 0,6 / `AtomGlowReach` 1,15), звезда — 3×3 (0,7 / 1,0), ЧД — Size×Size (0,7 / 1,0,
+  полусторона — uniform `light_half`); Сингулярность — прежнее круглое пятно (переход по `sing_t`).
 - Звезда на шейдере (T017): `Resources/Shaders/ThirdParty/PixelPlanets/star_assembler.gdshader` — производная
   PixelPlanets (Deep-Fold, MIT; `LICENSE` там же хранить рядом): тело `star_body_calm` + корона `star_blobs`, без вспышек.
   `StarLayer`: второй MultiMesh (квад 1×1 × трансформ), custom data — тир, состояние, пикселей тела/квада. Пиксель —
