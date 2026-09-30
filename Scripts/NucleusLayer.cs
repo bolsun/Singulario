@@ -173,6 +173,12 @@ public partial class NucleusLayer : Node2D
 	// количестве ядер именно рендер частиц/дырок остаётся единственным, что
 	// ещё можно дёшево срезать по зуму, не трогая саму симуляцию.
 	[Export] public float ParticleHideZoom = 0.25f;
+	// T014, уровень детализации: ниже этого зума атом — точка цвета тира (без
+	// частиц и дырок — их гасят HoleHideZoom/ParticleHideZoom).
+	[Export] public float AtomDotZoom = 0.25f;
+	// T014: случайное заполнение (T) создаёт новые чанки только при зуме не
+	// ниже этого — на дальнем зуме в кадре тысячи и миллионы координат чанков.
+	[Export] public float RandomFillMinZoom = 0.06f;
 
 	// --- симуляция передачи частиц (правила из JS-прототипа) ---
 	// requireMatchingSpin=true, diagonalTransfer=false, requireLowerTotal=false,
@@ -827,10 +833,13 @@ public partial class NucleusLayer : Node2D
 		public MultiMeshInstance2D ParticleNode;
 		public Rect2 WorldRect;
 		public List<NucleusEntity> Nuclei;
+		// Буферы MultiMesh тел, дырок и частиц (T014) — пишутся целиком, см. RebuildChunkMeshes.
+		public float[] BodyBuf, HoleBuf, ParticleBuf;
+		public bool Dots; // тела нарисованы точками (дальний зум, AtomDotZoom)
 	}
 
 	private readonly Dictionary<(int cx, int cy), WorldChunk> _chunks = new();
-	private readonly HashSet<(int cx, int cy)> _visible = new();
+	private HashSet<(int cx, int cy)> _visible = new();
 
 	// Настоящая модель поля: что физически существует в каждой клетке —
 	// нужно для поиска соседей при передаче частиц (независимо от чанков).
@@ -1182,6 +1191,9 @@ public partial class NucleusLayer : Node2D
 	private readonly SortedSet<NucleusEntity> _cargoSet = new(IdOrder.Instance);
 
 	private Texture2D _coreTexture;
+	private Texture2D _dotTexture; // T014: атом-точка на дальнем зуме
+	private bool _atomDots;
+	private HashSet<(int cx, int cy)> _newVisible = new();
 	private Texture2D _holeTexture;
 	private Texture2D _particleTexture;
 	private ShaderMaterial _material; // общий и для ядра, и для частиц — один и тот же шейдер/атлас палитр
@@ -1340,6 +1352,7 @@ public partial class NucleusLayer : Node2D
 		_coreQuad = new QuadMesh { Size = new Vector2(SpriteSize, SpriteSize) };
 		_holeQuad = new QuadMesh { Size = new Vector2(HoleSpriteSize, HoleSpriteSize) };
 		_particleQuad = new QuadMesh { Size = new Vector2(ParticleSpriteSize, ParticleSpriteSize) };
+		_dotTexture = BuildDotTexture();
 
 		_rng = new RandomNumberGenerator();
 		_rng.Randomize();
@@ -1392,6 +1405,12 @@ public partial class NucleusLayer : Node2D
 		// Сверка работы по событиям с полным обходом (T014) — только из командной строки.
 		if (System.Array.IndexOf(OS.GetCmdlineUserArgs(), "--sim-selfcheck") >= 0)
 			Callable.From(RunSimSelfCheck).CallDeferred();
+		foreach (var arg in OS.GetCmdlineUserArgs())
+			if (arg.StartsWith("--render-bench="))
+			{
+				_benchZoom = float.Parse(arg.Substring(15), System.Globalization.CultureInfo.InvariantCulture);
+				Callable.From(StartRenderBench).CallDeferred();
+			}
 	}
 
 	public override void _Input(InputEvent @event)
@@ -1928,11 +1947,13 @@ public partial class NucleusLayer : Node2D
 			// Visible в актуальном состоянии для уже показанных чанков тоже.
 			chunk.HoleNode.Visible = _holesVisible;
 			chunk.ParticleNode.Visible = _particlesVisible;
+			if (chunk.Dots != _atomDots) SetChunkDots(chunk, _atomDots);
 			UpdateChunkVisuals(chunk);
 			visibleAtoms += chunk.Nuclei.Count;
 		}
 		VisibleAtomCount = visibleAtoms;
 		double renderMs = System.Diagnostics.Stopwatch.GetElapsedTime(renderStart).TotalMilliseconds;
+		if (_benchFrames >= 0) StepRenderBench(renderMs, delta);
 		_perfRenderMsSum += renderMs;
 		if (renderMs > _perfRenderMsMax) _perfRenderMsMax = renderMs;
 
@@ -1955,10 +1976,30 @@ public partial class NucleusLayer : Node2D
 		int minCy = Mathf.FloorToInt(visibleRect.Position.Y / _chunkWorldSize);
 		int maxCy = Mathf.FloorToInt((visibleRect.Position.Y + visibleRect.Size.Y) / _chunkWorldSize);
 
-		var newVisible = new HashSet<(int cx, int cy)>();
-		for (int cy = minCy; cy <= maxCy; cy++)
-			for (int cx = minCx; cx <= maxCx; cx++)
-				newVisible.Add((cx, cy));
+		// T014: в видимые попадают только существующие чанки (пустых узлов на
+		// каждую координату в кадре больше нет); новые создаёт только случайное
+		// заполнение и только не дальше RandomFillMinZoom. На дальнем зуме, где
+		// координат в кадре больше, чем чанков, перебираются сами чанки.
+		var newVisible = _newVisible;
+		newVisible.Clear();
+		bool generate = RandomFillEnabled && cam.Zoom.X >= RandomFillMinZoom;
+		long area = (long)(maxCx - minCx + 1) * (maxCy - minCy + 1);
+		if (generate || area <= _chunks.Count)
+		{
+			for (int cy = minCy; cy <= maxCy; cy++)
+				for (int cx = minCx; cx <= maxCx; cx++)
+				{
+					if (generate) GetOrCreateChunk(cx, cy);
+					else if (!_chunks.ContainsKey((cx, cy))) continue;
+					newVisible.Add((cx, cy));
+				}
+		}
+		else
+		{
+			foreach (var key in _chunks.Keys)
+				if (key.cx >= minCx && key.cx <= maxCx && key.cy >= minCy && key.cy <= maxCy)
+					newVisible.Add(key);
+		}
 
 		// Ниже своего порога каждый слой — неразличимые точки, а видимых
 		// чанков уже много, поэтому его рендер (и пересчёт каждый кадр) просто
@@ -1981,6 +2022,7 @@ public partial class NucleusLayer : Node2D
 		// рисовать ли его — как и должно быть у чисто рендерной оптимизации.
 		_holesVisible = !_holesManuallyHidden && cam.Zoom.X >= HoleHideZoom;
 		_particlesVisible = cam.Zoom.X >= ParticleHideZoom;
+		_atomDots = cam.Zoom.X < AtomDotZoom;
 
 		foreach (var coord in newVisible)
 		{
@@ -2002,8 +2044,7 @@ public partial class NucleusLayer : Node2D
 			}
 		}
 
-		_visible.Clear();
-		foreach (var c in newVisible) _visible.Add(c);
+		(_visible, _newVisible) = (newVisible, _visible);
 	}
 
 	private void RunSimulationClock(double delta)
@@ -3777,8 +3818,6 @@ public partial class NucleusLayer : Node2D
 
 	// --- рендер ---
 
-	private static readonly Transform2D HiddenTransform = new Transform2D(Vector2.Zero, Vector2.Zero, Vector2.Zero);
-
 	// ВАЖНО: угол рендера теперь считается НАПРЯМУЮ из того же тикового
 	// счётчика (_globalTick/_tickAccumulatorMs), что и логика передачи, а не
 	// из отдельной случайной "фазы" ядра. Раньше рендер крутился независимо
@@ -3798,40 +3837,37 @@ public partial class NucleusLayer : Node2D
 	// сверху, а не в произвольную сторону.
 	private void UpdateChunkVisuals(WorldChunk chunk)
 	{
+		// T014: буферы MultiMesh пишутся целиком одним вызовом на слой
+		// (RenderingServer.MultimeshSetBuffer, как в BlackHoleLayer), а не
+		// поштучно ~17 вызовами SetInstanceTransform2D на атом.
+		if (chunk.Nuclei.Count == 0) return;
+
 		// Тела едущих ядер (см. IsMoving/StartMove) обновляются КАЖДЫЙ кадр
-		// независимо от зума — слой тел (chunk.Node) всегда видим (см.
-		// комментарий у _holesVisible/_particlesVisible), поэтому этот блок
-		// идёт ДО early return ниже, который относится только к дыркам/
-		// частицам. Стоящие на месте ядра тут не трогаем вообще — их
-		// Transform2D выставлен один раз в RebuildChunkMeshes и не меняется,
-		// лишняя запись каждый кадр на ВСЕ ядра стоила бы CPU без всякой
-		// пользы (см. обсуждение производительности при 100k ядрах) — а едущих
-		// в любой момент на порядки меньше, чем всего ядер на поле.
-		var bodyMM = chunk.Node.Multimesh;
+		// независимо от зума — слой тел (chunk.Node) всегда видим. Стоящие на
+		// месте не трогаем: их позиция записана в RebuildChunkMeshes.
+		bool anyMoving = false;
 		foreach (var n in chunk.Nuclei)
 		{
 			if (!n.IsMoving) continue;
-			bodyMM.SetInstanceTransform2D(n.LocalIndex, new Transform2D(0f, EffectiveCenter(n)));
+			PutTransform(chunk.BodyBuf, n.LocalIndex * BodyStride, EffectiveCenter(n), 1f);
+			anyMoving = true;
 		}
+		if (anyMoving) RenderingServer.MultimeshSetBuffer(chunk.Node.Multimesh.GetRid(), chunk.BodyBuf);
 
 		// У дырок и частиц СВОИ независимые пороги отключения (HoleHideZoom /
 		// ParticleHideZoom) — ниже порога слой не только прячется через
-		// Visible, но и вообще не пересчитывается по инстансам (экономия CPU).
-		// Если оба выключены разом, пропускаем чанк целиком.
+		// Visible, но и вообще не пересчитывается (экономия CPU).
 		if (!_holesVisible && !_particlesVisible) return;
 
-		var holeMM = _holesVisible ? chunk.HoleNode.Multimesh : null;
-		var particleMM = _particlesVisible ? chunk.ParticleNode.Multimesh : null;
+		var holeBuf = chunk.HoleBuf;
+		var particleBuf = chunk.ParticleBuf;
 
 		foreach (var n in chunk.Nuclei)
 		{
 			// Спящее ядро (см. AsleepUntilTick/TryPlaceNucleus/
 			// WakeSleepingNuclei) рисуем "замороженным" на фазе 0 — офсет 0,
-			// без какой-либо анимации — ровно так, как его дырки/частицы
-			// расставил BuildFixedRing. Просыпается оно ровно в тот тик,
-			// когда живая формула ниже сама естественным образом тоже даёт
-			// офсет 0 — переключение происходит без единого визуального
-			// скачка.
+			// без анимации; просыпается оно ровно тогда, когда живая формула
+			// ниже сама даёт офсет 0, — без визуального скачка.
 			float continuousOffset;
 			if (_globalTick < n.AsleepUntilTick || n.IsCargo) // груз не вращается (T006)
 			{
@@ -3852,55 +3888,79 @@ public partial class NucleusLayer : Node2D
 			var effCenter = EffectiveCenter(n);
 			if (n.Cross != null)
 			{
-				UpdateCrossroadVisuals(n, effCenter, holeMM, particleMM);
+				UpdateCrossroadVisuals(n, effCenter, holeBuf, particleBuf);
 				continue;
 			}
 			for (int k = 0; k < 8; k++)
 			{
 				int instanceIdx = n.LocalIndex * 8 + k;
-				float angle = (k + continuousOffset) * (Mathf.Pi / 4f) - (Mathf.Pi / 2f);
-				var pos = effCenter + _orbitRadius * AngleVec(angle);
+				int ho = instanceIdx * HoleStride;
+				int po = instanceIdx * ParticleStride;
 				var slot = n.Ring[k];
 
 				if (!slot.Exists)
 				{
-					// Слота тут физически нет (ядро со спавн-панели с < 8 гнёзд, см.
-					// BuildFixedRing) — ни дырка, ни частица не рисуются вообще.
-					holeMM?.SetInstanceTransform2D(instanceIdx, HiddenTransform);
-					particleMM?.SetInstanceTransform2D(instanceIdx, HiddenTransform);
+					// Слота физически нет (кольцо на 2/4 гнезда) — не рисуется ничего.
+					HideTransform(holeBuf, ho);
+					HideTransform(particleBuf, po);
+					continue;
 				}
-				else if (slot.IsHole)
+
+				float angle = (k + continuousOffset) * (Mathf.Pi / 4f) - (Mathf.Pi / 2f);
+				var pos = effCenter + _orbitRadius * AngleVec(angle);
+				if (slot.IsHole)
 				{
-					holeMM?.SetInstanceTransform2D(instanceIdx, new Transform2D(0f, pos));
-					particleMM?.SetInstanceTransform2D(instanceIdx, HiddenTransform);
+					PutTransform(holeBuf, ho, pos, 1f);
+					HideTransform(particleBuf, po);
 				}
 				else
 				{
-					if (particleMM != null)
-					{
-						particleMM.SetInstanceTransform2D(instanceIdx, new Transform2D(0f, pos));
-						float rowUv = (slot.ColorTier + 0.5f) / _tierCount;
-						// .w = 1 — атом-предмет (T007): шейдер рисует полое кольцо.
-						particleMM.SetInstanceCustomData(instanceIdx, new Color(rowUv, 0f, 0f, slot.IsItem ? 1f : 0f));
-					}
-					holeMM?.SetInstanceTransform2D(instanceIdx, HiddenTransform);
+					PutTransform(particleBuf, po, pos, 1f);
+					// .w = 1 — атом-предмет (T007): шейдер рисует полое кольцо.
+					PutCustom(particleBuf, po + 8, (slot.ColorTier + 0.5f) / _tierCount, 0f, 0f, slot.IsItem ? 1f : 0f);
+					HideTransform(holeBuf, ho);
 				}
 			}
 		}
+
+		if (_holesVisible) RenderingServer.MultimeshSetBuffer(chunk.HoleNode.Multimesh.GetRid(), holeBuf);
+		if (_particlesVisible) RenderingServer.MultimeshSetBuffer(chunk.ParticleNode.Multimesh.GetRid(), particleBuf);
+	}
+
+	// Раскладка буфера MultiMesh (Transform2D): 8 чисел — [x.x, y.x, 0, o.x, x.y, y.y, 0, o.y],
+	// за ними 4 числа custom data, если она включена.
+	private const int BodyStride = 12;     // transform + custom (тир, свечение, приглушение, предмет)
+	private const int HoleStride = 8;      // только transform
+	private const int ParticleStride = 12; // transform + custom
+
+	private static void PutTransform(float[] b, int o, Vector2 pos, float scale)
+	{
+		b[o] = scale; b[o + 1] = 0f; b[o + 2] = 0f; b[o + 3] = pos.X;
+		b[o + 4] = 0f; b[o + 5] = scale; b[o + 6] = 0f; b[o + 7] = pos.Y;
+	}
+
+	// Нулевой масштаб — инстанс не виден (как прежний HiddenTransform).
+	private static void HideTransform(float[] b, int o)
+	{
+		for (int i = 0; i < 8; i++) b[o + i] = 0f;
+	}
+
+	private static void PutCustom(float[] b, int o, float x, float y, float z, float w)
+	{
+		b[o] = x; b[o + 1] = y; b[o + 2] = z; b[o + 3] = w;
 	}
 
 	// Перекрёсток (T010): дырок нет, 8 инстансов частиц атома — частицы в пути
 	// (ось 0 — инстансы 0..3, ось 1 — 4..7).
 	// Частица летит дугой над центром по кольцу своей оси (CrossroadLayer.RingPoint):
 	// у концов дуги — меньше и тусклее, у вершины (ближе к камере) — крупнее и ярче.
-	private void UpdateCrossroadVisuals(NucleusEntity n, Vector2 center, MultiMesh holeMM, MultiMesh particleMM)
+	private void UpdateCrossroadVisuals(NucleusEntity n, Vector2 center, float[] holeBuf, float[] particleBuf)
 	{
 		for (int k = 0; k < 8; k++)
 		{
-			holeMM?.SetInstanceTransform2D(n.LocalIndex * 8 + k, HiddenTransform);
-			particleMM?.SetInstanceTransform2D(n.LocalIndex * 8 + k, HiddenTransform);
+			HideTransform(holeBuf, (n.LocalIndex * 8 + k) * HoleStride);
+			HideTransform(particleBuf, (n.LocalIndex * 8 + k) * ParticleStride);
 		}
-		if (particleMM == null) return;
 
 		int ticks = n.CoreTier < TierTicks.Length ? TierTicks[n.CoreTier] : TierTicks[TierTicks.Length - 1];
 		float fraction = ticks > 0 && _globalTick >= n.AsleepUntilTick
@@ -3919,11 +3979,10 @@ public partial class NucleusLayer : Node2D
 				float height = Mathf.Sin(phi);
 				var pos = center + CrossroadLayer.RingPoint(a, phi, _orbitRadius);
 				float scale = 0.75f + 0.45f * height;
-				int instanceIdx = n.LocalIndex * 8 + a * 4 + i;
-				particleMM.SetInstanceTransform2D(instanceIdx, new Transform2D(0f, new Vector2(scale, scale), 0f, pos));
-				float rowUv = (cp.ColorTier + 0.5f) / _tierCount;
+				int po = (n.LocalIndex * 8 + a * 4 + i) * ParticleStride;
+				PutTransform(particleBuf, po, pos, scale);
 				float dim = 0.45f * (1f - height);
-				particleMM.SetInstanceCustomData(instanceIdx, new Color(rowUv, 0f, dim, cp.IsItem ? 1f : 0f));
+				PutCustom(particleBuf, po + 8, (cp.ColorTier + 0.5f) / _tierCount, 0f, dim, cp.IsItem ? 1f : 0f);
 			}
 		}
 	}
@@ -4069,6 +4128,11 @@ public partial class NucleusLayer : Node2D
 	{
 		int nucleusCount = chunk.Nuclei.Count;
 		int slotCount = nucleusCount * 8;
+		// Границы отсечения — чанк с запасом (едущие атомы выходят за край на
+		// клетку-две): canvas item не пересчитывает их при MultimeshSetBuffer
+		// (см. BlackHoleLayer).
+		var r = chunk.WorldRect.Grow(CellSize * 3);
+		var aabb = new Aabb(new Vector3(r.Position.X, r.Position.Y, -1f), new Vector3(r.Size.X, r.Size.Y, 2f));
 
 		// --- ядра: одна позиция на ядро, custom data = тир (строка в атласе палитр) ---
 		var mm = new MultiMesh
@@ -4076,16 +4140,19 @@ public partial class NucleusLayer : Node2D
 			TransformFormat = MultiMesh.TransformFormatEnum.Transform2D,
 			UseCustomData = true,
 			Mesh = _coreQuad,
+			CustomAabb = aabb,
 			InstanceCount = nucleusCount
 		};
+		chunk.BodyBuf = new float[nucleusCount * BodyStride];
 		for (int i = 0; i < nucleusCount; i++)
 		{
-			mm.SetInstanceTransform2D(i, new Transform2D(0f, chunk.Nuclei[i].Center));
-			float rowUv = (chunk.Nuclei[i].CoreTier + 0.5f) / _tierCount;
+			var n = chunk.Nuclei[i];
+			int o = i * BodyStride;
+			PutTransform(chunk.BodyBuf, o, n.IsMoving ? EffectiveCenter(n) : n.Center, 1f);
 			// z — приглушение (шейдер палитр): груз тусклый, без свечения (T006).
-			float dim = chunk.Nuclei[i].IsCargo ? CargoDim : 0f;
-			mm.SetInstanceCustomData(i, new Color(rowUv, 0f, dim, 0f));
+			PutCustom(chunk.BodyBuf, o + 8, (n.CoreTier + 0.5f) / _tierCount, 0f, n.IsCargo ? CargoDim : 0f, 0f);
 		}
+		if (nucleusCount > 0) RenderingServer.MultimeshSetBuffer(mm.GetRid(), chunk.BodyBuf);
 		chunk.Node.Multimesh = mm;
 
 		// --- дырки и частицы: ФИКСИРОВАННЫЕ nucleusCount*8 инстансов у обоих
@@ -4096,6 +4163,7 @@ public partial class NucleusLayer : Node2D
 		{
 			TransformFormat = MultiMesh.TransformFormatEnum.Transform2D,
 			Mesh = _holeQuad,
+			CustomAabb = aabb,
 			InstanceCount = slotCount
 		};
 		chunk.ParticleNode.Multimesh = new MultiMesh
@@ -4103,9 +4171,19 @@ public partial class NucleusLayer : Node2D
 			TransformFormat = MultiMesh.TransformFormatEnum.Transform2D,
 			UseCustomData = true,
 			Mesh = _particleQuad,
+			CustomAabb = aabb,
 			InstanceCount = slotCount
 		};
+		chunk.HoleBuf = new float[slotCount * HoleStride];
+		chunk.ParticleBuf = new float[slotCount * ParticleStride];
 
+		// Дырки и частицы пишутся, только если их слой сейчас виден; иначе —
+		// нулевые (невидимые) инстансы до первого обновления на ближнем зуме.
+		if (slotCount > 0)
+		{
+			RenderingServer.MultimeshSetBuffer(chunk.HoleNode.Multimesh.GetRid(), chunk.HoleBuf);
+			RenderingServer.MultimeshSetBuffer(chunk.ParticleNode.Multimesh.GetRid(), chunk.ParticleBuf);
+		}
 		UpdateChunkVisuals(chunk);
 	}
 
@@ -5085,6 +5163,37 @@ public partial class NucleusLayer : Node2D
 	}
 
 	private long _selfCheckDumpTick = -1;
+
+	// Короткий замер отрисовки (T014): --render-bench=<зум> — поле как у
+	// случайного заполнения (13×13 чанков, seed 14), камера в центре на этом
+	// зуме, 60 кадров разогрева и 300 кадров замера, затем выход.
+	private float _benchZoom;
+	private int _benchFrames = -1;
+	private double _benchRenderMs, _benchFrameMs;
+
+	private void StartRenderBench()
+	{
+		ClearFieldForImport();
+		BuildPlainField(14, 13);
+		var cam = GetViewport().GetCamera2D();
+		cam.Position = new Vector2(1, 1) * (13 * ChunkSize * CellSize / 2f);
+		cam.Zoom = new Vector2(_benchZoom, _benchZoom);
+		ProcessMode = ProcessModeEnum.Always; // главное меню ставит дерево на паузу
+		_benchFrames = 0;
+	}
+
+	private void StepRenderBench(double renderMs, double delta)
+	{
+		_benchFrames++;
+		if (_benchFrames <= 60) return;
+		_benchRenderMs += renderMs;
+		_benchFrameMs += delta * 1000.0;
+		if (_benchFrames < 360) return;
+		GD.Print($"[RenderBench] зум {_benchZoom}, атомов видно {VisibleAtomCount} из {TotalAtomCount}: отрисовка атомов {_benchRenderMs / 300:0.00} мс, кадр {_benchFrameMs / 300:0.0} мс");
+		foreach (var arg in OS.GetCmdlineUserArgs())
+			if (arg.StartsWith("--bench-shot=")) GetViewport().GetTexture().GetImage().SavePng(arg.Substring(13));
+		GetTree().Quit();
+	}
 	private int _selfCheckPlainChunks; // --plain=N: поле как у случайного заполнения (T), N×N чанков
 
 	// Как GetOrCreateChunk при RandomFillEnabled: тиры Ж/К/С, FillDensity, частицы цвета тира.
@@ -5218,6 +5327,31 @@ public partial class NucleusLayer : Node2D
 			Mix(sum); Mix(count);
 		}
 		return h;
+	}
+
+	// Уровень детализации (T014): тела чанка — точки цвета тира или спрайт атома.
+	private void SetChunkDots(WorldChunk chunk, bool dots)
+	{
+		chunk.Dots = dots;
+		chunk.Node.Texture = dots ? _dotTexture : _coreTexture;
+		chunk.Node.TextureFilter = dots ? CanvasItem.TextureFilterEnum.Linear : CanvasItem.TextureFilterEnum.Nearest;
+	}
+
+	// Кружок для шейдера палитр: красный канал — индекс оттенка (средний столбец
+	// палитры, тот же цвет, что у превью — SampleTierColors), альфа — форма.
+	private static Texture2D BuildDotTexture()
+	{
+		const int size = 32;
+		var img = Image.CreateEmpty(size, size, false, Image.Format.Rgba8);
+		float c = (size - 1) / 2f, radius = size * 0.45f;
+		for (int y = 0; y < size; y++)
+			for (int x = 0; x < size; x++)
+			{
+				float d = new Vector2(x - c, y - c).Length();
+				float a = Mathf.Clamp(radius - d + 0.5f, 0f, 1f);
+				img.SetPixel(x, y, new Color(0.5f, 0.5f, 0.5f, a));
+			}
+		return ImageTexture.CreateFromImage(img);
 	}
 
 	private static Vector2 AngleVec(float angle) => new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
