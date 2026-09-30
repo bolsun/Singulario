@@ -7,10 +7,10 @@ shader_type canvas_item;
 //
 // Прогиб под ЧД и звёздами (только вид): точка p показывает линию, найденную по
 // q = p + dir·s, dir = normalize(p − c) — линии втягиваются к центру следа.
-//   s = strength·g·fall·near (strength уже в мировых единицах: доля клетки × клетка);
-//   g = 1 − 0.45·min(u, 1), u — чебышёвское расстояние до центра / h;
-//   fall = 1 внутри следа, спадает до 0 за полклетки снаружи по скруглённому квадрату;
-//   near = min(1, |p − c| / (0.35·h)).
+//   s = strength · smoothstep(0, warp_inner, n) · (1 − smoothstep(warp_start, n_end, n))
+//   (strength уже в мировых единицах: доля клетки × клетка); n — расстояние до центра
+//   в скруглённом квадрате (норма 4) / h, n = 1 ≈ граница следа; n_end = 1 + полклетки / h.
+//   Спад начинается внутри следа — линии гнутся плавными дугами, без изломов.
 // Линия соседних клеток (1 клетка от следа) — прямая.
 
 uniform float step_size = 96.0;       // шаг линий (клетка или чанк)
@@ -21,6 +21,8 @@ uniform vec4 line_color : source_color;
 uniform vec4 chunk_line_color : source_color;
 uniform bool warp_on = true;
 uniform int warp_count = 0;
+uniform float warp_start = 0.7;  // доля полустороны следа, с которой начинается спад прогиба
+uniform float warp_inner = 0.45; // доля полустороны, на которой прогиб нарастает от центра
 uniform vec4 warp_objects[16];        // центр (x, y), полусторона h, сила в мировых единицах
 
 varying vec2 v_world;
@@ -35,15 +37,18 @@ vec2 warped(vec2 p) {
 		vec4 o = warp_objects[i];
 		vec2 d = p - o.xy;
 		float h = o.z;
-		float e = length(max(abs(d) - vec2(h), vec2(0.0)));
-		float fall = 1.0 - smoothstep(0.0, 0.5 * cell_size, e);
-		if (fall <= 0.0) continue;
 		float len = length(d);
 		if (len < 1e-4) continue;
-		float u = max(abs(d.x), abs(d.y)) / h;
-		float g = 1.0 - 0.45 * min(u, 1.0);
-		float near = min(1.0, len / (0.35 * h));
-		offset += d / len * (o.w * g * fall * near);
+		// Скруглённый квадрат (норма 4): n = 1 примерно на границе следа, без изломов на диагоналях.
+		vec2 a = abs(d) / h;
+		vec2 a2 = a * a;
+		float n = sqrt(sqrt(a2.x * a2.x + a2.y * a2.y));
+		float n_end = 1.0 + 0.5 * cell_size / h; // полклетки снаружи — ноль
+		if (n >= n_end) continue;
+		// Плавный профиль: от центра нарастает, спад начинается внутри следа (warp_start) и
+		// гаснет за полклетки снаружи — линии гнутся дугами, без изломов.
+		float s = smoothstep(0.0, warp_inner, n) * (1.0 - smoothstep(warp_start, n_end, n));
+		offset += d / len * (o.w * s);
 	}
 	return p + offset;
 }
