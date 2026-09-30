@@ -1,6 +1,6 @@
 # T017 — Звезда-сборщик на шейдере: спокойные «станки»
 
-Статус: поставлена.
+Статус: выполнена, влита в `experimental`.
 
 Ветка: `feature/star-shader` от `experimental` (`git checkout -b feature/star-shader experimental`).
 После отчёта — влить в `experimental` (CLAUDE.md, «Процесс»). В `main` не пушить.
