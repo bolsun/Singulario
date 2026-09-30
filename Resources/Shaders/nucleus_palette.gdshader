@@ -30,6 +30,8 @@ varying float v_item;
 uniform float item_pixels = 16.0;
 uniform float item_hole_radius = 0.22;  // доля стороны квада — прозрачный центр
 uniform float item_edge_width = 0.07;   // тёмная обводка внутреннего края
+// T015: общая проявленность (материал точек дальнего зума гасит их к туманностям).
+uniform float fade = 1.0;
 
 void vertex() {
 	v_palette_row = INSTANCE_CUSTOM.x;
@@ -62,5 +64,5 @@ void fragment() {
 		if (r < item_hole_radius) alpha = 0.0;
 		else if (r < item_hole_radius + item_edge_width) final_color *= 0.15;
 	}
-	COLOR = vec4(final_color, alpha);
+	COLOR = vec4(final_color, alpha * fade);
 }

@@ -179,6 +179,19 @@ public partial class NucleusLayer : Node2D
 	// T014: случайное заполнение (T) создаёт новые чанки только при зуме не
 	// ниже этого — на дальнем зуме в кадре тысячи и миллионы координат чанков.
 	[Export] public float RandomFillMinZoom = 0.06f;
+	// T015, туманности: ниже NebulaZoom атомы не рисуются, каждый непустой чанк —
+	// мягкое пятно цвета преобладающего тира (NebulaLayer). Переход — полоса зумов
+	// от NebulaZoom до NebulaZoom × NebulaFadeRatio (в лог-шкале): точки гаснут,
+	// пятна проявляются. NebulaFadeRatio ≤ 1 — резкое переключение.
+	[Export] public float NebulaZoom = 0.05f;
+	[Export] public float NebulaFadeRatio = 1.6f;
+	// Размер пятна в чанках (больше 1 — соседние пятна сливаются).
+	[Export] public float NebulaScale = 2f;
+	// Непрозрачность пятна при насыщении и вес чанка (в атомах), при котором оно наступает.
+	[Export] public float NebulaMaxAlpha = 0.5f;
+	[Export] public float NebulaSaturation = 64f;
+	// Вес клетки источника в составе чанка относительно одного атома.
+	[Export] public float NebulaSourceWeight = 1f;
 
 	// --- симуляция передачи частиц (правила из JS-прототипа) ---
 	// requireMatchingSpin=true, diagonalTransfer=false, requireLowerTotal=false,
@@ -397,6 +410,10 @@ public partial class NucleusLayer : Node2D
 	// IsCellBlockedForLayer1/CanPlaceBlackHoleCell), рисуется затемнённым
 	// (TerritoryLayer). Песочница открывает всю карту.
 	public Territory Territory { get; private set; }
+	// Состав чанков для туманностей дальнего зума (T015): атомы и источники по тиру.
+	public readonly ChunkComposition Composition = new();
+	private readonly int[] _compScratch = new int[ChunkComposition.TierCount];
+	private int _compSourceVersion = -1;
 	private TerritoryLayer _territoryLayer;
 	private CameraController _camera;
 	// Подсказка управления (T012): данные — ControlHints, вид — HintLabel.
@@ -836,6 +853,7 @@ public partial class NucleusLayer : Node2D
 		// Буферы MultiMesh тел, дырок и частиц (T014) — пишутся целиком, см. RebuildChunkMeshes.
 		public float[] BodyBuf, HoleBuf, ParticleBuf;
 		public bool Dots; // тела нарисованы точками (дальний зум, AtomDotZoom)
+		public int Cx, Cy;
 	}
 
 	private readonly Dictionary<(int cx, int cy), WorldChunk> _chunks = new();
@@ -1193,6 +1211,12 @@ public partial class NucleusLayer : Node2D
 	private Texture2D _coreTexture;
 	private Texture2D _dotTexture; // T014: атом-точка на дальнем зуме
 	private bool _atomDots;
+	// T015: атомы рисуются (зум не ниже NebulaZoom); точки — свой материал с
+	// параметром fade для перехода к туманностям.
+	private bool _atomsShown = true;
+	private ShaderMaterial _dotMaterial;
+	private float _dotFade = 1f;
+	private NebulaLayer _nebulaLayer;
 	private HashSet<(int cx, int cy)> _newVisible = new();
 	private Texture2D _holeTexture;
 	private Texture2D _particleTexture;
@@ -1348,6 +1372,7 @@ public partial class NucleusLayer : Node2D
 		_tierCount = PalettePaths.Length;
 		_material = new ShaderMaterial { Shader = shader };
 		_material.SetShaderParameter("palette_tex", paletteAtlas);
+		_dotMaterial = (ShaderMaterial)_material.Duplicate();
 
 		_coreQuad = new QuadMesh { Size = new Vector2(SpriteSize, SpriteSize) };
 		_holeQuad = new QuadMesh { Size = new Vector2(HoleSpriteSize, HoleSpriteSize) };
@@ -1366,6 +1391,10 @@ public partial class NucleusLayer : Node2D
 			ZIndex = 100 // поверх чанков, см. комментарий у поля
 		};
 		AddChild(_placementPreview);
+		// Туманности (T015) — первый дочерний узел: под чанками, звёздами и ЧД.
+		_nebulaLayer = new NebulaLayer { Name = "NebulaLayer" };
+		AddChild(_nebulaLayer);
+		MoveChild(_nebulaLayer, 0);
 
 		_energyLayer = GetNodeOrNull<EnergyLayer>("../TileMapLayer");
 		_blackHoleLayer = GetNodeOrNull<BlackHoleLayer>("../BlackHoleLayer");
@@ -1939,19 +1968,38 @@ public partial class NucleusLayer : Node2D
 		if (!layer1) return;
 
 		long renderStart = System.Diagnostics.Stopwatch.GetTimestamp();
+		float zoom = cam.Zoom.X;
+		float nebulaFade = NebulaFade(zoom);
+		SetAtomsShown(zoom >= NebulaZoom);
 		int visibleAtoms = 0;
-		foreach (var coord in _visible)
+		// Ниже NebulaZoom атомный рендер не выполняется совсем (T015).
+		if (_atomsShown)
 		{
-			if (!_chunks.TryGetValue(coord, out var chunk)) continue;
-			// Зум мог измениться и без смены набора видимых чанков — держим
-			// Visible в актуальном состоянии для уже показанных чанков тоже.
-			chunk.HoleNode.Visible = _holesVisible;
-			chunk.ParticleNode.Visible = _particlesVisible;
-			if (chunk.Dots != _atomDots) SetChunkDots(chunk, _atomDots);
-			UpdateChunkVisuals(chunk);
-			visibleAtoms += chunk.Nuclei.Count;
+			if (_dotFade != 1f - nebulaFade)
+			{
+				_dotFade = 1f - nebulaFade;
+				_dotMaterial.SetShaderParameter("fade", _dotFade);
+			}
+			foreach (var coord in _visible)
+			{
+				if (!_chunks.TryGetValue(coord, out var chunk)) continue;
+				// Зум мог измениться и без смены набора видимых чанков — держим
+				// Visible в актуальном состоянии для уже показанных чанков тоже.
+				chunk.HoleNode.Visible = _holesVisible;
+				chunk.ParticleNode.Visible = _particlesVisible;
+				if (chunk.Dots != _atomDots) SetChunkDots(chunk, _atomDots);
+				UpdateChunkVisuals(chunk);
+				visibleAtoms += chunk.Nuclei.Count;
+			}
 		}
 		VisibleAtomCount = visibleAtoms;
+		if (nebulaFade > 0f)
+		{
+			RecountCompositionSourcesIfNeeded();
+			Composition.SourceWeightPercent = Mathf.RoundToInt(NebulaSourceWeight * 100f);
+		}
+		_nebulaLayer.Refresh(_visible, Composition, _tierPreviewColors, _chunkWorldSize,
+			NebulaScale, NebulaMaxAlpha, NebulaSaturation, nebulaFade);
 		double renderMs = System.Diagnostics.Stopwatch.GetElapsedTime(renderStart).TotalMilliseconds;
 		if (_benchFrames >= 0) StepRenderBench(renderMs, delta);
 		_perfRenderMsSum += renderMs;
@@ -1960,6 +2008,30 @@ public partial class NucleusLayer : Node2D
 		if (_leftMouseHeld) TryPlaceAtMouseIfSelected();
 		if (_rightMouseHeld) TryRemoveAtMouse();
 		UpdatePlacementPreview();
+	}
+
+	// Проявленность туманностей (T015): 1 — на NebulaZoom и дальше, 0 — от
+	// NebulaZoom × NebulaFadeRatio и ближе, между — по логарифму зума.
+	private float NebulaFade(float zoom)
+	{
+		if (zoom < NebulaZoom) return 1f;
+		if (NebulaFadeRatio <= 1f) return 0f;
+		float t = Mathf.Log(zoom / NebulaZoom) / Mathf.Log(NebulaFadeRatio);
+		return 1f - Mathf.Clamp(t, 0f, 1f);
+	}
+
+	// Атомы видимых чанков показать или скрыть целиком (T015) — только при смене.
+	private void SetAtomsShown(bool shown)
+	{
+		if (shown == _atomsShown) return;
+		_atomsShown = shown;
+		foreach (var coord in _visible)
+		{
+			if (!_chunks.TryGetValue(coord, out var chunk)) continue;
+			chunk.Node.Visible = shown;
+			chunk.HoleNode.Visible = shown && _holesVisible;
+			chunk.ParticleNode.Visible = shown && _particlesVisible;
+		}
 	}
 
 	// Какие чанки попадают в кадр камеры — только рендер, к симуляции не
@@ -2028,9 +2100,9 @@ public partial class NucleusLayer : Node2D
 		{
 			if (_visible.Contains(coord)) continue;
 			var chunk = GetOrCreateChunk(coord.cx, coord.cy);
-			chunk.Node.Visible = true;
-			chunk.HoleNode.Visible = _holesVisible;
-			chunk.ParticleNode.Visible = _particlesVisible;
+			chunk.Node.Visible = _atomsShown;
+			chunk.HoleNode.Visible = _atomsShown && _holesVisible;
+			chunk.ParticleNode.Visible = _atomsShown && _particlesVisible;
 		}
 
 		foreach (var coord in _visible)
@@ -4105,7 +4177,9 @@ public partial class NucleusLayer : Node2D
 			HoleNode = holeNode,
 			ParticleNode = particleNode,
 			WorldRect = worldRect,
-			Nuclei = nuclei
+			Nuclei = nuclei,
+			Cx = cx,
+			Cy = cy
 		};
 
 		_chunks[key] = chunk;
@@ -4126,6 +4200,7 @@ public partial class NucleusLayer : Node2D
 	// раз перестраиваем целиком (для размеров чанка это дёшево).
 	private void RebuildChunkMeshes(WorldChunk chunk)
 	{
+		RecountChunkAtoms(chunk);
 		int nucleusCount = chunk.Nuclei.Count;
 		int slotCount = nucleusCount * 8;
 		// Границы отсечения — чанк с запасом (едущие атомы выходят за край на
@@ -4185,6 +4260,31 @@ public partial class NucleusLayer : Node2D
 			RenderingServer.MultimeshSetBuffer(chunk.ParticleNode.Multimesh.GetRid(), chunk.ParticleBuf);
 		}
 		UpdateChunkVisuals(chunk);
+	}
+
+	// Состав чанка (T015) заново из chunk.Nuclei: рабочие атомы Ж/К/С и серые
+	// (перекрёстки — по своему тиру); обломки, вращатели и бросатели не считаются.
+	// Через RebuildChunkMeshes проходит любое изменение списка атомов чанка.
+	private void RecountChunkAtoms(WorldChunk chunk)
+	{
+		System.Array.Clear(_compScratch);
+		foreach (var n in chunk.Nuclei)
+			if (!n.IsCargo && ChunkComposition.IsCountedTier(n.CoreTier)) _compScratch[n.CoreTier]++;
+		Composition.SetAtoms(chunk.Cx, chunk.Cy, _compScratch);
+	}
+
+	// Источники в составе чанков (T015) — полный пересчёт, только когда
+	// месторождения поменялись (установка, удаление, исчерпание, загрузка).
+	private void RecountCompositionSourcesIfNeeded()
+	{
+		int version = 0;
+		foreach (var layer in _energyClusterLayers) version += layer.CellsVersion;
+		if (version == _compSourceVersion) return;
+		_compSourceVersion = version;
+		Composition.ClearSources();
+		foreach (var layer in _energyClusterLayers)
+			foreach (var (row, col) in layer.EnumerateCells())
+				Composition.AddSource(CanonicalOrder.FloorDiv(col, ChunkSize), CanonicalOrder.FloorDiv(row, ChunkSize), layer.Tier);
 	}
 
 	// Строит кольцо ровно с holeCount реальными гнёздами (из 8 возможных
@@ -5179,6 +5279,7 @@ public partial class NucleusLayer : Node2D
 		cam.Position = new Vector2(1, 1) * (13 * ChunkSize * CellSize / 2f);
 		cam.Zoom = new Vector2(_benchZoom, _benchZoom);
 		ProcessMode = ProcessModeEnum.Always; // главное меню ставит дерево на паузу
+		if (GetNodeOrNull("/root/Main/GameMenu") is CanvasLayer menu) menu.Visible = false; // не закрывать поле на снимке
 		_benchFrames = 0;
 	}
 
@@ -5334,6 +5435,7 @@ public partial class NucleusLayer : Node2D
 	{
 		chunk.Dots = dots;
 		chunk.Node.Texture = dots ? _dotTexture : _coreTexture;
+		chunk.Node.Material = dots ? _dotMaterial : _material;
 		chunk.Node.TextureFilter = dots ? CanvasItem.TextureFilterEnum.Linear : CanvasItem.TextureFilterEnum.Nearest;
 	}
 
