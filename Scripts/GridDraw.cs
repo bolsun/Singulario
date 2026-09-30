@@ -16,7 +16,8 @@ using Godot;
 // РОВНО 1 экранный пиксель, мировая толщина берётся как 1/zoom.
 //
 // G — переключает видимость (без пересчёта — сетка просто перестаёт
-// рисоваться, Godot не вызывает _Draw для невидимых нод).
+// рисоваться, Godot не вызывает _Draw для невидимых нод). Shift+G — прогиб
+// (T019, Settings.GridWarp, сохраняется), с короткой надписью.
 //
 // На слое 2 (см. ViewLayer) клетка — это чанк слоя 1, поэтому сетка рисуется
 // по границам ЧАНКОВ (шаг CellSize*ChunkSize), той же ширины в 1 экранный
@@ -72,6 +73,11 @@ public partial class GridDraw : Node2D
     private readonly System.Collections.Generic.List<(float dist, int order, Vector4 obj)> _warpScratch = new();
     private readonly Vector4[] _warpObjects = new Vector4[WarpCapacity];
 
+    private Label _label;
+    private float _labelLeft;
+    private const float LabelSeconds = 1.5f;
+    private const float LabelFadeSeconds = 0.4f;
+
     // Включена ли сетка (G) — для других узлов: подробный вид портов (T004,
     // PortLayer, MoleculeLayer, BlackHoleLayer) показывается только с сеткой.
     public static bool Shown { get; private set; }
@@ -87,20 +93,30 @@ public partial class GridDraw : Node2D
         var shader = GD.Load<Shader>(ShaderPath);
         if (shader == null) GD.PrintErr($"[GridDraw] не загрузился шейдер {ShaderPath}.");
         Material = _material = new ShaderMaterial { Shader = shader };
+        CreateLabel();
     }
 
     public override void _Input(InputEvent @event)
     {
-        if (@event is InputEventKey key && key.Pressed && !key.Echo && key.Keycode == Key.G)
+        if (@event is not InputEventKey key || !key.Pressed || key.Echo || key.Keycode != Key.G) return;
+        if (key.ShiftPressed)
         {
-            Visible = !Visible;
-            Shown = Visible;
-            // На случай если пока сетка была скрыта, диапазон не менялся (и
-            // поэтому не переcчитывался) — форсируем перерисовку сразу при
-            // включении, а не ждём следующего движения камеры.
-            if (Visible) QueueRedraw();
+            // Shift+G — прогиб вкл/выкл (T019); сетку не трогает.
+            Settings.GridWarp = !Settings.GridWarp;
+            Settings.Save();
+            _label.Text = string.Format(Tr("Прогиб сетки: {0}"), Tr(Settings.GridWarp ? "Вкл" : "Выкл"));
+            _label.Visible = true;
+            _labelLeft = LabelSeconds;
             GetViewport().SetInputAsHandled();
+            return;
         }
+        Visible = !Visible;
+        Shown = Visible;
+        // На случай если пока сетка была скрыта, диапазон не менялся (и
+        // поэтому не переcчитывался) — форсируем перерисовку сразу при
+        // включении, а не ждём следующего движения камеры.
+        if (Visible) QueueRedraw();
+        GetViewport().SetInputAsHandled();
     }
 
     public override void _Process(double delta)
@@ -108,6 +124,7 @@ public partial class GridDraw : Node2D
         // Считаем диапазон всегда (даже пока скрыто по G), чтобы при
         // включении сетка сразу была актуальна, а не ждала следующего
         // движения камеры.
+        UpdateLabel((float)delta);
         var cam = GetViewport().GetCamera2D();
         if (cam == null) return;
 
@@ -158,6 +175,38 @@ public partial class GridDraw : Node2D
         _material.SetShaderParameter("cell_mode", step == CellSize);
         _material.SetShaderParameter("line_color", LineColor);
         _material.SetShaderParameter("chunk_line_color", ChunkLineColor);
+        _material.SetShaderParameter("warp_on", Settings.GridWarp);
+    }
+
+    // Надпись Shift+G — как у F4/F5 (NebulaBackground): свой слой поверх поля и HUD, под меню.
+    private void CreateLabel()
+    {
+        var layer = new CanvasLayer { Name = "GridWarpLabelLayer", Layer = 90 };
+        AddChild(layer);
+        _label = new Label
+        {
+            Name = "GridWarpLabel",
+            AutoTranslateMode = AutoTranslateModeEnum.Disabled,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            Visible = false,
+        };
+        _label.AddThemeColorOverride("font_color", Colors.White);
+        _label.AddThemeColorOverride("font_outline_color", Colors.Black);
+        _label.AddThemeConstantOverride("outline_size", 4);
+        _label.AddThemeFontSizeOverride("font_size", 22);
+        _label.SetAnchorsPreset(Control.LayoutPreset.CenterTop);
+        _label.GrowHorizontal = Control.GrowDirection.Both;
+        _label.OffsetTop = 64;
+        layer.AddChild(_label);
+    }
+
+    private void UpdateLabel(float delta)
+    {
+        if (_labelLeft <= 0f) return;
+        _labelLeft = Mathf.Max(0f, _labelLeft - delta);
+        _label.Modulate = new Color(1f, 1f, 1f, Mathf.Clamp(_labelLeft / LabelFadeSeconds, 0f, 1f));
+        _label.Visible = _labelLeft > 0f;
     }
 
     // Объекты прогиба: центр следа, полусторона, сила (мировые единицы). Порядок —
@@ -193,31 +242,14 @@ public partial class GridDraw : Node2D
             new Vector4(center.X, center.Y, size * CellSize / 2f, strength * CellSize)));
     }
 
-    // Один прямоугольник на видимый диапазон — линии (и подсветку границ чанков,
-    // см. IsChunkBoundary: та же floor-логика, в шейдере — mod) рисует шейдер.
+    // Один прямоугольник на видимый диапазон — линии рисует шейдер. Граница чанка —
+    // номер линии, кратный ChunkSize по математическому модулю (mod в шейдере, в
+    // обе стороны от нуля); в режиме чанков каждая линия — граница чанка.
     public override void _Draw()
     {
         if (!_haveRange || _hidden) return;
         float left = _minCol * _step;
         float top = _minRow * _step;
         DrawRect(new Rect2(left, top, (_maxCol - _minCol) * _step, (_maxRow - _minRow) * _step), Colors.White);
-    }
-
-    // true, если номер клетки cellIndex лежит РОВНО на границе чанка — то
-    // есть на той же линии, где NucleusLayer.GetOrCreateChunk проводит
-    // границу между чанками (cx = floor(col / ChunkSize), см. её комментарий):
-    // такое floor-деление даёт границы на каждом кратном ChunkSize числе в
-    // ОБЕ стороны от нуля, включая отрицательные (мир не ограничен началом
-    // координат — камеру можно свободно увести в минус). Обычный "%" в C# для
-    // отрицательного cellIndex вернёт отрицательный остаток (например,
-    // -1 % 16 == -1, а не 15) — поэтому остаток приводится к настоящему
-    // математическому модулю вручную, иначе часть границ на отрицательных
-    // координатах осталась бы неподсвеченной.
-    private bool IsChunkBoundary(int cellIndex)
-    {
-        if (_chunkSize <= 0) return false;
-        int m = cellIndex % _chunkSize;
-        if (m < 0) m += _chunkSize;
-        return m == 0;
     }
 }

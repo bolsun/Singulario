@@ -1,7 +1,7 @@
 using Godot;
 
 // Настройки игры (T013): язык, полный экран, громкости (заглушки — звука пока
-// нет, значение только хранится), интервал автосохранения. Файл — SettingsPath,
+// нет, значение только хранится), интервал автосохранения, прогиб сетки (T019, Shift+G). Файл — SettingsPath,
 // отдельно от сохранения игры. Load + Apply — при запуске (Main), Save — при
 // каждом изменении в меню (GameMenu).
 public static class Settings
@@ -19,6 +19,7 @@ public static class Settings
 	public static double SoundVolume = 100;
 	public static double MusicVolume = 100;
 	public static int AutosaveMinutes = 5;
+	public static bool GridWarp = true; // T019: прогиб сетки под ЧД и звёздами (Shift+G)
 
 	public static void Load()
 	{
@@ -31,6 +32,7 @@ public static class Settings
 		MusicVolume = Mathf.Clamp((double)cfg.GetValue(Section, "music_volume", MusicVolume), 0, 100);
 		int minutes = (int)cfg.GetValue(Section, "autosave_minutes", AutosaveMinutes);
 		if (System.Array.IndexOf(AutosaveMinuteOptions, minutes) >= 0) AutosaveMinutes = minutes;
+		GridWarp = (bool)cfg.GetValue(Section, "grid_warp", GridWarp);
 	}
 
 	public static void Save()
@@ -41,6 +43,7 @@ public static class Settings
 		cfg.SetValue(Section, "sound_volume", SoundVolume);
 		cfg.SetValue(Section, "music_volume", MusicVolume);
 		cfg.SetValue(Section, "autosave_minutes", AutosaveMinutes);
+		cfg.SetValue(Section, "grid_warp", GridWarp);
 		var err = cfg.Save(SettingsPath);
 		if (err != Error.Ok) GD.PrintErr($"[Settings] не удалось сохранить {SettingsPath}: {err}");
 	}
