@@ -18,5 +18,7 @@ public partial class Main : Node2D
 		var camera = GetNode<CameraController>("Camera2D");
 		camera.Position = Vector2.Zero;
 		camera.Zoom = new Vector2(InitialZoom, InitialZoom);
+		// Главное меню (T013) — поверх всего, при запуске ставит игру на паузу.
+		AddChild(new GameMenu { Name = "GameMenu" });
 	}
 }

@@ -1,7 +1,7 @@
 using Godot;
 
-// Панель "Новая игра" (T009, NucleusLayer.NewGame — с подтверждением) и
-// "Экспорт"/"Импорт" всего поля (ядра, источники, порты, ЧД, молекулы — см.
+// Панель "Экспорт"/"Импорт" всего поля (кнопка "Новая игра" с T013 — в меню,
+// см. GameMenu) (ядра, источники, порты, ЧД, молекулы — см.
 // NucleusLayer.ExportFieldJson/ImportFieldJson) в виде JSON-строки. Построена
 // программно в _Ready, тем же приёмом, что и NucleusSpawnPanel (см. её шапку)
 // — никаких дочерних узлов в самой сцене не нужно, кроме этого Control.
@@ -25,7 +25,6 @@ public partial class SaveLoadPanel : Control
 	private AcceptDialog _dialog;
 	private TextEdit _textEdit;
 	private Label _statusLabel;
-	private ConfirmationDialog _newGameDialog;
 
 	// true — диалог сейчас открыт в режиме "Импорт" (OK должен разобрать
 	// содержимое поля и пересобрать поле), false — в режиме "Экспорт" (OK
@@ -59,7 +58,7 @@ public partial class SaveLoadPanel : Control
 		// добавят ещё строку статистики).
 		SetAnchorsPreset(LayoutPreset.BottomRight);
 		const int margin = 16;
-		const int width = 354;
+		const int width = 236;
 		const int height = 40;
 		OffsetRight = -margin;
 		OffsetBottom = -margin;
@@ -73,10 +72,6 @@ public partial class SaveLoadPanel : Control
 		var box = new HBoxContainer();
 		AddChild(box);
 
-		var newGameButton = new Button { Text = "Новая игра", CustomMinimumSize = new Vector2(110, 32) };
-		newGameButton.Pressed += OnNewGamePressed;
-		box.AddChild(newGameButton);
-
 		var exportButton = new Button { Text = "Экспорт", CustomMinimumSize = new Vector2(110, 32) };
 		exportButton.Pressed += OnExportPressed;
 		box.AddChild(exportButton);
@@ -86,35 +81,6 @@ public partial class SaveLoadPanel : Control
 		box.AddChild(importButton);
 
 		BuildDialog();
-
-		_newGameDialog = new ConfirmationDialog
-		{
-			Title = "Новая игра",
-			DialogText = "Начать новую игру? Текущее поле и инвентарь будут очищены.",
-		};
-		_newGameDialog.Confirmed += OnNewGameConfirmed;
-		AddChild(_newGameDialog);
-	}
-
-	private void OnNewGamePressed()
-	{
-		if (_nucleusLayer == null)
-		{
-			GD.PrintErr("[SaveLoadPanel] не найден NucleusLayer — новая игра недоступна.");
-			return;
-		}
-		_newGameDialog.PopupCentered();
-	}
-
-	// Ошибка (нет шаблона стартовой зоны) — в лог и в диалог; поле не тронуто.
-	private void OnNewGameConfirmed()
-	{
-		if (_nucleusLayer.NewGame(out string error)) return;
-		_importMode = false;
-		_dialog.Title = "Новая игра не начата";
-		_statusLabel.Text = $"Ошибка: {error}";
-		_textEdit.Text = "";
-		_dialog.PopupCentered();
 	}
 
 	// Один общий диалог на обе кнопки (см. шапку файла) — разница между
@@ -203,6 +169,8 @@ public partial class SaveLoadPanel : Control
 		}
 
 		GD.Print("[SaveLoadPanel] поле успешно загружено из JSON.");
+		// Импортированное поле — текущая игра: с этого момента автосохранение (T013).
+		GetNodeOrNull<GameMenu>("/root/Main/GameMenu")?.MarkGameActive();
 	}
 
 	private static void SaveLastExportedToDisk(string json)
