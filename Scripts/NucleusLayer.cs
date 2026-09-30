@@ -4505,10 +4505,17 @@ public partial class NucleusLayer : Node2D
 		_templateCorner = null;
 		PlaceTemplate(t, StartZoneChunkX, StartZoneChunkY, StartZoneTemplatePath);
 		// Камера — на все стартовые чанки (T012).
-		if (_camera != null && Territory.TryGetBounds(out int x0, out int y0, out int x1, out int y1))
-			_camera.ShowRect(ChunkRectWorld(x0, y0, x1, y1));
+		ShowTerritory();
 		GD.Print("[NucleusLayer] новая игра: настоящий режим, открыты стартовые 2×2 чанка.");
 		return true;
+	}
+
+	// Камера сразу на всю открытую территорию (новая игра, «Продолжить» в меню T013);
+	// вся карта открыта — камера не трогается.
+	public void ShowTerritory()
+	{
+		if (_camera != null && Territory.TryGetBounds(out int x0, out int y0, out int x1, out int y1))
+			_camera.ShowRect(ChunkRectWorld(x0, y0, x1, y1));
 	}
 
 	// Очищает ВСЁ текущее поле ядер и источников частиц перед загрузкой новых

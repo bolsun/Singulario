@@ -159,9 +159,10 @@ public partial class NucleusSpawnPanel : Control
 			{
 				var button = new Button
 				{
-					Text = $"{label}{holeCount}",
 					CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
 				};
+				int textHoles = holeCount;
+				SetText(button, () => Tr(label) + textHoles);
 				if (tier >= 0 && tier < _tierColors.Length)
 				{
 					var c = _tierColors[tier];
@@ -190,9 +191,10 @@ public partial class NucleusSpawnPanel : Control
 		{
 			var button = new Button
 			{
-				Text = $"Сер{holeCount}",
 				CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
 			};
+			int textHoles = holeCount;
+			SetText(button, () => Tr("Сер") + textHoles);
 			button.AddThemeColorOverride("font_color", grayColor);
 			button.AddThemeColorOverride("font_hover_color", grayColor);
 			button.AddThemeColorOverride("font_pressed_color", grayColor);
@@ -212,9 +214,10 @@ public partial class NucleusSpawnPanel : Control
 		{
 			var button = new Button
 			{
-				Text = $"Пов{holeCount}",
 				CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
 			};
+			int textHoles = holeCount;
+			SetText(button, () => Tr("Пов") + textHoles);
 			button.AddThemeColorOverride("font_color", rotatorColor);
 			button.AddThemeColorOverride("font_hover_color", rotatorColor);
 			button.AddThemeColorOverride("font_pressed_color", rotatorColor);
@@ -234,9 +237,10 @@ public partial class NucleusSpawnPanel : Control
 		{
 			var button = new Button
 			{
-				Text = $"Бр{holeCount}",
 				CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
 			};
+			int textHoles = holeCount;
+			SetText(button, () => Tr("Бр") + textHoles);
 			button.AddThemeColorOverride("font_color", throwerColor);
 			button.AddThemeColorOverride("font_hover_color", throwerColor);
 			button.AddThemeColorOverride("font_pressed_color", throwerColor);
@@ -255,9 +259,9 @@ public partial class NucleusSpawnPanel : Control
 		{
 			var button = new Button
 			{
-				Text = $"Э{label}",
 				CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
 			};
+			SetText(button, () => Tr("Э") + Tr(label));
 			if (tier >= 0 && tier < _tierColors.Length)
 			{
 				var c = _tierColors[tier];
@@ -284,9 +288,10 @@ public partial class NucleusSpawnPanel : Control
 		{
 			var button = new Button
 			{
-				Text = $"Ч{ClusterTierLabel(layer.Tier)}",
 				CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
 			};
+			string clusterLabel = ClusterTierLabel(layer.Tier);
+			SetText(button, () => Tr("Ч") + Tr(clusterLabel));
 			int colorIndex = layer.Tier;
 			if (colorIndex >= 0 && colorIndex < _tierColors.Length)
 			{
@@ -307,9 +312,9 @@ public partial class NucleusSpawnPanel : Control
 		{
 			var starButton = new Button
 			{
-				Text = $"★{label}",
 				CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
 			};
+			SetText(starButton, () => "★" + Tr(label));
 			if (tier >= 0 && tier < _tierColors.Length)
 			{
 				var c = _tierColors[tier];
@@ -353,19 +358,19 @@ public partial class NucleusSpawnPanel : Control
 		foreach (int holeCount in HoleCounts)
 		{
 			foreach (var (label, tier) in Tiers)
-				AddMoleculeButton($"{label}{holeCount}", tier, holeCount);
+				AddMoleculeButton(label, tier, holeCount);
 		}
 		foreach (int holeCount in HoleCounts)
-			AddMoleculeButton($"Сер{holeCount}", grayTier, holeCount);
+			AddMoleculeButton("Сер", grayTier, holeCount);
 	}
 
-	private void AddMoleculeButton(string text, int tier, int holeCount)
+	private void AddMoleculeButton(string label, int tier, int holeCount)
 	{
 		var button = new Button
 		{
-			Text = text,
 			CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
 		};
+		SetText(button, () => Tr(label) + holeCount);
 		Color c = (tier >= 0 && tier < _tierColors.Length) ? _tierColors[tier] : GrayButtonColor;
 		button.AddThemeColorOverride("font_color", c);
 		button.AddThemeColorOverride("font_hover_color", c);
@@ -373,6 +378,25 @@ public partial class NucleusSpawnPanel : Control
 		button.AddThemeColorOverride("font_focus_color", c);
 		button.Pressed += () => _moleculeLayer?.SelectPreset(tier, holeCount);
 		_layer2Grid.AddChild(button);
+	}
+
+	// Подписи кнопок (T013) собраны из ключей перевода (Tr("Ж") + число дырок) —
+	// автоперевод Godot такие склейки не видит, поэтому при смене языка
+	// подписи пересобираются из сохранённых функций.
+	private readonly List<(Button button, System.Func<string> text)> _localizedButtons = new();
+
+	private void SetText(Button button, System.Func<string> text)
+	{
+		button.AutoTranslateMode = AutoTranslateModeEnum.Disabled;
+		button.Text = text();
+		_localizedButtons.Add((button, text));
+	}
+
+	public override void _Notification(int what)
+	{
+		if (what != NotificationTranslationChanged) return;
+		foreach (var (button, text) in _localizedButtons)
+			if (IsInstanceValid(button)) button.Text = text();
 	}
 
 	private void OnViewLayerChanged(int layer) => ApplyViewLayer();

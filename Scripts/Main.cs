@@ -12,8 +12,13 @@ public partial class Main : Node2D
 	public override void _Ready()
 	{
 		ViewLayer.Reset();
+		// Настройки (T013): язык и полный экран — до первого кадра.
+		Settings.Load();
+		Settings.Apply();
 		var camera = GetNode<CameraController>("Camera2D");
 		camera.Position = Vector2.Zero;
 		camera.Zoom = new Vector2(InitialZoom, InitialZoom);
+		// Главное меню (T013) — поверх всего, при запуске ставит игру на паузу.
+		AddChild(new GameMenu { Name = "GameMenu" });
 	}
 }

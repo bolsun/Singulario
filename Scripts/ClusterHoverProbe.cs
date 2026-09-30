@@ -61,7 +61,7 @@ public partial class ClusterHoverProbe : Node2D
 		{
 			if (!layer.HasClusterAt(row, col)) continue;
 
-			_label.Text = $"Кластер ({TierLabel(layer.Tier)}): частиц {layer.AmountAt(row, col)}, клеток {layer.CellCountAt(row, col)}";
+			_label.Text = string.Format(Tr("Кластер ({0}): частиц {1}, клеток {2}"), Tr(TierLabel(layer.Tier)), layer.AmountAt(row, col), layer.CellCountAt(row, col));
 			_label.Visible = true;
 			return;
 		}

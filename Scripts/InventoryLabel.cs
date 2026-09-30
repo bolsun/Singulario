@@ -2,6 +2,7 @@ using Godot;
 
 // Строка инвентаря в HUD (T008): атомы по тиру, звёзды (T011, если есть) и режим. Создаётся FpsLabel.
 // При пополнении строка коротко вспыхивает цветом тира (FlashSeconds).
+// Строка собирается каждый кадр из ключей перевода (Tr, T013), автоперевод Label выключен.
 public partial class InventoryLabel : Label
 {
 	[Export] public float FlashSeconds = 0.35f;
@@ -26,6 +27,7 @@ public partial class InventoryLabel : Label
 		GrowHorizontal = GrowDirection.Both;
 		OffsetTop = 8f;
 		MouseFilter = MouseFilterEnum.Ignore;
+		AutoTranslateMode = AutoTranslateModeEnum.Disabled;
 	}
 
 	public override void _Process(double delta)
@@ -45,12 +47,12 @@ public partial class InventoryLabel : Label
 		Modulate = Colors.White.Lerp(_flashColor, FlashSeconds > 0f ? _flash / FlashSeconds : 0f);
 
 		_sb.Clear();
-		_sb.Append("Инвентарь:");
+		_sb.Append(Tr("Инвентарь:"));
 		for (int t = 0; t < Inventory.TierCount; t++)
-			_sb.Append("  ").Append(TierNames[t]).Append(' ').Append(inv.Count(t));
+			_sb.Append("  ").Append(Tr(TierNames[t])).Append(' ').Append(inv.Count(t));
 		for (int t = 0; t < Inventory.TierCount; t++)
-			if (inv.StarCount(t) > 0) _sb.Append("  ★").Append(TierNames[t]).Append(' ').Append(inv.StarCount(t));
-		_sb.Append("   ·   ").Append(inv.Sandbox ? "Песочница" : "Настоящий режим").Append(" (M)");
+			if (inv.StarCount(t) > 0) _sb.Append("  ★").Append(Tr(TierNames[t])).Append(' ').Append(inv.StarCount(t));
+		_sb.Append("   ·   ").Append(Tr(inv.Sandbox ? "Песочница" : "Настоящий режим")).Append(" (M)");
 		Text = _sb.ToString();
 	}
 }

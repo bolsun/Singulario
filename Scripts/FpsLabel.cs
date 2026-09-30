@@ -14,6 +14,8 @@ public partial class FpsLabel : Label
 		AddThemeColorOverride("font_color", Colors.White);
 		AddThemeColorOverride("font_outline_color", Colors.Black);
 		AddThemeConstantOverride("outline_size", 4);
+		// Подписи — через Tr (T013): строка собирается каждый кадр, автоперевод не нужен.
+		AutoTranslateMode = AutoTranslateModeEnum.Disabled;
 
 		// Абсолютный путь от корня сцены — не зависит от того, где именно
 		// в дереве лежит сам HUD/Label.
@@ -33,12 +35,12 @@ public partial class FpsLabel : Label
 		string extraInfo = _nucleusLayer != null
 			? $"\nUPS: {_nucleusLayer.CurrentUPS:0}"
 			+ $"\nChunks: {_nucleusLayer.VisibleChunkCount}/{_nucleusLayer.TotalChunkCount}"
-			+ $"\nЯдра: {_nucleusLayer.ActiveNucleusCount}"
+			+ $"\n{Tr("Атомы:")} {_nucleusLayer.ActiveNucleusCount}"
 			+ PortCounters(_nucleusLayer.Ports)
 			+ BlackHoleCounters(_nucleusLayer.BlackHoles)
 			: "";
 		// Слой и k — только при включённом слое 2 (ViewLayer.Layer2Enabled, T005).
-		string layer = ViewLayer.Layer2Enabled ? $"  Слой {ViewLayer.Current}" : "";
+		string layer = ViewLayer.Layer2Enabled ? $"  {Tr("Слой")} {ViewLayer.Current}" : "";
 		string ratio = ViewLayer.Layer2Enabled && _moleculeLayer != null ? $"  k = {_moleculeLayer.L2TickRatio}" : "";
 		Text = $"FPS: {Engine.GetFramesPerSecond()}{layer}{ratio}{extraInfo}";
 	}
@@ -46,12 +48,12 @@ public partial class FpsLabel : Label
 	// Отладка портов (T002): упаковано частиц / атомов создано / атомов
 	// распаковано / частиц выдано (+ сброшено при смене режима). На замкнутой
 	// схеме: упаковано = 8 × создано, выдано ≤ 8 × распаковано.
-	private static string PortCounters(PortSet ports)
+	private string PortCounters(PortSet ports)
 	{
 		if (ports == null) return "";
-		string dropped = ports.ParticlesDiscarded > 0 ? $"  сброшено {ports.ParticlesDiscarded}" : "";
-		return $"\nПорты: упак. {ports.ParticlesPacked}  атомов {ports.AtomsCreated}"
-			+ $"  распак. {ports.AtomsUnpacked}  выдано {ports.ParticlesEmitted}{dropped}";
+		string dropped = ports.ParticlesDiscarded > 0 ? $"  {Tr("сброшено")} {ports.ParticlesDiscarded}" : "";
+		return $"\n{Tr("Порты: упак.")} {ports.ParticlesPacked}  {Tr("атомов")} {ports.AtomsCreated}"
+			+ $"  {Tr("распак.")} {ports.AtomsUnpacked}  {Tr("выдано")} {ports.ParticlesEmitted}{dropped}";
 	}
 
 	// Подписи тиров атомов (CoreTier) и цветов частиц — по одной нумерации.
@@ -67,9 +69,9 @@ public partial class FpsLabel : Label
 		foreach (long p in holes.ParticlesAbsorbed) particles += p;
 		if (holes.Count == 0 && atoms == 0 && particles == 0) return "";
 		_sb.Clear();
-		_sb.Append("\nЧД (").Append(holes.Count).Append("): атомов ").Append(atoms);
+		_sb.Append('\n').Append(Tr("ЧД")).Append(" (").Append(holes.Count).Append("): ").Append(Tr("атомов")).Append(' ').Append(atoms);
 		AppendCounts(holes.AtomsAbsorbed);
-		_sb.Append("\n  частиц ").Append(particles);
+		_sb.Append("\n  ").Append(Tr("частиц")).Append(' ').Append(particles);
 		AppendCounts(holes.ParticlesAbsorbed);
 		return _sb.ToString();
 	}
@@ -79,7 +81,7 @@ public partial class FpsLabel : Label
 		for (int i = 0; i < counts.Length; i++)
 		{
 			if (counts[i] == 0) continue;
-			_sb.Append("  ").Append(i < TierLabels.Length ? TierLabels[i] : "#" + i).Append(' ').Append(counts[i]);
+			_sb.Append("  ").Append(i < TierLabels.Length ? Tr(TierLabels[i]) : "#" + i).Append(' ').Append(counts[i]);
 		}
 	}
 }

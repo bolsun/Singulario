@@ -637,7 +637,7 @@ public partial class StarLayer : Node2D
 			DrawString(font, new Vector2(x, y + fontSize * 0.35f), text, HorizontalAlignment.Left, -1, fontSize, TierColor(ing.Id));
 		}
 		// Выходной буфер (T008) — строкой под ингредиентами.
-		string output = $"в буфере: {star.Output.Count} / {_nucleusLayer.StarOutputCapacity}";
+		string output = string.Format(Tr("в буфере: {0} / {1}"), star.Output.Count, _nucleusLayer.StarOutputCapacity);
 		var outSize = font.GetStringSize(output, HorizontalAlignment.Left, -1, fontSize);
 		DrawString(font, new Vector2(center.X - outSize.X / 2f, y + fontSize * 1.6f), output, HorizontalAlignment.Left, -1, fontSize, Colors.White);
 

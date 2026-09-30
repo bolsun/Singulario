@@ -26,6 +26,8 @@ public partial class ClusterHoverLabel : Label
 		OffsetTop = -margin - height;
 		OffsetRight = margin + width;
 
+		// Текст собирает ClusterHoverProbe через Tr (T013) — автоперевод не нужен.
+		AutoTranslateMode = AutoTranslateModeEnum.Disabled;
 		Text = "";
 		Visible = false;
 	}
