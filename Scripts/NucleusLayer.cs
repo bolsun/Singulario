@@ -332,6 +332,21 @@ public partial class NucleusLayer : Node2D
 	// и досрочно упираются в guard в _Process (см. цикл там же).
 	public float CurrentUPS { get; private set; }
 
+	// Замер производительности (T014, HUD по F3): окно ~1 с реального времени,
+	// в HUD — итог последнего закрытого окна.
+	public sealed class PerfWindow
+	{
+		public double TickMsAvg, TickMsMax;
+		public double TicksPerFrameAvg; public int TicksPerFrameMax;
+		public double FrameMsAvg;
+		public double RenderMsAvg, RenderMsMax;
+	}
+	public PerfWindow Perf { get; } = new();
+	public int TotalAtomCount => _activeSet.Count + _sleepingSet.Count + _cargoSet.Count;
+	public int VisibleAtomCount { get; private set; }
+	private double _perfTickMsSum, _perfTickMsMax, _perfRenderMsSum, _perfRenderMsMax, _perfFrameMsSum;
+	private int _perfTicks, _perfFrames, _perfTicksPerFrameMax;
+
 	// --- для слоя 2 (MoleculeLayer): единые часы симуляции и общие ресурсы
 	// отрисовки ядра, только чтение. Молекулы не тикают сами — их фаза
 	// считается от этого же _globalTick (см. RingMath).
@@ -1552,6 +1567,8 @@ public partial class NucleusLayer : Node2D
 
 		if (!layer1) return;
 
+		long renderStart = System.Diagnostics.Stopwatch.GetTimestamp();
+		int visibleAtoms = 0;
 		foreach (var coord in _visible)
 		{
 			if (!_chunks.TryGetValue(coord, out var chunk)) continue;
@@ -1560,7 +1577,12 @@ public partial class NucleusLayer : Node2D
 			chunk.HoleNode.Visible = _holesVisible;
 			chunk.ParticleNode.Visible = _particlesVisible;
 			UpdateChunkVisuals(chunk);
+			visibleAtoms += chunk.Nuclei.Count;
 		}
+		VisibleAtomCount = visibleAtoms;
+		double renderMs = System.Diagnostics.Stopwatch.GetElapsedTime(renderStart).TotalMilliseconds;
+		_perfRenderMsSum += renderMs;
+		if (renderMs > _perfRenderMsMax) _perfRenderMsMax = renderMs;
 
 		if (_leftMouseHeld) TryPlaceAtMouseIfSelected();
 		if (_rightMouseHeld) TryRemoveAtMouse();
@@ -1641,6 +1663,7 @@ public partial class NucleusLayer : Node2D
 		// и _subTickFraction остаются точно такими, какими были в момент
 		// входа в паузу (см. TogglePause/ниже), поэтому камеру можно свободно
 		// двигать, а ядра стоят неподвижно на выставленной фазе 0.
+		int ticksThisFrame = 0;
 		if (!_paused)
 		{
 			_tickAccumulatorMs += delta * 1000.0;
@@ -1649,11 +1672,17 @@ public partial class NucleusLayer : Node2D
 			{
 				_tickAccumulatorMs -= PrototypeTickMs;
 				_globalTick++;
+				long tickStart = System.Diagnostics.Stopwatch.GetTimestamp();
 				SimTick();
 				CheckGoals();
 				// Слой 2 (перенос атомов молекулами) — на тех же часах, после
 				// слоя 1: порты уже обменялись частицами на этом тике.
 				_moleculeLayer?.SimTick(_globalTick);
+				double tickMs = System.Diagnostics.Stopwatch.GetElapsedTime(tickStart).TotalMilliseconds;
+				_perfTickMsSum += tickMs;
+				if (tickMs > _perfTickMsMax) _perfTickMsMax = tickMs;
+				_perfTicks++;
+				ticksThisFrame++;
 				guard++;
 				_upsWindowTicks++;
 
@@ -1677,13 +1706,32 @@ public partial class NucleusLayer : Node2D
 
 		// Обновляем CurrentUPS раз в ~секунду реального времени — сырое
 		// количество тиков за кадр слишком дёргано для HUD.
+		_perfFrames++;
+		_perfFrameMsSum += delta * 1000.0;
+		if (ticksThisFrame > _perfTicksPerFrameMax) _perfTicksPerFrameMax = ticksThisFrame;
+
 		_upsWindowTimer += delta;
 		if (_upsWindowTimer >= 1.0)
 		{
+			ClosePerfWindow();
 			CurrentUPS = (float)(_upsWindowTicks / _upsWindowTimer);
 			_upsWindowTimer = 0.0;
 			_upsWindowTicks = 0;
 		}
+	}
+
+	// Итог окна замера (T014) — в Perf для HUD, счётчики окна обнуляются.
+	private void ClosePerfWindow()
+	{
+		Perf.TickMsAvg = _perfTicks > 0 ? _perfTickMsSum / _perfTicks : 0;
+		Perf.TickMsMax = _perfTickMsMax;
+		Perf.TicksPerFrameAvg = _perfFrames > 0 ? (double)_perfTicks / _perfFrames : 0;
+		Perf.TicksPerFrameMax = _perfTicksPerFrameMax;
+		Perf.FrameMsAvg = _perfFrames > 0 ? _perfFrameMsSum / _perfFrames : 0;
+		Perf.RenderMsAvg = _perfFrames > 0 ? _perfRenderMsSum / _perfFrames : 0;
+		Perf.RenderMsMax = _perfRenderMsMax;
+		_perfTickMsSum = _perfTickMsMax = _perfRenderMsSum = _perfRenderMsMax = _perfFrameMsSum = 0;
+		_perfTicks = _perfFrames = _perfTicksPerFrameMax = 0;
 	}
 
 	// Полупрозрачная "призрачная" копия выбранного ядра в клетке под
