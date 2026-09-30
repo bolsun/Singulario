@@ -16,8 +16,8 @@ shader_type canvas_item;
 //
 // Свечение (T020, финальный проход): буфер GlowLayer (R/G/B — Ж/К/С, A — серое;
 // 1 пиксель = клетка дизеринга, glow_origin — номер клетки его левого верхнего
-// пикселя, сетка клеток от начала мира). Преобладающий тир, яркость = сумма,
-// не больше glow_clamp → 3 тона рампы тира (серое — только тон 0). Свет ЧД
+// пикселя, сетка клеток от начала мира). Тиры смешиваются по долям (T020c),
+// яркость = сумма, не больше glow_clamp → 3 тона рампы (серое — только тон 0). Свет ЧД
 // считается здесь же (немного источников): (1 − (d/R)²)², тёплая рампа; при
 // sing_t → 1 (дальний зум) — Сингулярность, акцентная рампа (в дизеринге смена
 // рампы — тоже Байером). Из двух источников побеждает более яркий; с фоном —
@@ -83,13 +83,26 @@ vec4 apply_glow(vec4 c, vec2 p, vec2 half_screen) {
 		? texture(glow_tex, ((p - origin_w) / dither_pixel - glow_origin) / glow_size)
 		: texelFetch(glow_tex, ivec2(cell_w - glow_origin), 0);
 	g = max(g, vec4(0.0));
-	int tier = 0;
-	float best = g.r;
-	if (g.g > best) { tier = 1; best = g.g; }
-	if (g.b > best) { tier = 2; best = g.b; }
-	if (g.a > best) { tier = 3; best = g.a; }
-	float lt = min(g.r + g.g + g.b + g.a, glow_clamp) * 3.0;
-	if (tier == 3) lt = min(lt, 1.0);
+	// Смешение тиров (T020c): доли w_k = g_k / Σg. Дизеринг — тир пикселя порогом
+	// Байера (своя фаза) по накопленным долям; мягкий свет — взвешенная сумма
+	// цветов тиров. Серое — только тон 0. Тон — по общей яркости.
+	float sum = g.r + g.g + g.b + g.a;
+	vec4 w = sum > 0.0 ? g / sum : vec4(0.0);
+	float lt = min(sum, glow_clamp) * 3.0;
+	vec4 t0, t1, t2;
+	if (soft) {
+		t0 = w.r * tier_tones[0] + w.g * tier_tones[3] + w.b * tier_tones[6] + w.a * tier_tones[9];
+		t1 = w.r * tier_tones[1] + w.g * tier_tones[4] + w.b * tier_tones[7] + w.a * tier_tones[9];
+		t2 = w.r * tier_tones[2] + w.g * tier_tones[5] + w.b * tier_tones[8] + w.a * tier_tones[9];
+		lt = min(lt, 3.0 - 2.0 * w.a);
+	} else {
+		float u = bayer_at(cell_w + vec2(1.0, 3.0));
+		int tier = u < w.r ? 0 : (u < w.r + w.g ? 1 : (u < w.r + w.g + w.b ? 2 : 3));
+		t0 = tier_tones[tier * 3];
+		t1 = tier_tones[tier * 3 + 1];
+		t2 = tier_tones[tier * 3 + 2];
+		if (tier == 3) lt = min(lt, 1.0);
+	}
 
 	float bh = 0.0;
 	for (int i = 0; i < 8; i++) {
@@ -102,9 +115,6 @@ vec4 apply_glow(vec4 c, vec2 p, vec2 half_screen) {
 
 	float level = max(lt, lb);
 	if (level <= 0.0) return c;
-	vec4 t0 = tier_tones[tier * 3];
-	vec4 t1 = tier_tones[tier * 3 + 1];
-	vec4 t2 = tier_tones[tier * 3 + 2];
 	if (lb > lt) {
 		if (soft) {
 			t0 = mix(bh_tones[0], sing_tones[0], sing_t);

@@ -22,7 +22,7 @@ public partial class GlowLayer : Node
 	[Export] public float GrayStrength = 0.18f;
 	// Звёзды: радиус (клеток) и сила по состояниям (T017); в работе сила «дышит»
 	// синхронно с короной звезды: × (1 + StarBreath · sin(2π · фаза · StarBreathCycles)).
-	[Export] public float StarRadiusCells = 3.5f;
+	[Export] public float StarRadiusCells = 2.5f;
 	[Export] public float StarStrength = 0.45f;
 	[Export] public float StarBlockedStrength = 0.35f;
 	[Export] public float StarIdleStrength = 0.2f;
