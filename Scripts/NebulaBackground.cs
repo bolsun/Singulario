@@ -12,7 +12,8 @@ using System.Collections.Generic;
 //
 // F4 — отладочный переключатель вариантов текстуры по кругу (не сохраняется):
 // Облака → Дымка → Мрамор → Пыль → Выкл. При переключении на LabelSeconds
-// показывается название варианта.
+// показывается название варианта. F5 (T016c) — режим света «Дизеринг» ↔
+// «Мягкий свет», независимо от F4, тоже с надписью.
 public partial class NebulaBackground : CanvasLayer
 {
 	private const string ShaderPath = "res://Resources/Shaders/nebula_background.gdshader";
@@ -34,13 +35,17 @@ public partial class NebulaBackground : CanvasLayer
 	// Мировых единиц на тексель текстуры плотности (512 текселей × 15 ≈ 5 чанков).
 	[Export] public float TexelWorldSize = 15f;
 	// Доля движения фона от движения камеры.
-	[Export] public float Parallax = 0.4f;
+	[Export] public float Parallax = 1f;
 	// Радиус света ЧД R, в чанках (на расстоянии R свет = 0,5).
 	[Export] public float LightRadius = 2.2f;
 	[Export] public float Gain = 1.35f;
 	// Чёрная точка (T016b): v' = max(0, v − BlackPoint) / (1 − BlackPoint) —
 	// слабый свет даёт чистую тьму Color0 без редких светлых пикселей.
-	[Export] public float BlackPoint = 0.1f;
+	[Export] public float BlackPoint = 0.12f;
+	// F5 (T016c): «Мягкий свет» — плавная интерполяция по Color0..3 без
+	// дизеринга; SoftNoise — сила шума по пикселям против полос (0 — выкл).
+	[Export] public bool SoftLight;
+	[Export] public float SoftNoise = 0.004f;
 	// Клетка дизеринга — пикселей экрана, одинакова при любом зуме.
 	[Export] public float DitherPixel = 3f;
 	// Ниже этого зума фон гаснет; полностью погашен при FadeZoom / FadeRatio.
@@ -49,10 +54,10 @@ public partial class NebulaBackground : CanvasLayer
 	// Сколько ЧД светят (ближайшие к центру экрана), не больше 8.
 	[Export] public int MaxLights = 8;
 	// Ступени палитры Singulario 32: пусто → самая светлая.
-	[Export] public Color Color0 = new("#120e1d");
-	[Export] public Color Color1 = new("#1b1629");
-	[Export] public Color Color2 = new("#272038");
-	[Export] public Color Color3 = new("#372d4d");
+	[Export] public Color Color0 = new("#0a0812");
+	[Export] public Color Color1 = new("#120e1d");
+	[Export] public Color Color2 = new("#1b1629");
+	[Export] public Color Color3 = new("#272038");
 
 	private NucleusLayer _layer;
 	private ColorRect _rect;
@@ -105,13 +110,27 @@ public partial class NebulaBackground : CanvasLayer
 
 	public override void _UnhandledInput(InputEvent @event)
 	{
-		if (@event is not InputEventKey key || !key.Pressed || key.Echo || key.Keycode != Key.F4) return;
-		_variant = (_variant + 1) % Variants.Length;
-		ApplyVariant();
-		_label.Text = string.Format(Tr("Фон: {0}"), Tr(Variants[_variant].name));
+		if (@event is not InputEventKey key || !key.Pressed || key.Echo) return;
+		if (key.Keycode == Key.F4)
+		{
+			_variant = (_variant + 1) % Variants.Length;
+			ApplyVariant();
+			ShowLabel(string.Format(Tr("Фон: {0}"), Tr(Variants[_variant].name)));
+		}
+		else if (key.Keycode == Key.F5)
+		{
+			SoftLight = !SoftLight;
+			ShowLabel(string.Format(Tr("Свет: {0}"), Tr(SoftLight ? "Мягкий свет" : "Дизеринг")));
+		}
+		else return;
+		GetViewport().SetInputAsHandled();
+	}
+
+	private void ShowLabel(string text)
+	{
+		_label.Text = text;
 		_label.Visible = true;
 		_labelLeft = LabelSeconds;
-		GetViewport().SetInputAsHandled();
 	}
 
 	private void ApplyVariant()
@@ -146,6 +165,8 @@ public partial class NebulaBackground : CanvasLayer
 		_material.SetShaderParameter("texel_world_size", TexelWorldSize);
 		_material.SetShaderParameter("texture_size", (float)(_texture?.GetWidth() ?? 512));
 		_material.SetShaderParameter("dither_pixel", Mathf.Max(1f, DitherPixel));
+		_material.SetShaderParameter("soft", SoftLight);
+		_material.SetShaderParameter("soft_noise", Mathf.Max(0f, SoftNoise));
 		_material.SetShaderParameter("gain", Gain);
 		_material.SetShaderParameter("black_point", Mathf.Clamp(BlackPoint, 0f, 0.99f));
 		_material.SetShaderParameter("fade", Fade(zoom));

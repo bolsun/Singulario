@@ -243,3 +243,12 @@ msgstr "Dust"
 
 msgid "Выкл"
 msgstr "Off"
+
+msgid "Свет: {0}"
+msgstr "Light: {0}"
+
+msgid "Дизеринг"
+msgstr "Dithered"
+
+msgid "Мягкий свет"
+msgstr "Soft light"
