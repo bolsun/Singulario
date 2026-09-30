@@ -58,7 +58,7 @@ public partial class GridDraw : Node2D
     // отдельно для ЧД и звезды; в шейдер — не больше MaxWarpObjects ближайших к
     // центру экрана (из тех, чей след с запасом виден). Вкл/выкл — Shift+G.
     [Export] public float BlackHoleWarp = 0.25f;
-    [Export] public float StarWarp = 0.25f;
+    [Export] public float StarWarp = 0.12f; // звезда меньше ЧД — прогиб слабее
     [Export] public int MaxWarpObjects = 16;
     private const int WarpCapacity = 16; // размер массива warp_objects в grid.gdshader
 
