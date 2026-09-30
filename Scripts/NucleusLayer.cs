@@ -882,7 +882,8 @@ public partial class NucleusLayer : Node2D
 	{
 		int cs = ChunkSize;
 		int cy = CanonicalOrder.FloorDiv(n.Row, cs), cx = CanonicalOrder.FloorDiv(n.Col, cs);
-		n.OrderKey = ((long)(cy + 0x8000) << 48) | ((long)(cx + 0x8000) << 32)
+		// Биты: cy 16 | cx 16 | строка в чанке 15 | столбец 16 — знаковый бит не задет.
+		n.OrderKey = ((long)(cy + 0x8000) << 47) | ((long)(cx + 0x8000) << 31)
 			| ((long)(n.Row - cy * cs) << 16) | (long)(n.Col - cx * cs);
 	}
 
