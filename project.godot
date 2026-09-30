@@ -31,4 +31,4 @@ locale/fallback="ru"
 [rendering]
 
 rendering_device/driver.windows="d3d12"
-environment/defaults/default_clear_color=Color(0.05564989, 0.03483996, 0.05864413, 1)
+environment/defaults/default_clear_color=Color(0.07058824, 0.05490196, 0.11372549, 1)

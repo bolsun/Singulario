@@ -36,8 +36,11 @@ public partial class NebulaBackground : CanvasLayer
 	// Доля движения фона от движения камеры.
 	[Export] public float Parallax = 0.4f;
 	// Радиус света ЧД R, в чанках (на расстоянии R свет = 0,5).
-	[Export] public float LightRadius = 2.5f;
-	[Export] public float Gain = 1.3f;
+	[Export] public float LightRadius = 2.2f;
+	[Export] public float Gain = 1.35f;
+	// Чёрная точка (T016b): v' = max(0, v − BlackPoint) / (1 − BlackPoint) —
+	// слабый свет даёт чистую тьму Color0 без редких светлых пикселей.
+	[Export] public float BlackPoint = 0.1f;
 	// Клетка дизеринга — пикселей экрана, одинакова при любом зуме.
 	[Export] public float DitherPixel = 3f;
 	// Ниже этого зума фон гаснет; полностью погашен при FadeZoom / FadeRatio.
@@ -46,10 +49,10 @@ public partial class NebulaBackground : CanvasLayer
 	// Сколько ЧД светят (ближайшие к центру экрана), не больше 8.
 	[Export] public int MaxLights = 8;
 	// Ступени палитры Singulario 32: пусто → самая светлая.
-	[Export] public Color Color0 = new("#1b1629");
-	[Export] public Color Color1 = new("#272038");
-	[Export] public Color Color2 = new("#372d4d");
-	[Export] public Color Color3 = new("#4d4268");
+	[Export] public Color Color0 = new("#120e1d");
+	[Export] public Color Color1 = new("#1b1629");
+	[Export] public Color Color2 = new("#272038");
+	[Export] public Color Color3 = new("#372d4d");
 
 	private NucleusLayer _layer;
 	private ColorRect _rect;
@@ -144,6 +147,7 @@ public partial class NebulaBackground : CanvasLayer
 		_material.SetShaderParameter("texture_size", (float)(_texture?.GetWidth() ?? 512));
 		_material.SetShaderParameter("dither_pixel", Mathf.Max(1f, DitherPixel));
 		_material.SetShaderParameter("gain", Gain);
+		_material.SetShaderParameter("black_point", Mathf.Clamp(BlackPoint, 0f, 0.99f));
 		_material.SetShaderParameter("fade", Fade(zoom));
 		_material.SetShaderParameter("color0", Color0);
 		_material.SetShaderParameter("color1", Color1);

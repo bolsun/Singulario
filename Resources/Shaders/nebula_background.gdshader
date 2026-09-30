@@ -18,15 +18,16 @@ uniform float parallax = 0.4;
 uniform float texel_world_size = 15.0;
 uniform float texture_size = 512.0;
 uniform float dither_pixel = 3.0;
-uniform float gain = 1.3;
+uniform float gain = 1.35;
+uniform float black_point = 0.1;
 uniform float fade = 1.0;
 // Свет ЧД: xy — центр ЧД относительно cam_pos (мир), z — радиус R (мир).
 uniform int light_count = 0;
 uniform vec3 lights[8];
-uniform vec4 color0 : source_color = vec4(0.106, 0.086, 0.161, 1.0);
-uniform vec4 color1 : source_color = vec4(0.153, 0.125, 0.220, 1.0);
-uniform vec4 color2 : source_color = vec4(0.216, 0.176, 0.302, 1.0);
-uniform vec4 color3 : source_color = vec4(0.302, 0.259, 0.408, 1.0);
+uniform vec4 color0 : source_color = vec4(0.071, 0.055, 0.114, 1.0);
+uniform vec4 color1 : source_color = vec4(0.106, 0.086, 0.161, 1.0);
+uniform vec4 color2 : source_color = vec4(0.153, 0.125, 0.220, 1.0);
+uniform vec4 color3 : source_color = vec4(0.216, 0.176, 0.302, 1.0);
 
 const float BAYER[16] = float[16](
 	0.0, 8.0, 2.0, 10.0,
@@ -56,6 +57,8 @@ void fragment() {
 	light = min(light, 1.0);
 
 	float v = min(d * light * gain * fade, 1.0);
+	// Чёрная точка (T016b): слабый свет — чистая тьма color0.
+	v = max(0.0, v - black_point) / (1.0 - black_point);
 	ivec2 b = ivec2(mod(cell, 4.0));
 	float bayer = (BAYER[b.y * 4 + b.x] + 0.5) / 16.0;
 	int level = min(int(floor(v * 3.0 + bayer)), 3);
