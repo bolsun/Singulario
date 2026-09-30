@@ -18,7 +18,7 @@ public partial class GlowLayer : Node
 
 	// Атомы: радиус пятна (клеток) и сила; серые — очень слабо.
 	[Export] public float AtomRadiusCells = 0.7f;
-	[Export] public float AtomStrength = 0.5f;
+	[Export] public float AtomStrength = 0.4f;
 	[Export] public float GrayStrength = 0.25f;
 	// Звёзды: радиус (клеток) и сила по состояниям (T017); в работе сила «дышит»
 	// синхронно с короной звезды: × (1 + StarBreath · sin(2π · фаза · StarBreathCycles)).
@@ -28,6 +28,29 @@ public partial class GlowLayer : Node
 	[Export] public float StarIdleStrength = 0f;
 	[Export] public float StarBreath = 0.15f;
 	[Export] public int StarBreathCycles = 2;
+	// Яркость буфера (сумма каналов) не больше этого — плотная застройка не выгорает.
+	[Export] public float GlowClamp = 1f;
+	// ЧД: радиус (клеток) и сила; считается в шейдере фона.
+	[Export] public float BlackHoleRadiusCells = 3f;
+	[Export] public float BlackHoleStrength = 0.8f;
+	// Сингулярность — свет ЧД на отдалении: ниже SingularityZoom переход (лог-шкала)
+	// до SingularityZoom / SingularityRatio; радиус — не меньше SingularityRadiusCells
+	// клеток и SingularityMinScreenPx пикселей экрана.
+	[Export] public float SingularityZoom = 0.05f;
+	[Export] public float SingularityRatio = 3f;
+	[Export] public float SingularityRadiusCells = 12f;
+	[Export] public float SingularityMinScreenPx = 48f;
+	[Export] public float SingularityStrength = 1.3f;
+	// Рампы Singulario 32, тоны 0..2 (0 — темнее): Ж, К, С, серое по 3 подряд.
+	[Export] public Color[] TierTones =
+	{
+		new("5e2a1e"), new("a8501c"), new("e8911f"),
+		new("4a1030"), new("8c1c3a"), new("d23a4a"),
+		new("1a1f5c"), new("26479e"), new("3a7fe0"),
+		new("6e6a88"), new("9d9ab3"), new("cfcde0"),
+	};
+	[Export] public Color[] BlackHoleTones = { new("5e2a1e"), new("a8501c"), new("e8911f") };
+	[Export] public Color[] SingularityTones = { new("8a2d9e"), new("ff7ae0"), new("ffffff") };
 
 	public bool Enabled = true;
 	public Texture2D Texture => _viewport?.GetTexture();
@@ -64,7 +87,6 @@ public partial class GlowLayer : Node
 		{
 			Name = "GlowViewport",
 			TransparentBg = true,
-			UseHdr2D = true,
 			Disable3D = true,
 			RenderTargetUpdateMode = SubViewport.UpdateMode.Always,
 			Size = new Vector2I(4, 4),
@@ -104,6 +126,36 @@ public partial class GlowLayer : Node
 
 		UpdateAtoms(zoom);
 		UpdateStars();
+	}
+
+	// Параметры финального прохода — в материал фона (uniform'ы nebula_background).
+	public void ApplyToMaterial(ShaderMaterial material, float zoom)
+	{
+		material.SetShaderParameter("glow_on", Enabled && _layer != null && _layer.CellSize > 0);
+		if (!Enabled || _layer == null || _layer.CellSize <= 0) return;
+		material.SetShaderParameter("glow_tex", Texture);
+		material.SetShaderParameter("glow_origin", (Vector2)Origin);
+		material.SetShaderParameter("glow_size", (Vector2)Size);
+		material.SetShaderParameter("glow_clamp", Mathf.Max(0f, GlowClamp));
+		material.SetShaderParameter("tier_tones", TierTones);
+		material.SetShaderParameter("bh_tones", BlackHoleTones);
+		material.SetShaderParameter("sing_tones", SingularityTones);
+
+		float cell = _layer.CellSize;
+		float s = SingularityT(zoom);
+		float bhRadius = Mathf.Max(0.01f, BlackHoleRadiusCells) * cell;
+		float singRadius = Mathf.Max(SingularityRadiusCells * cell, SingularityMinScreenPx / Mathf.Max(zoom, 1e-6f));
+		material.SetShaderParameter("bh_glow_radius", Mathf.Lerp(bhRadius, singRadius, s));
+		material.SetShaderParameter("bh_glow_strength", Mathf.Lerp(BlackHoleStrength, SingularityStrength, s));
+		material.SetShaderParameter("sing_t", s);
+	}
+
+	// 0 при zoom ≥ SingularityZoom, 1 при zoom ≤ SingularityZoom / SingularityRatio.
+	private float SingularityT(float zoom)
+	{
+		if (SingularityRatio <= 1f) return zoom < SingularityZoom ? 1f : 0f;
+		float t = Mathf.Log(SingularityZoom / zoom) / Mathf.Log(SingularityRatio);
+		return Mathf.SmoothStep(0f, 1f, Mathf.Clamp(t, 0f, 1f));
 	}
 
 	// Ореолы атомов гаснут к NebulaZoom — та же полоса, что у туманностей чанков (T015).
