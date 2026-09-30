@@ -1,0 +1,10 @@
+# Singulario — английский перевод интерфейса (T013).
+# Ключ (msgid) — русская строка, как она написана в коде; русский язык перевода
+# не требует. Строки с {0}, {1} — шаблоны string.Format.
+msgid ""
+msgstr ""
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+

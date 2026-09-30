@@ -27,3 +27,8 @@ project/assembly_name="Singulario"
 
 rendering_device/driver.windows="d3d12"
 environment/defaults/default_clear_color=Color(0.05564989, 0.03483996, 0.05864413, 1)
+
+[internationalization]
+
+locale/translations=PackedStringArray("res://Data/Localization/en.po")
+locale/fallback="ru"
