@@ -16,17 +16,13 @@ public partial class GlowLayer : Node
 {
 	private const string SpotShaderPath = "res://Resources/Shaders/glow_spot.gdshader";
 
-	// Атомы: сила; серые — очень слабо. Пятно — в своей клетке (T020b): спад от
-	// AtomGlowInner до AtomGlowReach (доли полуклетки; чуть за край — дорожка без швов).
-	[Export] public float AtomGlowInner = 0.6f;
-	[Export] public float AtomGlowReach = 1.15f;
+	// Атомы: радиус пятна (клеток) и сила; серые — очень слабо.
+	[Export] public float AtomRadiusCells = 0.7f;
 	[Export] public float AtomStrength = 0.3f;
 	[Export] public float GrayStrength = 0.18f;
-	// Звёзды: сила по состояниям (T017); в работе сила «дышит» синхронно с короной
-	// звезды: × (1 + StarBreath · sin(2π · фаза · StarBreathCycles)). Пятно — в следе
-	// 3×3 (T020b): спад от StarGlowInner до StarGlowReach (доли полустороны следа).
-	[Export] public float StarGlowInner = 0.7f;
-	[Export] public float StarGlowReach = 1f;
+	// Звёзды: радиус (клеток) и сила по состояниям (T017); в работе сила «дышит»
+	// синхронно с короной звезды: × (1 + StarBreath · sin(2π · фаза · StarBreathCycles)).
+	[Export] public float StarRadiusCells = 3.5f;
 	[Export] public float StarStrength = 0.45f;
 	[Export] public float StarBlockedStrength = 0.35f;
 	[Export] public float StarIdleStrength = 0.2f;
@@ -34,9 +30,8 @@ public partial class GlowLayer : Node
 	[Export] public int StarBreathCycles = 2;
 	// Яркость буфера (сумма каналов) не больше этого — плотная застройка не выгорает.
 	[Export] public float GlowClamp = 1f;
-	// ЧД: сила и спад в границах Size×Size (T020b, доли полустороны); считается в шейдере фона.
-	[Export] public float BlackHoleGlowInner = 0.7f;
-	[Export] public float BlackHoleGlowReach = 1f;
+	// ЧД: радиус (клеток) и сила; считается в шейдере фона.
+	[Export] public float BlackHoleRadiusCells = 3f;
 	[Export] public float BlackHoleStrength = 0.2f;
 	// Сингулярность — свет ЧД на отдалении: ниже SingularityZoom переход (лог-шкала)
 	// до SingularityZoom / SingularityRatio; радиус — не меньше SingularityRadiusCells
@@ -148,10 +143,9 @@ public partial class GlowLayer : Node
 
 		float cell = _layer.CellSize;
 		float s = SingularityT(zoom);
+		float bhRadius = Mathf.Max(0.01f, BlackHoleRadiusCells) * cell;
 		float singRadius = Mathf.Max(SingularityRadiusCells * cell, SingularityMinScreenPx / Mathf.Max(zoom, 1e-6f));
-		material.SetShaderParameter("bh_glow_radius", singRadius);
-		material.SetShaderParameter("bh_inner", BlackHoleGlowInner);
-		material.SetShaderParameter("bh_reach", Mathf.Max(BlackHoleGlowReach, BlackHoleGlowInner + 0.01f));
+		material.SetShaderParameter("bh_glow_radius", Mathf.Lerp(bhRadius, singRadius, s));
 		material.SetShaderParameter("bh_glow_strength", Mathf.Lerp(BlackHoleStrength, SingularityStrength, s));
 		material.SetShaderParameter("sing_t", s);
 	}
@@ -177,8 +171,6 @@ public partial class GlowLayer : Node
 	{
 		float fade = ViewLayer.IsLayer2 ? 0f : AtomFade(zoom);
 		_atomMaterial.SetShaderParameter("fade", fade);
-		SetSpotShape(_atomMaterial, AtomGlowInner, AtomGlowReach);
-		SetSpotShape(_starMaterial, StarGlowInner, StarGlowReach);
 		_nowShown.Clear();
 		if (fade > 0f)
 		{
@@ -225,12 +217,6 @@ public partial class GlowLayer : Node
 		_shown.UnionWith(_nowShown);
 	}
 
-	private static void SetSpotShape(ShaderMaterial material, float inner, float reach)
-	{
-		material.SetShaderParameter("inner", inner);
-		material.SetShaderParameter("reach", Mathf.Max(reach, inner + 0.01f));
-	}
-
 	private void RebuildChunk((int cx, int cy) key, ChunkGlow glow, int version)
 	{
 		glow.Version = version;
@@ -240,7 +226,7 @@ public partial class GlowLayer : Node
 			if (tier == _layer.GrayCoreTier) gray++;
 
 		float cell = _layer.CellSize;
-		float side = cell * AtomGlowReach;
+		float side = 2f * AtomRadiusCells * cell;
 		float chunkWorld = _layer.ChunkSize * cell;
 		var rect = new Rect2(key.cx * chunkWorld, key.cy * chunkWorld, chunkWorld, chunkWorld).Grow(side);
 		var aabb = new Aabb(new Vector3(rect.Position.X, rect.Position.Y, -1f), new Vector3(rect.Size.X, rect.Size.Y, 2f));
@@ -301,7 +287,7 @@ public partial class GlowLayer : Node
 		float phase = ((float)(_layer.GlobalTick % loop) + _layer.SubTickFraction) / loop;
 		float breath = 1f + StarBreath * Mathf.Sin(Mathf.Tau * phase * StarBreathCycles);
 		float cell = _layer.CellSize;
-		float side = Star.Size * cell * StarGlowReach;
+		float side = 2f * StarRadiusCells * cell;
 		for (int i = 0; i < count; i++)
 		{
 			var s = stars[i];

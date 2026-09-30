@@ -68,10 +68,8 @@ public partial class NebulaBackground : CanvasLayer
 	private int _variant;
 	private Label _label;
 	private float _labelLeft;
-	private readonly List<(float dist2, Vector3 light, float half)> _candidates = new();
+	private readonly List<(float dist2, Vector3 light)> _candidates = new();
 	private readonly Vector3[] _lights = new Vector3[ShaderMaxLights];
-	// Полусторона ЧД (мир) — для свечения в её границах (T020b).
-	private readonly float[] _lightHalf = new float[ShaderMaxLights];
 
 	public override void _Ready()
 	{
@@ -212,24 +210,15 @@ public partial class NebulaBackground : CanvasLayer
 			{
 				var center = new Vector2((hole.Col + hole.Size * 0.5f) * cell, (hole.Row + hole.Size * 0.5f) * cell);
 				Vector2 rel = center - camPos;
-				_candidates.Add((rel.LengthSquared(), new Vector3(rel.X, rel.Y, radius), hole.Size * 0.5f * cell));
+				_candidates.Add((rel.LengthSquared(), new Vector3(rel.X, rel.Y, radius)));
 			}
 			// Порядок при равных расстояниях не важен: это только отрисовка.
 			_candidates.Sort((a, b) => a.dist2.CompareTo(b.dist2));
 			count = Mathf.Min(_candidates.Count, Mathf.Clamp(MaxLights, 0, ShaderMaxLights));
-			for (int i = 0; i < count; i++)
-			{
-				_lights[i] = _candidates[i].light;
-				_lightHalf[i] = _candidates[i].half;
-			}
+			for (int i = 0; i < count; i++) _lights[i] = _candidates[i].light;
 		}
-		for (int i = count; i < ShaderMaxLights; i++)
-		{
-			_lights[i] = Vector3.Zero;
-			_lightHalf[i] = 1f;
-		}
+		for (int i = count; i < ShaderMaxLights; i++) _lights[i] = Vector3.Zero;
 		_material.SetShaderParameter("light_count", count);
 		_material.SetShaderParameter("lights", _lights);
-		_material.SetShaderParameter("light_half", _lightHalf);
 	}
 }
