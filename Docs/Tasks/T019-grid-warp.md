@@ -1,6 +1,6 @@
 # T019 — Прогиб сетки под ЧД и звёздами (Shift+G)
 
-Статус: поставлена.
+Статус: выполнена, влита в `experimental`.
 
 Ветка: `feature/grid-warp` от `experimental` (`git checkout -b feature/grid-warp experimental`).
 После отчёта — влить в `experimental` (CLAUDE.md, «Процесс»). В `main` не пушить.

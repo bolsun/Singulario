@@ -267,3 +267,6 @@ msgstr "Glow: {0}"
 
 msgid "Вкл"
 msgstr "On"
+
+msgid "Прогиб сетки: {0}"
+msgstr "Grid warp: {0}"
