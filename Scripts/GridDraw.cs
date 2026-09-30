@@ -53,6 +53,14 @@ public partial class GridDraw : Node2D
     // линия это граница чанка, красится как раньше, одним LineColor.
     [Export] public Color ChunkLineColor = new Color("#4d4268");
 
+    // Прогиб сетки под ЧД и звёздами (T019, только вид): сила — доля клетки,
+    // отдельно для ЧД и звезды; в шейдер — не больше MaxWarpObjects ближайших к
+    // центру экрана (из тех, чей след с запасом виден). Вкл/выкл — Shift+G.
+    [Export] public float BlackHoleWarp = 0.25f;
+    [Export] public float StarWarp = 0.25f;
+    [Export] public int MaxWarpObjects = 16;
+    private const int WarpCapacity = 16; // размер массива warp_objects в grid.gdshader
+
     private int _chunkSize = 16;
     private int _minCol, _maxCol, _minRow, _maxRow;
     private int _step = 1;
@@ -60,6 +68,9 @@ public partial class GridDraw : Node2D
     private bool _haveRange;
     private bool _hidden;
     private ShaderMaterial _material;
+    private NucleusLayer _nucleusLayer;
+    private readonly System.Collections.Generic.List<(float dist, int order, Vector4 obj)> _warpScratch = new();
+    private readonly Vector4[] _warpObjects = new Vector4[WarpCapacity];
 
     // Включена ли сетка (G) — для других узлов: подробный вид портов (T004,
     // PortLayer, MoleculeLayer, BlackHoleLayer) показывается только с сеткой.
@@ -70,7 +81,7 @@ public partial class GridDraw : Node2D
         Shown = Visible;
         SetProcessInput(true);
 
-        var nucleusLayer = GetNodeOrNull<NucleusLayer>("../NucleusLayer");
+        var nucleusLayer = _nucleusLayer = GetNodeOrNull<NucleusLayer>("../NucleusLayer");
         if (nucleusLayer != null) _chunkSize = nucleusLayer.ChunkSize;
 
         var shader = GD.Load<Shader>(ShaderPath);
@@ -115,6 +126,7 @@ public partial class GridDraw : Node2D
         }
         if (hidden) return;
         UpdateShader(step);
+        UpdateWarp(visibleRect, cam.GetScreenCenterPosition());
 
         int minCol = Mathf.FloorToInt(visibleRect.Position.X / step);
         int maxCol = Mathf.CeilToInt((visibleRect.Position.X + visibleRect.Size.X) / step);
@@ -146,7 +158,39 @@ public partial class GridDraw : Node2D
         _material.SetShaderParameter("cell_mode", step == CellSize);
         _material.SetShaderParameter("line_color", LineColor);
         _material.SetShaderParameter("chunk_line_color", ChunkLineColor);
-        _material.SetShaderParameter("warp_on", false);
+    }
+
+    // Объекты прогиба: центр следа, полусторона, сила (мировые единицы). Порядок —
+    // по расстоянию до центра экрана, при равенстве — по порядку обхода наборов
+    // (ЧД и звёзды хранятся упорядоченно), так что выбор детерминирован.
+    private void UpdateWarp(Rect2 visibleRect, Vector2 screenCenter)
+    {
+        _warpScratch.Clear();
+        if (_nucleusLayer != null && _nucleusLayer.IsReady && !ViewLayer.IsLayer2)
+        {
+            var view = visibleRect.Grow(CellSize);
+            if (_nucleusLayer.BlackHoles != null)
+                foreach (var hole in _nucleusLayer.BlackHoles.Enumerate())
+                    AddWarp(view, screenCenter, hole.Row, hole.Col, hole.Size, BlackHoleWarp);
+            if (_nucleusLayer.Stars != null)
+                foreach (var star in _nucleusLayer.Stars.All)
+                    AddWarp(view, screenCenter, star.Row, star.Col, Star.Size, StarWarp);
+        }
+        _warpScratch.Sort((a, b) => a.dist != b.dist ? a.dist.CompareTo(b.dist) : a.order.CompareTo(b.order));
+        int count = System.Math.Min(_warpScratch.Count, System.Math.Clamp(MaxWarpObjects, 0, WarpCapacity));
+        for (int i = 0; i < count; i++) _warpObjects[i] = _warpScratch[i].obj;
+        _material.SetShaderParameter("warp_count", count);
+        _material.SetShaderParameter("warp_objects", _warpObjects);
+    }
+
+    private void AddWarp(Rect2 view, Vector2 screenCenter, int row, int col, int size, float strength)
+    {
+        if (strength == 0f || size <= 0) return;
+        var rect = new Rect2(col * CellSize, row * CellSize, size * CellSize, size * CellSize);
+        if (!view.Intersects(rect)) return;
+        var center = rect.GetCenter();
+        _warpScratch.Add((center.DistanceSquaredTo(screenCenter), _warpScratch.Count,
+            new Vector4(center.X, center.Y, size * CellSize / 2f, strength * CellSize)));
     }
 
     // Один прямоугольник на видимый диапазон — линии (и подсветку границ чанков,
