@@ -225,3 +225,21 @@ msgstr "Frame, ms:"
 
 msgid "Отрисовка атомов, мс:"
 msgstr "Atom render, ms:"
+
+msgid "Фон: {0}"
+msgstr "Background: {0}"
+
+msgid "Облака"
+msgstr "Clouds"
+
+msgid "Дымка"
+msgstr "Haze"
+
+msgid "Мрамор"
+msgstr "Marble"
+
+msgid "Пыль"
+msgstr "Dust"
+
+msgid "Выкл"
+msgstr "Off"
