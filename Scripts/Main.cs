@@ -18,6 +18,8 @@ public partial class Main : Node2D
 		var camera = GetNode<CameraController>("Camera2D");
 		camera.Position = Vector2.Zero;
 		camera.Zoom = new Vector2(InitialZoom, InitialZoom);
+		// Фон-туманность (T016) — позади всего поля.
+		AddChild(new NebulaBackground { Name = "NebulaBackground" });
 		// Главное меню (T013) — поверх всего, при запуске ставит игру на паузу.
 		AddChild(new GameMenu { Name = "GameMenu" });
 	}
