@@ -2040,6 +2040,9 @@ public partial class NucleusLayer : Node2D
 		foreach (var star in Stars.All)
 		{
 			if (star.Output.Count == 0) continue;
+			// Звезда-предмет (T011) по дыркам не едет — ждёт в буфере, пока игрок
+			// не заберёт её в инвентарь; до тех пор выдача в линию стоит.
+			if (StarItem.IsStar(star.Output.Peek())) continue;
 			var (row, col) = star.OutputCell;
 			if (!_entAt.TryGetValue((row, col), out var n)) continue;
 			if (n.IsCargo || _globalTick < n.AsleepUntilTick || (n.IsMoving && n.IsFlying)) continue;
@@ -3744,6 +3747,8 @@ public partial class NucleusLayer : Node2D
 		// Инвентарь и режим (T008). В старых сохранениях нет: пустой инвентарь,
 		// режим — настройка SandboxMode.
 		public List<SavedTierCount> Inventory { get; set; } = new();
+		// Звёзды-предметы в инвентаре (T011). В старых сохранениях нет — пусто.
+		public List<SavedTierCount> InventoryStars { get; set; } = new();
 		public bool? Sandbox { get; set; }
 		// Открытые чанки (T009). null — вся карта открыта (старые сохранения).
 		public List<SavedChunk> OpenChunks { get; set; }
@@ -3765,7 +3770,7 @@ public partial class NucleusLayer : Node2D
 		public List<int> Buffer { get; set; } = new(); // набрано по ингредиентам рецепта
 		public bool Producing { get; set; }
 		public int Elapsed { get; set; }
-		// Выходной буфер (T008): тиры готовых атомов, первый — самый старый. В старых сохранениях нет.
+		// Выходной буфер (T008): коды предметов (StarItem: тир атома или звезда, T011), первый — самый старый. В старых сохранениях нет.
 		public List<int> Output { get; set; } = new();
 	}
 
@@ -3873,6 +3878,9 @@ public partial class NucleusLayer : Node2D
 		for (int t = 0; t < Inventory.TierCount; t++)
 			if (Inventory.Count(t) != 0)
 				data.Inventory.Add(new SavedTierCount { Tier = t, Count = Inventory.Count(t) });
+		for (int t = 0; t < Inventory.TierCount; t++)
+			if (Inventory.StarCount(t) != 0)
+				data.InventoryStars.Add(new SavedTierCount { Tier = t, Count = Inventory.StarCount(t) });
 
 		foreach (var n in _activeSet) data.Nuclei.Add(ToSavedNucleus(n));
 		foreach (var n in _sleepingSet) data.Nuclei.Add(ToSavedNucleus(n));
@@ -3959,6 +3967,8 @@ public partial class NucleusLayer : Node2D
 
 		foreach (var tc in data.Inventory ?? new List<SavedTierCount>())
 			Inventory.Set(tc.Tier, tc.Count);
+		foreach (var tc in data.InventoryStars ?? new List<SavedTierCount>())
+			Inventory.SetStars(tc.Tier, tc.Count);
 		Inventory.Sandbox = data.Sandbox ?? SandboxMode;
 		// Территория — до объектов: в закрытый чанк ничего не ставится.
 		if (data.OpenChunks == null) Territory.OpenAll();
@@ -4062,10 +4072,10 @@ public partial class NucleusLayer : Node2D
 			star.RestoreBuffer(ss.Buffer);
 			star.Producing = ss.Producing;
 			star.Elapsed = ss.Producing ? System.Math.Clamp(ss.Elapsed, 0, StarDuration(star)) : 0;
-			foreach (int tier in ss.Output ?? new List<int>())
+			foreach (int code in ss.Output ?? new List<int>())
 			{
 				if (star.Output.Count >= StarOutputCapacity) break;
-				if (Inventory.IsAtomTier(tier)) star.Output.Enqueue(tier);
+				if (Inventory.IsAtomTier(StarItem.Tier(code))) star.Output.Enqueue(code);
 			}
 			starsPlaced++;
 		}

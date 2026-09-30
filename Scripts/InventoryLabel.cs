@@ -1,6 +1,6 @@
 using Godot;
 
-// Строка инвентаря в HUD (T008): атомы по тиру и режим. Создаётся FpsLabel.
+// Строка инвентаря в HUD (T008): атомы по тиру, звёзды (T011, если есть) и режим. Создаётся FpsLabel.
 // При пополнении строка коротко вспыхивает цветом тира (FlashSeconds).
 public partial class InventoryLabel : Label
 {
@@ -48,6 +48,8 @@ public partial class InventoryLabel : Label
 		_sb.Append("Инвентарь:");
 		for (int t = 0; t < Inventory.TierCount; t++)
 			_sb.Append("  ").Append(TierNames[t]).Append(' ').Append(inv.Count(t));
+		for (int t = 0; t < Inventory.TierCount; t++)
+			if (inv.StarCount(t) > 0) _sb.Append("  ★").Append(TierNames[t]).Append(' ').Append(inv.StarCount(t));
 		_sb.Append("   ·   ").Append(inv.Sandbox ? "Песочница" : "Настоящий режим").Append(" (M)");
 		Text = _sb.ToString();
 	}

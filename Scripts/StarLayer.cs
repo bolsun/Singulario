@@ -204,26 +204,40 @@ public partial class StarLayer : Node2D
 		}
 		if (_toolTier.HasValue)
 		{
-			TryPlace(row - Star.Size / 2, col - Star.Size / 2, _toolTier.Value, log: true);
+			PlaceFromTool(row - Star.Size / 2, col - Star.Size / 2, _toolTier.Value);
 			GetViewport().SetInputAsHandled();
 		}
 	}
 
-	// Выходной буфер звезды → инвентарь (T008): все атомы или один, самый старый.
-	// Ждущая готовая работа уйдёт в освободившееся место на следующем тике.
+	// Установка инструментом (T011): в настоящем режиме тратит звезду тира из
+	// инвентаря; нет звезды — отказ. Шаблоны и загрузка ставят бесплатно (TryPlace).
+	private void PlaceFromTool(int row, int col, int tier)
+	{
+		var inventory = _nucleusLayer.Inventory;
+		if (!inventory.CanAffordStar(tier))
+		{
+			GD.Print($"[StarLayer] нет звезды тира {tier} в инвентаре — не ставится.");
+			return;
+		}
+		if (TryPlace(row, col, tier, log: true) != null) inventory.TrySpendStar(tier);
+	}
+
+	// Выходной буфер звезды → инвентарь (T008): все предметы или один, самый
+	// старый (атомы и звёзды-предметы, T011). Ждущая готовая работа уйдёт в
+	// освободившееся место на следующем тике.
 	private void TakeToInventory(Star star, bool all)
 	{
 		var inventory = _nucleusLayer.Inventory;
 		int taken = 0;
 		while (star.Output.Count > 0 && (all || taken == 0))
 		{
-			int tier = star.Output.Dequeue();
-			inventory.Add(tier);
-			AddPickup(star, tier, taken);
+			int code = star.Output.Dequeue();
+			inventory.AddItem(code);
+			AddPickup(star, StarItem.Tier(code), taken);
 			taken++;
 		}
 		GD.Print(taken > 0
-			? $"[StarLayer] из звезды ({star.Row},{star.Col}) в инвентарь: {taken} атом(ов)."
+			? $"[StarLayer] из звезды ({star.Row},{star.Col}) в инвентарь: {taken} предмет(ов)."
 			: $"[StarLayer] выходной буфер звезды ({star.Row},{star.Col}) пуст.");
 	}
 
@@ -317,13 +331,23 @@ public partial class StarLayer : Node2D
 	}
 
 	// ПКМ по любой клетке звезды (вызывает NucleusLayer.RemoveAllAtMouse).
-	// Недособранные ингредиенты сгорают.
+	// Недособранные ингредиенты сгорают. Настоящий режим (T011, GDD «звезду
+	// можно забрать ПКМ и переставить»): звезда и её выходной буфер — в инвентарь.
 	public void RemoveAt(int row, int col)
 	{
 		if (!_ready || !_stars.TryGetAt(row, col, out var star)) return;
 		_stars.Remove(star);
 		string burned = star.Producing || star.HasBuffered ? " Ингредиенты в работе и в буфере сгорели." : "";
-		GD.Print($"[StarLayer] удалена звезда из клетки ({star.Row},{star.Col}).{burned}");
+		string refunded = "";
+		var inventory = _nucleusLayer.Inventory;
+		if (!inventory.Sandbox)
+		{
+			int items = star.Output.Count;
+			while (star.Output.Count > 0) inventory.AddItem(star.Output.Dequeue());
+			inventory.AddStar(star.Tier);
+			refunded = $" В инвентарь: звезда{(items > 0 ? $" и {items} предмет(ов) из буфера" : "")}.";
+		}
+		GD.Print($"[StarLayer] удалена звезда из клетки ({star.Row},{star.Col}).{burned}{refunded}");
 	}
 
 	// --- эффект поглощения (только визуал, на симуляцию не влияет) ---
@@ -568,9 +592,11 @@ public partial class StarLayer : Node2D
 		if (!hovered) return;
 
 		float icon = _cellSize * 0.8f;
-		var core = _nucleusLayer.CoreTexture;
-		if (core != null)
-			DrawTextureRect(core, new Rect2(center - new Vector2(icon, icon) / 2f, new Vector2(icon, icon)), false, TierColor(recipe.ResultTier));
+		// Значок результата: атом — ядро цвета тира, звезда (T011) — спрайт звезды.
+		var iconTex = recipe.Kind == RecipeResult.Star ? _texture : _nucleusLayer.CoreTexture;
+		if (recipe.Kind == RecipeResult.Star) icon *= 1.4f;
+		if (iconTex != null)
+			DrawTextureRect(iconTex, new Rect2(center - new Vector2(icon, icon) / 2f, new Vector2(icon, icon)), false, TierColor(recipe.ResultTier));
 
 		var font = ThemeDB.FallbackFont;
 		int fontSize = Mathf.Max(6, Mathf.RoundToInt(_cellSize * 0.3f));
@@ -598,7 +624,7 @@ public partial class StarLayer : Node2D
 		row -= Star.Size / 2;
 		col -= Star.Size / 2;
 		var rect = new Rect2(col * _cellSize, row * _cellSize, Star.Size * _cellSize, Star.Size * _cellSize);
-		if (PlaceBlockReason(row, col) != null) DrawRect(rect, BlockedColor);
+		if (PlaceBlockReason(row, col) != null || !_nucleusLayer.Inventory.CanAffordStar(_toolTier.Value)) DrawRect(rect, BlockedColor);
 		else if (_texture != null)
 		{
 			var colors = _nucleusLayer.TierPreviewColors;
