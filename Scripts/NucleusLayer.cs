@@ -664,6 +664,10 @@ public partial class NucleusLayer : Node2D
 
 	private class NucleusEntity
 	{
+		// Номер создания (T014) — последний ключ фиксированного порядка обхода
+		// (CanonicalOrder): различает атом в пути (числится на старой клетке) и
+		// атом, вставший в освободившуюся клетку.
+		public long Id;
 		public int Row, Col; // мировые координаты клетки — ключ в _entAt
 		public Vector2 Center;
 		// CoreTier == GrayCoreTier — экспериментальное "серое" ядро (см.
@@ -833,22 +837,74 @@ public partial class NucleusLayer : Node2D
 	// только в местах создания/удаления ядра (PlaceNucleusAt,
 	// RemoveNucleusAt, генерация чанка) — видимость (_visible) осталась
 	// чисто рендерным понятием и на это множество больше не влияет.
-	private readonly HashSet<NucleusEntity> _activeSet = new();
+	//
+	// T014: порядок обхода фиксирован (CanonicalOrder: чанк, клетка, номер
+	// создания) — при споре за дырку побеждает тот, кто раньше в этом порядке,
+	// одинаково от запуска к запуску. Ключ зависит от Row/Col — менять клетку
+	// атома только через SetEntityCell.
+	private readonly SortedSet<NucleusEntity> _activeSet;
+	private long _nextEntityId;
+	private readonly List<NucleusEntity> _spinnerScratch = new(); // вращатели и бросатели на этом тике (SimTick, шаг 1)
+
+	public NucleusLayer()
+	{
+		_activeSet = new SortedSet<NucleusEntity>(new CanonicalOrder(this));
+	}
+
+	// Фиксированный порядок обхода атомов (T014): чанк (cy, cx), клетка (row, col), Id.
+	private sealed class CanonicalOrder : IComparer<NucleusEntity>
+	{
+		private readonly NucleusLayer _layer;
+		public CanonicalOrder(NucleusLayer layer) { _layer = layer; }
+
+		public int Compare(NucleusEntity a, NucleusEntity b)
+		{
+			if (ReferenceEquals(a, b)) return 0;
+			int cs = _layer.ChunkSize;
+			int c = FloorDiv(a.Row, cs).CompareTo(FloorDiv(b.Row, cs));
+			if (c != 0) return c;
+			c = FloorDiv(a.Col, cs).CompareTo(FloorDiv(b.Col, cs));
+			if (c != 0) return c;
+			c = a.Row.CompareTo(b.Row);
+			if (c != 0) return c;
+			c = a.Col.CompareTo(b.Col);
+			if (c != 0) return c;
+			return a.Id.CompareTo(b.Id);
+		}
+
+		private static int FloorDiv(int v, int d) => v >= 0 ? v / d : (v - d + 1) / d;
+	}
+
+	// Порядок по номеру создания — для наборов, где клетка не ключ (в пути, спящие, груз).
+	private sealed class IdOrder : IComparer<NucleusEntity>
+	{
+		public static readonly IdOrder Instance = new();
+		public int Compare(NucleusEntity a, NucleusEntity b) => a.Id.CompareTo(b.Id);
+	}
+
+	// Смена клетки атома (T014): ключ порядка _activeSet зависит от Row/Col.
+	private void SetEntityCell(NucleusEntity n, int row, int col)
+	{
+		bool active = _activeSet.Remove(n);
+		n.Row = row;
+		n.Col = col;
+		if (active) _activeSet.Add(n);
+	}
 	// Подмножество _activeSet, которое сейчас физически едет между клетками
 	// (IsMoving=true) — отдельный набор, чтобы каждый тик проверять "кто уже
 	// доехал" (FinishArrivedMoves) без обхода ВСЕХ активных ядер, а только
 	// реально движущихся (их обычно на порядки меньше).
-	private readonly HashSet<NucleusEntity> _movingSet = new();
+	private readonly SortedSet<NucleusEntity> _movingSet = new(IdOrder.Instance);
 	// Свежепоставленные ядра, которые ещё "спят" (см. NucleusEntity.
 	// AsleepUntilTick/TryPlaceNucleus) — НЕ входят в _activeSet (не тикают),
 	// пока их собственная фаза поворота не станет 0 сама по себе.
 	// Отдельный набор ровно по тому же принципу, что и _movingSet — раз в
 	// тик проверяем только реально спящих, а не все живые ядра сразу (см.
 	// WakeSleepingNuclei).
-	private readonly HashSet<NucleusEntity> _sleepingSet = new();
+	private readonly SortedSet<NucleusEntity> _sleepingSet = new(IdOrder.Instance);
 	// Груз (T006, см. NucleusEntity.IsCargo) — не тикает; набор нужен для
 	// сохранения и очистки, как _sleepingSet.
-	private readonly HashSet<NucleusEntity> _cargoSet = new();
+	private readonly SortedSet<NucleusEntity> _cargoSet = new(IdOrder.Instance);
 
 	private Texture2D _coreTexture;
 	private Texture2D _holeTexture;
@@ -1890,29 +1946,23 @@ public partial class NucleusLayer : Node2D
 		// обычная логика по n.Row/n.Col/n.Center ниже (Шаги 1-4) продолжает
 		// работать корректно и во время переезда — считает от той клетки,
 		// откуда ядро выехало, ровно как для неподвижного.
+		_spinnerScratch.Clear();
 		foreach (var n in _activeSet)
 		{
+			if (IsSpinnerTier(n.CoreTier)) _spinnerScratch.Add(n);
 			if (n.IsMoving && n.IsFlying) continue;
 
 			int ticks = n.CoreTier < TierTicks.Length ? TierTicks[n.CoreTier] : TierTicks[TierTicks.Length - 1];
 			if (ticks > 0 && _globalTick % ticks == 0) OnRotationTick(n);
+		}
 
-			// Ядро-"поворачиватель" (см. RotatorCoreTier) проворачивает всех
-			// соседей вокруг себя по часовой стрелке (см. TriggerRotatorRotation) —
-			// момент срабатывания считает сама MaybeTriggerRotatorRotation, чисто
-			// от _globalTick и собственного holeCount этого ротатора, без какого-
-			// либо состояния на ядро (никакого "кулдауна с момента последнего
-			// срабатывания"). Это принципиально: именно так уже сделан обычный
-			// поворот кольца выше (см. DiscreteRotationOffset) — если бы вместо
-			// этого каждый ротатор считал собственный отсчёт от момента своего
-			// появления/последнего срабатывания (как было в первой версии),
-			// ротаторы одного holeCount, поставленные в разные моменты,
-			// расходились бы по фазе и срабатывали не одновременно. Само
-			// ядро-поворачиватель никуда не едет, двигаются только соседи.
-			// ThrowerCoreTier — та же самая механика толчка (см. её
-			// комментарий у [Export]), просто с довеском в виде дальнейшего
-			// полёта толкнутого соседа — сам момент/направления толчка считает
-			// одна и та же функция для обоих тиров.
+		// Вращатели и бросатели (T014) — отдельным проходом после поворота всех
+		// атомов, в том же фиксированном порядке (раньше — в общем цикле вперемешку
+		// с поворотом, и результат поимки зависел от места атома в обходе).
+		// Поимка меняет клетку атома (порядок _activeSet), поэтому обход — по копии.
+		foreach (var n in _spinnerScratch)
+		{
+			if (n.IsMoving && n.IsFlying) continue;
 			if (n.CoreTier == RotatorCoreTier || n.CoreTier == ThrowerCoreTier)
 			{
 				// Захват пролетающего мимо ядра (см. TryCatchFlyingNeighbor) —
@@ -2859,7 +2909,8 @@ public partial class NucleusLayer : Node2D
 				// дальняя клетка, поэтому настоящий "пролёт мимо" эта проверка
 				// не задевает.
 				if (f.MoveFromRow == nr && f.MoveFromCol == nc) continue;
-				var cell = CellOf(EffectiveCenter(f));
+				// Позиция на границе тика (T014): без доли кадра, иначе поимка зависит от FPS.
+				var cell = CellOf(EffectiveCenterAt(f, 0f));
 				if (cell.row == nr && cell.col == nc) { caught = f; break; }
 			}
 			if (caught == null) continue;
@@ -2892,8 +2943,7 @@ public partial class NucleusLayer : Node2D
 			_movingSet.Remove(caught);
 			caught.IsFlying = false;
 			caught.PendingFlightDir = null;
-			caught.Row = nr;
-			caught.Col = nc;
+			SetEntityCell(caught, nr, nc);
 			caught.Center = new Vector2(nc * CellSize + CellSize / 2f, nr * CellSize + CellSize / 2f);
 
 			var (destDr2, destDc2) = Adj8[destK];
@@ -3072,8 +3122,7 @@ public partial class NucleusLayer : Node2D
 			}
 
 			int oldRow = n.Row, oldCol = n.Col;
-			n.Row = destRow;
-			n.Col = destCol;
+			SetEntityCell(n, destRow, destCol);
 			n.Center = new Vector2(destCol * CellSize + CellSize / 2f, destRow * CellSize + CellSize / 2f);
 			_entAt[(n.Row, n.Col)] = n;
 
@@ -3219,11 +3268,13 @@ public partial class NucleusLayer : Node2D
 	// до следующего (_subTickFraction) — тот же принцип, что уже
 	// используется для угла поворота кольца ниже (DiscreteRotationOffset +
 	// continuousOffset).
-	private Vector2 EffectiveCenter(NucleusEntity n)
+	private Vector2 EffectiveCenter(NucleusEntity n) => EffectiveCenterAt(n, _subTickFraction);
+
+	private Vector2 EffectiveCenterAt(NucleusEntity n, float subTickFraction)
 	{
 		if (!n.IsMoving) return n.Center;
 
-		float ticksElapsed = (_globalTick - n.MoveStartTick) + _subTickFraction;
+		float ticksElapsed = (_globalTick - n.MoveStartTick) + subTickFraction;
 		float t = n.MoveDurationTicks > 0 ? Mathf.Clamp(ticksElapsed / n.MoveDurationTicks, 0f, 1f) : 1f;
 
 		if (n.MoveIsCircular)
@@ -3634,6 +3685,7 @@ public partial class NucleusLayer : Node2D
 
 					var nucleus = new NucleusEntity
 					{
+						Id = _nextEntityId++,
 						Row = worldRow,
 						Col = worldCol,
 						Center = center,
@@ -3839,6 +3891,7 @@ public partial class NucleusLayer : Node2D
 		var center = new Vector2(col * CellSize + CellSize / 2f, row * CellSize + CellSize / 2f);
 		var nucleus = new NucleusEntity
 		{
+			Id = _nextEntityId++,
 			Row = row,
 			Col = col,
 			Center = center,
@@ -3901,6 +3954,7 @@ public partial class NucleusLayer : Node2D
 		if (_entAt.ContainsKey((row, col))) return false; // RandomFillEnabled мог поставить сюда атом
 		var cargo = new NucleusEntity
 		{
+			Id = _nextEntityId++,
 			Row = row,
 			Col = col,
 			Center = new Vector2(col * CellSize + CellSize / 2f, row * CellSize + CellSize / 2f),
@@ -4628,6 +4682,7 @@ public partial class NucleusLayer : Node2D
 		var center = new Vector2(col * CellSize + CellSize / 2f, row * CellSize + CellSize / 2f);
 		var nucleus = new NucleusEntity
 		{
+			Id = _nextEntityId++,
 			Row = row,
 			Col = col,
 			Center = center,
