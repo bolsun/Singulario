@@ -669,6 +669,12 @@ public partial class NucleusLayer : Node2D
 		// атом, вставший в освободившуюся клетку.
 		public long Id;
 		public int Row, Col; // мировые координаты клетки — ключ в _entAt
+		// Работа по событиям (T014): место в _byTier, отметки «изменился» и
+		// «в очереди прохода A/B», флаг «в _activeSet», «рядом с источником».
+		public int TierIndex = -1;
+		public long ChangedEpoch = -1, PassStampA = -1, PassStampB = -1;
+		public bool IsActiveSim;
+		public bool NearSource;
 		public Vector2 Center;
 		// CoreTier == GrayCoreTier — экспериментальное "серое" ядро (см.
 		// [Export] GrayCoreTier в шапке файла): для рендера и скорости
@@ -848,7 +854,11 @@ public partial class NucleusLayer : Node2D
 
 	public NucleusLayer()
 	{
-		_activeSet = new SortedSet<NucleusEntity>(new CanonicalOrder(this));
+		_canonical = new CanonicalOrder(this);
+		_activeSet = new SortedSet<NucleusEntity>(_canonical);
+		_spinners = new SortedSet<NucleusEntity>(_canonical);
+		_captureCandidates = new SortedSet<NucleusEntity>(_canonical);
+		_passQueue = new PriorityQueue<NucleusEntity, NucleusEntity>(_canonical);
 	}
 
 	// Фиксированный порядок обхода атомов (T014): чанк (cy, cx), клетка (row, col), Id.
@@ -882,13 +892,256 @@ public partial class NucleusLayer : Node2D
 		public int Compare(NucleusEntity a, NucleusEntity b) => a.Id.CompareTo(b.Id);
 	}
 
-	// Смена клетки атома (T014): ключ порядка _activeSet зависит от Row/Col.
+	// Смена клетки атома (T014): ключ порядка _activeSet зависит от Row/Col —
+	// атом вынимается из упорядоченных наборов, меняет клетку и центр, возвращается.
 	private void SetEntityCell(NucleusEntity n, int row, int col)
 	{
 		bool active = _activeSet.Remove(n);
+		bool spinner = IsSpinnerTier(n.CoreTier) && _spinners.Remove(n);
+		if (n.NearSource) _captureCandidates.Remove(n);
+		n.NearSource = false;
+		int oldCx = ChunkOf(n.Col), oldCy = ChunkOf(n.Row);
 		n.Row = row;
 		n.Col = col;
+		n.Center = new Vector2(col * CellSize + CellSize / 2f, row * CellSize + CellSize / 2f);
 		if (active) _activeSet.Add(n);
+
+		// Атом числится в списке чанка своей клетки: при смене чанка — перенос
+		// между списками и пересборка MultiMesh обоих (раньше это делало только
+		// прибытие, а поимка летящего вращателем оставляла атом в старом списке).
+		int newCx = ChunkOf(col), newCy = ChunkOf(row);
+		if (oldCx != newCx || oldCy != newCy)
+		{
+			if (_chunks.TryGetValue((oldCx, oldCy), out var oldChunk) && oldChunk.Nuclei.Remove(n))
+			{
+				for (int i = 0; i < oldChunk.Nuclei.Count; i++) oldChunk.Nuclei[i].LocalIndex = i;
+				RebuildChunkMeshes(oldChunk);
+			}
+			var newChunk = GetOrCreateChunk(newCx, newCy);
+			n.LocalIndex = newChunk.Nuclei.Count;
+			newChunk.Nuclei.Add(n);
+			RebuildChunkMeshes(newChunk);
+		}
+		if (spinner) _spinners.Add(n);
+		UpdateCaptureCandidate(n);
+		Touch(n);
+	}
+
+	// --- работа по событиям (T014) ---
+	// Результат бит в бит как у полного обхода в фиксированном порядке
+	// (FullScanDebug = true — старый путь, для сверки: --sim-selfcheck).
+	//
+	// Передача (проходы A/B) между атомами n и m может впервые стать возможной,
+	// только если n или m изменился: кольцо, поворот (ориентация и снятие
+	// блокировки), клетка, режим. Всё это отмечает Touch. В проходы идут атомы,
+	// изменившиеся с начала передачи на прошлом тике (_changedPrev), их соседи и
+	// все атомы в пути (они видят соседей со старой клетки, а их — никто).
+	// Обход — в том же порядке CanonicalOrder; атом, изменившийся во время
+	// прохода, добавляет себя и соседей: дальше по порядку — в текущий проход,
+	// всех — в проход B (как полный обход, который прошёл бы их позже).
+
+	// Отладка: полный обход всех атомов вместо работы по событиям (Shift+F3).
+	[Export] public bool FullScanDebug = false;
+
+	private readonly CanonicalOrder _canonical;
+	// Все атомы (рабочие, спящие, груз) по тиру — поворот на тике t трогает только
+	// тиры с t % период == 0. Порядок внутри списка не важен (поворот атома
+	// независим от других), важен только порядок проходов.
+	private readonly List<List<NucleusEntity>> _byTier = new();
+	// Вращатели и бросатели (рабочие и спящие) — свой список, фиксированный порядок.
+	private readonly SortedSet<NucleusEntity> _spinners;
+	// Атомы, у которых рядом месторождение (NearSource) — кандидаты захвата энергии.
+	private readonly SortedSet<NucleusEntity> _captureCandidates;
+	private int _clusterVersion = -1;
+
+	// Атомы, вытесненные из _entAt откатом прибытия (см. FinishArrivedMoves):
+	// как атомы в пути, видят соседей, а их — никто; в проходы идут всегда.
+	private readonly SortedSet<NucleusEntity> _detachedSet = new(IdOrder.Instance);
+
+	private List<NucleusEntity> _changed = new();
+	private List<NucleusEntity> _changedPrev = new();
+	private long _changeEpoch;
+
+	private readonly PriorityQueue<NucleusEntity, NucleusEntity> _passQueue;
+	private readonly List<NucleusEntity> _passBList = new();
+	private int _passPhase; // 0 — не в проходе, 1 — проход A, 2 — проход B
+	private NucleusEntity _passCur;
+	private long _passSerial, _serialA, _serialB;
+
+	private List<NucleusEntity> TierList(int tier)
+	{
+		while (_byTier.Count <= tier) _byTier.Add(new List<NucleusEntity>());
+		return _byTier[tier];
+	}
+
+	// Новый атом в поле (любой: рабочий, спящий, груз) — вызывается один раз при создании.
+	private void RegisterEntity(NucleusEntity n)
+	{
+		var list = TierList(n.CoreTier);
+		n.TierIndex = list.Count;
+		list.Add(n);
+		if (IsSpinnerTier(n.CoreTier)) _spinners.Add(n);
+		UpdateCaptureCandidate(n);
+		Touch(n);
+	}
+
+	private void UnregisterEntity(NucleusEntity n)
+	{
+		if (n.TierIndex >= 0)
+		{
+			var list = TierList(n.CoreTier);
+			int last = list.Count - 1;
+			var moved = list[last];
+			list[n.TierIndex] = moved;
+			moved.TierIndex = n.TierIndex;
+			list.RemoveAt(last);
+			n.TierIndex = -1;
+		}
+		if (IsSpinnerTier(n.CoreTier)) _spinners.Remove(n);
+		if (n.NearSource) { _captureCandidates.Remove(n); n.NearSource = false; }
+	}
+
+	private void AddActive(NucleusEntity n)
+	{
+		_activeSet.Add(n);
+		n.IsActiveSim = true;
+		Touch(n);
+	}
+
+	private void RemoveActive(NucleusEntity n)
+	{
+		_activeSet.Remove(n);
+		n.IsActiveSim = false;
+	}
+
+	// Атом изменился (кольцо, поворот, клетка, режим) — на следующем тике он и
+	// его соседи идут в проходы передачи; во время прохода — ещё и в текущий.
+	private void Touch(NucleusEntity n)
+	{
+		if (n.ChangedEpoch != _changeEpoch)
+		{
+			n.ChangedEpoch = _changeEpoch;
+			_changed.Add(n);
+		}
+		if (_passPhase != 0) AddToPassWithNeighbors(n);
+	}
+
+	private void AddToPassWithNeighbors(NucleusEntity x)
+	{
+		AddToPass(x);
+		for (int idx = 0; idx < OrthogonalSlots.Length; idx++)
+		{
+			var (dr, dc) = Adj8[OrthogonalSlots[idx]];
+			if (_entAt.TryGetValue((x.Row + dr, x.Col + dc), out var y)) AddToPass(y);
+		}
+	}
+
+	private void AddToPass(NucleusEntity y)
+	{
+		bool after = _passCur == null || _canonical.Compare(y, _passCur) > 0;
+		if (y.PassStampB != _serialB)
+		{
+			y.PassStampB = _serialB;
+			_passBList.Add(y);
+			if (_passPhase == 2 && after) _passQueue.Enqueue(y, y);
+		}
+		if (_passPhase == 1 && after && y.PassStampA != _serialA)
+		{
+			y.PassStampA = _serialA;
+			_passQueue.Enqueue(y, y);
+		}
+	}
+
+	private static bool TakesPartInPasses(NucleusEntity n) => n.IsActiveSim && !(n.IsMoving && n.IsFlying);
+
+	// Проходы A и B только по изменившимся атомам и их соседям (см. выше).
+	private void RunEventPasses()
+	{
+		_serialA = ++_passSerial;
+		_serialB = ++_passSerial;
+		_passBList.Clear();
+		_passQueue.Clear();
+		_passCur = null;
+		_passPhase = 1;
+		foreach (var x in _changedPrev) AddToPassWithNeighbors(x);
+		foreach (var m in _movingSet) AddToPass(m);
+		foreach (var m in _detachedSet) AddToPass(m);
+
+		while (_passQueue.TryDequeue(out var n, out _))
+		{
+			_passCur = n;
+			if (TakesPartInPasses(n)) PullPass(n);
+		}
+
+		_passPhase = 2;
+		_passCur = null;
+		foreach (var y in _passBList) _passQueue.Enqueue(y, y);
+		while (_passQueue.TryDequeue(out var n, out _))
+		{
+			_passCur = n;
+			if (TakesPartInPasses(n)) PushPass(n);
+		}
+		_passPhase = 0;
+		_passCur = null;
+	}
+
+	// Начало передачи на тике: изменения «с прошлой передачи» уходят в _changedPrev.
+	private void BeginChangeEpoch()
+	{
+		(_changedPrev, _changed) = (_changed, _changedPrev);
+		_changed.Clear();
+		_changeEpoch++;
+	}
+
+	// Поворот тиров, у которых на этом тике шаг: снятие блокировки (и шаг
+	// перекрёстка) у рабочих атомов, отметка всех (ориентация сменилась и у спящих).
+	private void RotateDueTiers(bool unlock)
+	{
+		for (int tier = 0; tier < _byTier.Count; tier++)
+		{
+			int ticks = OwnRotationTicks(tier);
+			if (ticks <= 0 || _globalTick % ticks != 0) continue;
+			foreach (var n in _byTier[tier])
+			{
+				if (n.IsCargo) continue; // груз не вращается и не передаёт (T006)
+				if (unlock && n.IsActiveSim && !(n.IsMoving && n.IsFlying)) OnRotationTick(n);
+				Touch(n);
+			}
+		}
+	}
+
+	// Рядом ли месторождение — то же условие, что в TryCaptureEnergy (без кулдауна и гнёзд).
+	private bool IsNearSource(NucleusEntity n)
+	{
+		for (int idx = 0; idx < OrthogonalSlots.Length; idx++)
+		{
+			var (dr, dc) = Adj8[OrthogonalSlots[idx]];
+			Vector2 neighborWorld = n.Center + new Vector2(dc, dr) * CellSize;
+			foreach (var layer in _energyClusterLayers)
+				if (layer.HasClusterAt(Mathf.FloorToInt(neighborWorld.Y / layer.CellSize), Mathf.FloorToInt(neighborWorld.X / layer.CellSize)))
+					return true;
+		}
+		return false;
+	}
+
+	private void UpdateCaptureCandidate(NucleusEntity n)
+	{
+		bool near = IsNearSource(n);
+		if (near == n.NearSource) return;
+		n.NearSource = near;
+		if (near) _captureCandidates.Add(n); else _captureCandidates.Remove(n);
+	}
+
+	// Месторождения поменялись (установка, удаление, загрузка) — пересчёт всех кандидатов.
+	private void RefreshCaptureCandidatesIfNeeded()
+	{
+		int version = 0;
+		foreach (var layer in _energyClusterLayers) version += layer.Version;
+		if (version == _clusterVersion) return;
+		_clusterVersion = version;
+		foreach (var list in _byTier)
+			foreach (var n in list)
+				UpdateCaptureCandidate(n);
 	}
 	// Подмножество _activeSet, которое сейчас физически едет между клетками
 	// (IsMoving=true) — отдельный набор, чтобы каждый тик проверять "кто уже
@@ -1106,6 +1359,9 @@ public partial class NucleusLayer : Node2D
 
 		_ready = true;
 		GD.Print($"[NucleusLayer] инициализирован. FillDensity={FillDensity}, ParticleFillChance={ParticleFillChance}.");
+		// Сверка работы по событиям с полным обходом (T014) — только из командной строки.
+		if (System.Array.IndexOf(OS.GetCmdlineUserArgs(), "--sim-selfcheck") >= 0)
+			Callable.From(RunSimSelfCheck).CallDeferred();
 	}
 
 	public override void _Input(InputEvent @event)
@@ -1115,6 +1371,12 @@ public partial class NucleusLayer : Node2D
 			if (key.Keycode == Key.H)
 			{
 				_holesManuallyHidden = !_holesManuallyHidden;
+				GetViewport().SetInputAsHandled();
+			}
+			else if (key.Keycode == Key.F3 && key.ShiftPressed)
+			{
+				FullScanDebug = !FullScanDebug;
+				GD.Print($"[NucleusLayer] симуляция: {(FullScanDebug ? "полный обход (отладка)" : "по событиям")}.");
 				GetViewport().SetInputAsHandled();
 			}
 			else if (key.Keycode == Key.T)
@@ -1195,6 +1457,7 @@ public partial class NucleusLayer : Node2D
 		}
 
 		nucleus.Dir = -nucleus.Dir;
+		Touch(nucleus);
 		_currentSpinDirection = nucleus.Dir;
 		GD.Print($"[NucleusLayer] направление вращения ядра в клетке ({nucleus.Row},{nucleus.Col}) переключено на {(nucleus.Dir > 0 ? "по часовой" : "против часовой")}.");
 	}
@@ -1561,6 +1824,7 @@ public partial class NucleusLayer : Node2D
 		n.Ring = BuildFixedRing(holeCount);
 		n.Cross = n.Cross == null ? new Crossroad(holeCount) : null;
 		if (n.Cross != null) _crossSet.Add(n); else _crossSet.Remove(n);
+		Touch(n);
 		GD.Print($"[NucleusLayer] атом ({n.Row},{n.Col}): {(n.Cross != null ? "перекрёсток" : "обычный режим")}.{(refunded > 0 ? $" В инвентарь: {refunded}." : "")}");
 	}
 
@@ -1581,11 +1845,13 @@ public partial class NucleusLayer : Node2D
 		// Только если клетка числится за этим атомом: у едущего (захват ЧД на
 		// прибытии, TryCaptureArrived) Row/Col — старая клетка, её мог уже занять другой.
 		if (_entAt.TryGetValue((row, col), out var atCell) && atCell == nucleus) _entAt.Remove((row, col));
-		_activeSet.Remove(nucleus);
+		RemoveActive(nucleus);
+		UnregisterEntity(nucleus);
 		_movingSet.Remove(nucleus); // защитная подстраховка — сюда не должны попадать едущие/летящие, но лишней не будет
 		_sleepingSet.Remove(nucleus); // на случай удаления ещё не проснувшегося ядра (см. AsleepUntilTick)
 		_cargoSet.Remove(nucleus);
 		_crossSet.Remove(nucleus);
+		_detachedSet.Remove(nucleus);
 
 		if (!_chunks.TryGetValue((cx, cy), out var chunk))
 		{
@@ -1946,14 +2212,27 @@ public partial class NucleusLayer : Node2D
 		// обычная логика по n.Row/n.Col/n.Center ниже (Шаги 1-4) продолжает
 		// работать корректно и во время переезда — считает от той клетки,
 		// откуда ядро выехало, ровно как для неподвижного.
-		_spinnerScratch.Clear();
-		foreach (var n in _activeSet)
+		if (FullScanDebug)
 		{
-			if (IsSpinnerTier(n.CoreTier)) _spinnerScratch.Add(n);
-			if (n.IsMoving && n.IsFlying) continue;
+			// Полный обход (отладка, T014): поворот — по всем рабочим атомам.
+			_spinnerScratch.Clear();
+			foreach (var n in _activeSet)
+			{
+				if (IsSpinnerTier(n.CoreTier)) _spinnerScratch.Add(n);
+				if (n.IsMoving && n.IsFlying) continue;
 
-			int ticks = n.CoreTier < TierTicks.Length ? TierTicks[n.CoreTier] : TierTicks[TierTicks.Length - 1];
-			if (ticks > 0 && _globalTick % ticks == 0) OnRotationTick(n);
+				int ticks = n.CoreTier < TierTicks.Length ? TierTicks[n.CoreTier] : TierTicks[TierTicks.Length - 1];
+				if (ticks > 0 && _globalTick % ticks == 0) OnRotationTick(n);
+			}
+			RotateDueTiers(unlock: false); // только отметки — чтобы можно было переключить режим на ходу
+		}
+		else
+		{
+			// По событиям (T014): только тиры, у которых на этом тике шаг поворота.
+			RotateDueTiers(unlock: true);
+			_spinnerScratch.Clear();
+			foreach (var n in _spinners)
+				if (n.IsActiveSim) _spinnerScratch.Add(n);
 		}
 
 		// Вращатели и бросатели (T014) — отдельным проходом после поворота всех
@@ -1992,85 +2271,19 @@ public partial class NucleusLayer : Node2D
 		// Шаг 2: передача частиц, два прохода с "захватом" слотов, чтобы один
 		// и тот же физический перенос не был учтён дважды (один раз со стороны
 		// дырки, которая "тянет", и один раз со стороны частицы, которая
-		// "толкает" в ту же дырку).
+		// "толкает" в ту же дырку). Проход A — PullPass, проход B — PushPass.
+		// По событиям (T014) — только изменившиеся атомы и соседи (RunEventPasses),
+		// в отладке — все рабочие атомы в том же порядке.
 		_claimed.Clear();
-
-		// Проход A ("pull"): дырка тянет частицу из соседа напротив. Внимание:
-		// k здесь — сторона света (компас), а не индекс в Ring напрямую — у
-		// каждого из двух ядер (n и neighbor) своя ориентация (зависит от его
-		// CoreTier/Dir, см. DiscreteRotationOffset), поэтому физический слот,
-		// отвечающий за компас-направление k, у них вычисляется независимо
-		// через PhysicalSlotForCompass.
-		//
-		// Пропускаем только по-настоящему летящее ядро (IsFlying) — просто
-		// едущее (толчок вращателя) продолжает как обычно, от своей старой
-		// клетки, см. подробный комментарий у Шага 1.
-		foreach (var n in _activeSet)
+		BeginChangeEpoch();
+		if (FullScanDebug)
 		{
-			if (n.IsMoving && n.IsFlying) continue;
-			for (int idx = 0; idx < OrthogonalSlots.Length; idx++)
-			{
-				int k = OrthogonalSlots[idx];
-				if (!CanReceive(n, k)) continue;
-				int p = SideKey(n, k);
-				if (_claimed.Contains((n, p))) continue;
-
-				// Раньше тут ещё проверялось _activeSet.Contains(neighbor) —
-				// пока это множество означало "видимые ядра", сосед мог
-				// физически существовать в _entAt, но не тикать (не быть
-				// виден камере), и передавать частицу ему было бы нельзя.
-				// Теперь _activeSet == "все живые ядра" ровно как и _entAt
-				// (см. комментарий у поля), поэтому любой найденный тут
-				// neighbor гарантированно активен — отдельная проверка стала
-				// мёртвым кодом, убрана.
-				var (dr, dc) = Adj8[k];
-				if (!_entAt.TryGetValue((n.Row + dr, n.Col + dc), out var neighbor)) continue;
-				if (neighbor.IsCargo) continue; // груз частиц не отдаёт (T006)
-
-				int k2 = Opposite(k);
-				if (!TryPeekGive(neighbor, k2, out var giverSlot)) continue;
-				int p2 = SideKey(neighbor, k2);
-				if (_claimed.Contains((neighbor, p2))) continue;
-				if (!TransferAllowed(receiver: n, giver: neighbor, giverSlot)) continue;
-
-				PutReceived(n, k, giverSlot);
-				TakeGiven(neighbor, k2);
-				_claimed.Add((n, p));
-				_claimed.Add((neighbor, p2));
-			}
+			foreach (var n in _activeSet) if (TakesPartInPasses(n)) PullPass(n);
+			foreach (var n in _activeSet) if (TakesPartInPasses(n)) PushPass(n);
 		}
-
-		// Проход B ("push"): свободная (не заблокированная) частица толкается
-		// в дырку соседа, если её ещё не разобрали в проходе A. Пропускаем
-		// только летящее (IsFlying) — см. комментарий у Шага 1.
-		foreach (var n in _activeSet)
+		else
 		{
-			if (n.IsMoving && n.IsFlying) continue;
-			for (int idx = 0; idx < OrthogonalSlots.Length; idx++)
-			{
-				int k = OrthogonalSlots[idx];
-				if (!TryPeekGive(n, k, out var giverSlot)) continue;
-				int p = SideKey(n, k);
-				if (_claimed.Contains((n, p))) continue;
-
-				// См. комментарий у прохода A выше — с _activeSet == "все живые
-				// ядра" отдельная проверка активности соседа стала мёртвым
-				// кодом, убрана.
-				var (dr, dc) = Adj8[k];
-				if (!_entAt.TryGetValue((n.Row + dr, n.Col + dc), out var neighbor)) continue;
-				if (neighbor.IsCargo) continue; // груз частиц не берёт (T006)
-
-				int k2 = Opposite(k);
-				if (!CanReceive(neighbor, k2)) continue;
-				int p2 = SideKey(neighbor, k2);
-				if (_claimed.Contains((neighbor, p2))) continue;
-				if (!TransferAllowed(receiver: neighbor, giver: n, giverSlot)) continue;
-
-				PutReceived(neighbor, k2, giverSlot);
-				TakeGiven(n, k);
-				_claimed.Add((n, p));
-				_claimed.Add((neighbor, p2));
-			}
+			RunEventPasses();
 		}
 
 		// Шаг 2в: обмен частицами с портами чанков (см. PortSet/PortLayer).
@@ -2107,69 +2320,121 @@ public partial class NucleusLayer : Node2D
 		// при успешном захвате взводим кулдаун на _energyCaptureTicks вперёд И
 		// сразу прекращаем перебор направлений для этого ядра на этом тике —
 		// один захват за одну попытку, как и раньше, но без привязки к фазе.
+		// Захват — по кандидатам рядом с месторождениями (T014), в отладке — по всем.
 		if (_energyClusterLayers.Count > 0 && _energyCaptureTicks > 0)
 		{
-			foreach (var n in _activeSet)
+			RefreshCaptureCandidatesIfNeeded();
+			if (FullScanDebug)
 			{
-				// Пропускаем только летящее (IsFlying) — просто едущее ядро
-				// (толчок вращателя) продолжает захватывать энергию как
-				// обычно, см. комментарий у Шага 1.
-				if (n.IsMoving && n.IsFlying) continue;
-				// Поворачиватель и бросатель (см. RotatorCoreTier/
-				// ThrowerCoreTier) не должны захватывать энергию из
-				// источников — их роль чисто механическая (двигать соседей,
-				// в случае бросателя ещё и запускать полёт), а не копить
-				// частицы в своих гнёздах. Само правило теперь закреплено в
-				// ColorAccepted (см. IsSpinnerTier там) и покрывает оба входа
-				// разом — эта проверка здесь избыточна по результату, но
-				// оставлена как быстрый выход: без неё пришлось бы напрасно
-				// перебирать все 4 ортогональных направления и дёргать
-				// ColorAccepted на каждое, просто чтобы получить тот же отказ.
-				if (n.CoreTier == RotatorCoreTier || n.CoreTier == ThrowerCoreTier) continue;
-				if (n.Cross != null) continue; // перекрёсток из месторождений не берёт (T010)
-				if (_globalTick < n.NextCaptureTick) continue;
+				foreach (var n in _activeSet) TryCaptureEnergy(n);
+			}
+			else
+			{
+				foreach (var n in _captureCandidates)
+					if (n.IsActiveSim) TryCaptureEnergy(n);
+			}
+		}
+	}
 
-				for (int idx = 0; idx < OrthogonalSlots.Length; idx++)
-				{
-					int k = OrthogonalSlots[idx];
-					int p = PhysicalSlotForCompass(n, k);
-					if (!n.Ring[p].Exists || !n.Ring[p].IsHole) continue;
-					if (_claimed.Contains((n, p))) continue;
+	// Проход A ("pull"): дырка атома n тянет частицу из соседа напротив. k —
+	// сторона света (компас), а не индекс в Ring: у каждого из двух атомов своя
+	// ориентация (DiscreteRotationOffset), физический слот — через PhysicalSlotForCompass.
+	private void PullPass(NucleusEntity n)
+	{
+		for (int idx = 0; idx < OrthogonalSlots.Length; idx++)
+		{
+			int k = OrthogonalSlots[idx];
+			if (!CanReceive(n, k)) continue;
+			int p = SideKey(n, k);
+			if (_claimed.Contains((n, p))) continue;
 
-					// Мост между сетками: EnergyClusterLayer и NucleusLayer теперь
-					// читают один и тот же GridDraw.CellSize, но на случай если он
-					// когда-нибудь разъедется — переводим соседнюю клетку ядра в
-					// мировые пиксели и уже из них пересчитываем row/col КАЖДОГО
-					// слоя частиц по его собственному CellSize, а не складываем
-					// индексы (dr,dc) напрямую с (Row,Col) разных сеток.
-					var (dr, dc) = Adj8[k];
-					Vector2 neighborWorld = n.Center + new Vector2(dc, dr) * CellSize;
+			var (dr, dc) = Adj8[k];
+			if (!_entAt.TryGetValue((n.Row + dr, n.Col + dc), out var neighbor)) continue;
+			if (neighbor.IsCargo) continue; // груз частиц не отдаёт (T006)
 
-					bool captured = false;
-					foreach (var layer in _energyClusterLayers)
-					{
-						int srcCol = Mathf.FloorToInt(neighborWorld.X / layer.CellSize);
-						int srcRow = Mathf.FloorToInt(neighborWorld.Y / layer.CellSize);
-						if (!layer.HasClusterAt(srcRow, srcCol)) continue;
-						if (DepositGivesOwnTierOnly && n.CoreTier != GrayCoreTier && n.CoreTier != layer.Tier) continue;
+			int k2 = Opposite(k);
+			if (!TryPeekGive(neighbor, k2, out var giverSlot)) continue;
+			int p2 = SideKey(neighbor, k2);
+			if (_claimed.Contains((neighbor, p2))) continue;
+			if (!TransferAllowed(receiver: n, giver: neighbor, giverSlot)) continue;
 
-						// Та же проверка цвета, что и у TransferAllowed для передачи
-						// между ядрами (RequireColorMatch/RequireOwnColorTier/серое
-						// ядро — см. ColorAccepted) — источник тут не NucleusEntity, а
-						// клетка поля, поэтому вызываем её вручную с layer.Tier.
-						if (!ColorAccepted(n, layer.Tier)) continue;
+			PutReceived(n, k, giverSlot);
+			TakeGiven(neighbor, k2);
+			_claimed.Add((n, p));
+			_claimed.Add((neighbor, p2));
+		}
+	}
 
-						long got = layer.ConsumeAt(srcRow, srcCol, EnergyCaptureAmount);
-						if (got <= 0) continue;
+	// Проход B ("push"): свободная (не заблокированная) частица атома n толкается
+	// в дырку соседа, если её ещё не разобрали в проходе A.
+	private void PushPass(NucleusEntity n)
+	{
+		for (int idx = 0; idx < OrthogonalSlots.Length; idx++)
+		{
+			int k = OrthogonalSlots[idx];
+			if (!TryPeekGive(n, k, out var giverSlot)) continue;
+			int p = SideKey(n, k);
+			if (_claimed.Contains((n, p))) continue;
 
-						n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = layer.Tier, Locked = true };
-						_claimed.Add((n, p));
-						n.NextCaptureTick = _globalTick + _energyCaptureTicks;
-						captured = true;
-						break; // клетка не может нести два тира сразу — как нашли, дальше не ищем
-					}
-					if (captured) break; // одна попытка захвата на ядро за тик — дальше направления не перебираем
-				}
+			var (dr, dc) = Adj8[k];
+			if (!_entAt.TryGetValue((n.Row + dr, n.Col + dc), out var neighbor)) continue;
+			if (neighbor.IsCargo) continue; // груз частиц не берёт (T006)
+
+			int k2 = Opposite(k);
+			if (!CanReceive(neighbor, k2)) continue;
+			int p2 = SideKey(neighbor, k2);
+			if (_claimed.Contains((neighbor, p2))) continue;
+			if (!TransferAllowed(receiver: neighbor, giver: n, giverSlot)) continue;
+
+			PutReceived(neighbor, k2, giverSlot);
+			TakeGiven(n, k);
+			_claimed.Add((n, p));
+			_claimed.Add((neighbor, p2));
+		}
+	}
+
+	// Шаг 3: захват энергии из источника частиц (EnergyClusterLayer) атомом n.
+	// Индивидуальный кулдаун на атом (NextCaptureTick), а не общий модуль тика:
+	// общий период кратен полному обороту кольца любого тира, и захват видел бы
+	// всегда одну и ту же фазу (стробоскоп). Одна попытка захвата на атом за тик.
+	private void TryCaptureEnergy(NucleusEntity n)
+	{
+		// Пропускаем только летящее (IsFlying) — едущее захватывает как обычно.
+		if (n.IsMoving && n.IsFlying) return;
+		// Вращатель и бросатель ничего не копят (правило — в ColorAccepted; здесь быстрый выход).
+		if (n.CoreTier == RotatorCoreTier || n.CoreTier == ThrowerCoreTier) return;
+		if (n.Cross != null) return; // перекрёсток из месторождений не берёт (T010)
+		if (_globalTick < n.NextCaptureTick) return;
+
+		for (int idx = 0; idx < OrthogonalSlots.Length; idx++)
+		{
+			int k = OrthogonalSlots[idx];
+			int p = PhysicalSlotForCompass(n, k);
+			if (!n.Ring[p].Exists || !n.Ring[p].IsHole) continue;
+			if (_claimed.Contains((n, p))) continue;
+
+			// Мост между сетками: соседняя клетка атома → мировые пиксели → row/col
+			// каждого слоя частиц по его собственному CellSize.
+			var (dr, dc) = Adj8[k];
+			Vector2 neighborWorld = n.Center + new Vector2(dc, dr) * CellSize;
+
+			foreach (var layer in _energyClusterLayers)
+			{
+				int srcCol = Mathf.FloorToInt(neighborWorld.X / layer.CellSize);
+				int srcRow = Mathf.FloorToInt(neighborWorld.Y / layer.CellSize);
+				if (!layer.HasClusterAt(srcRow, srcCol)) continue;
+				if (DepositGivesOwnTierOnly && n.CoreTier != GrayCoreTier && n.CoreTier != layer.Tier) continue;
+				// Та же проверка цвета, что у передачи между атомами (ColorAccepted).
+				if (!ColorAccepted(n, layer.Tier)) continue;
+
+				long got = layer.ConsumeAt(srcRow, srcCol, EnergyCaptureAmount);
+				if (got <= 0) continue;
+
+				n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = layer.Tier, Locked = true };
+				Touch(n);
+				_claimed.Add((n, p));
+				n.NextCaptureTick = _globalTick + _energyCaptureTicks;
+				return; // одна попытка захвата на атом за тик
 			}
 		}
 	}
@@ -2420,6 +2685,7 @@ public partial class NucleusLayer : Node2D
 								GrayCoreTier, GrayAcceptsAnySpin, RequireSameCoreTier)) continue;
 						Ports.AcceptParticle(key, slot.ColorTier);
 						n.Ring[p] = new RingSlot { Exists = true, IsHole = true };
+						Touch(n);
 					}
 					else
 					{
@@ -2429,6 +2695,7 @@ public partial class NucleusLayer : Node2D
 						if (!ColorAccepted(n, emitColor)) continue;
 						Ports.EmitParticle(key);
 						n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = emitColor, Locked = true };
+						Touch(n);
 					}
 					_claimed.Add((n, p));
 					done = true;
@@ -3026,6 +3293,7 @@ public partial class NucleusLayer : Node2D
 	{
 		_entAt.Remove((n.Row, n.Col));
 		_movingSet.Add(n);
+		Touch(n);
 		n.IsMoving = true;
 		n.MoveFromRow = n.Row;
 		n.MoveFromCol = n.Col;
@@ -3068,7 +3336,7 @@ public partial class NucleusLayer : Node2D
 		foreach (var n in woken)
 		{
 			_sleepingSet.Remove(n);
-			_activeSet.Add(n);
+			AddActive(n);
 		}
 	}
 
@@ -3121,35 +3389,14 @@ public partial class NucleusLayer : Node2D
 				destCol = n.MoveFromCol;
 			}
 
-			int oldRow = n.Row, oldCol = n.Col;
+			// Смена клетки и, если нужно, чанка (списки Nuclei и MultiMesh) — SetEntityCell.
 			SetEntityCell(n, destRow, destCol);
-			n.Center = new Vector2(destCol * CellSize + CellSize / 2f, destRow * CellSize + CellSize / 2f);
+			// Откат в клетку, которую уже занял другой атом (старая ошибка отката,
+			// поведение не меняем): прежний хозяин клетки пропадает из _entAt, но
+			// остаётся рабочим — соседи его не видят, а он их видит, как атом в пути.
+			if (_entAt.TryGetValue((n.Row, n.Col), out var displaced) && displaced != n)
+				_detachedSet.Add(displaced);
 			_entAt[(n.Row, n.Col)] = n;
-
-			int oldCx = Mathf.FloorToInt((float)oldCol / ChunkSize);
-			int oldCy = Mathf.FloorToInt((float)oldRow / ChunkSize);
-			int newCx = Mathf.FloorToInt((float)n.Col / ChunkSize);
-			int newCy = Mathf.FloorToInt((float)n.Row / ChunkSize);
-
-			// Раньше при "тот же чанк" тут стоял continue, пропускавший
-			// остаток тела цикла — теперь ниже есть ещё проверка полёта
-			// бросателя (см. PendingFlightDir/IsFlying), нужная НЕЗАВИСИМО от
-			// того, сменился чанк или нет, поэтому вместо continue — просто
-			// if/else на сам блок переноса между чанками.
-			if (oldCx != newCx || oldCy != newCy)
-			{
-				if (_chunks.TryGetValue((oldCx, oldCy), out var oldChunk))
-				{
-					oldChunk.Nuclei.Remove(n);
-					for (int i = 0; i < oldChunk.Nuclei.Count; i++) oldChunk.Nuclei[i].LocalIndex = i;
-					RebuildChunkMeshes(oldChunk);
-				}
-
-				var newChunk = GetOrCreateChunk(newCx, newCy);
-				n.LocalIndex = newChunk.Nuclei.Count;
-				newChunk.Nuclei.Add(n);
-				RebuildChunkMeshes(newChunk);
-			}
 
 			// --- бросатель: подхват/продолжение полёта (см. ThrowerCoreTier/
 			// EvaluateFlightStep) --- ПОСЛЕ того, как переезд физически
@@ -3373,6 +3620,7 @@ public partial class NucleusLayer : Node2D
 	// Убрать отданное через сторону k (после TryPeekGive).
 	private void TakeGiven(NucleusEntity n, int k)
 	{
+		Touch(n);
 		if (n.Cross != null) { n.Cross.TakeExit(k / 2); return; }
 		n.Ring[PhysicalSlotForCompass(n, k)] = new RingSlot { Exists = true, IsHole = true };
 	}
@@ -3381,6 +3629,7 @@ public partial class NucleusLayer : Node2D
 	// до поворота, у перекрёстка — занимает вход до следующего шага.
 	private void PutReceived(NucleusEntity n, int k, RingSlot content)
 	{
+		Touch(n);
 		if (n.Cross != null) { n.Cross.Enter(k / 2, content.ColorTier, content.IsItem); return; }
 		n.Ring[PhysicalSlotForCompass(n, k)] = new RingSlot
 			{ Exists = true, IsHole = false, ColorTier = content.ColorTier, Locked = true, IsItem = content.IsItem };
@@ -3697,10 +3946,11 @@ public partial class NucleusLayer : Node2D
 
 					nuclei.Add(nucleus);
 					_entAt[(worldRow, worldCol)] = nucleus;
+					RegisterEntity(nucleus);
 					// Симуляция теперь не завязана на видимость чанка (см.
 					// комментарий у _activeSet в шапке файла) — ядро начинает
 					// тикать сразу же, а не только когда чанк попадёт в кадр.
-					_activeSet.Add(nucleus);
+					AddActive(nucleus);
 				}
 			}
 		}
@@ -3903,6 +4153,7 @@ public partial class NucleusLayer : Node2D
 
 		chunk.Nuclei.Add(nucleus);
 		_entAt[(row, col)] = nucleus;
+		RegisterEntity(nucleus);
 		RebuildChunkMeshes(chunk);
 
 		// Симуляция не завязана на видимость чанка (см. комментарий у
@@ -3922,7 +4173,7 @@ public partial class NucleusLayer : Node2D
 			? ((_globalTick / ownPeriod) + 1) * ownPeriod
 			: _globalTick;
 		if (_globalTick >= nucleus.AsleepUntilTick)
-			_activeSet.Add(nucleus);
+			AddActive(nucleus);
 		else
 			_sleepingSet.Add(nucleus);
 
@@ -3966,6 +4217,7 @@ public partial class NucleusLayer : Node2D
 		};
 		chunk.Nuclei.Add(cargo);
 		_entAt[(row, col)] = cargo;
+		RegisterEntity(cargo);
 		_cargoSet.Add(cargo);
 		RebuildChunkMeshes(chunk);
 		return true;
@@ -3978,11 +4230,12 @@ public partial class NucleusLayer : Node2D
 	{
 		cargo.IsCargo = false;
 		_cargoSet.Remove(cargo);
+		Touch(cargo);
 		long ownPeriod = (long)OwnRotationTicks(cargo.CoreTier) * 8;
 		cargo.AsleepUntilTick = (ownPeriod > 0 && _globalTick % ownPeriod != 0)
 			? ((_globalTick / ownPeriod) + 1) * ownPeriod
 			: _globalTick;
-		if (_globalTick >= cargo.AsleepUntilTick) _activeSet.Add(cargo);
+		if (_globalTick >= cargo.AsleepUntilTick) AddActive(cargo);
 		else _sleepingSet.Add(cargo);
 		if (_chunks.TryGetValue((Mathf.FloorToInt((float)cargo.Col / ChunkSize), Mathf.FloorToInt((float)cargo.Row / ChunkSize)), out var chunk))
 			RebuildChunkMeshes(chunk);
@@ -4341,6 +4594,7 @@ public partial class NucleusLayer : Node2D
 			{
 				imported.Cross = new Crossroad(HoleCountOf(imported));
 				_crossSet.Add(imported);
+				Touch(imported);
 			}
 			if (ok) placed++;
 			else GD.PrintErr($"[NucleusLayer] импорт: клетка ({sn.Row + dRow},{sn.Col + dCol}) уже занята — ядро пропущено.");
@@ -4635,7 +4889,14 @@ public partial class NucleusLayer : Node2D
 			RebuildChunkMeshes(chunk);
 		}
 		_entAt.Clear();
+		foreach (var n in _activeSet) n.IsActiveSim = false;
 		_activeSet.Clear();
+		foreach (var list in _byTier) list.Clear();
+		_spinners.Clear();
+		_captureCandidates.Clear();
+		_changed.Clear();
+		_changedPrev.Clear();
+		_detachedSet.Clear();
 		_movingSet.Clear();
 		_sleepingSet.Clear();
 		_cargoSet.Clear();
@@ -4694,6 +4955,7 @@ public partial class NucleusLayer : Node2D
 
 		chunk.Nuclei.Add(nucleus);
 		_entAt[(row, col)] = nucleus;
+		RegisterEntity(nucleus);
 		RebuildChunkMeshes(chunk);
 
 		// При загрузке _globalTick только что сброшен в 0 (ClearFieldForImport) —
@@ -4703,10 +4965,208 @@ public partial class NucleusLayer : Node2D
 		nucleus.AsleepUntilTick = (ownPeriod > 0 && _globalTick % ownPeriod != 0)
 			? ((_globalTick / ownPeriod) + 1) * ownPeriod
 			: _globalTick;
-		if (_globalTick >= nucleus.AsleepUntilTick) _activeSet.Add(nucleus);
+		if (_globalTick >= nucleus.AsleepUntilTick) AddActive(nucleus);
 		else _sleepingSet.Add(nucleus);
 
 		return true;
+	}
+
+	// --- сверка работы по событиям с полным обходом (T014) ---
+	// Запуск: Godot --headless --path <проект> -- --sim-selfcheck [--ticks=N] [--seed=S]
+	// Одно и то же поле с seed (все тиры, серые, вращатели, бросатели,
+	// перекрёстки, ЧД, звезда, месторождения) прогоняется N тиков полным
+	// обходом и по событиям; хеши состояния сравниваются каждые 100 тиков.
+	// Текущее поле при этом стирается — только для командной строки.
+	private void RunSimSelfCheck()
+	{
+		int ticks = 2000, every = 100;
+		ulong seed = 14;
+		string modes = "fe"; // f — полный обход, e — по событиям; первый прогон — эталон
+		foreach (var arg in OS.GetCmdlineUserArgs())
+		{
+			if (arg.StartsWith("--ticks=")) ticks = int.Parse(arg.Substring(8));
+			else if (arg.StartsWith("--seed=")) seed = ulong.Parse(arg.Substring(7));
+			else if (arg.StartsWith("--every=")) every = int.Parse(arg.Substring(8));
+			else if (arg.StartsWith("--modes=")) modes = arg.Substring(8);
+			else if (arg.StartsWith("--dump=")) _selfCheckDumpTick = long.Parse(arg.Substring(7));
+			else if (arg.StartsWith("--plain=")) _selfCheckPlainChunks = int.Parse(arg.Substring(8));
+		}
+
+		bool savedMode = FullScanDebug;
+		var hashes = new List<ulong>[2];
+		var ms = new double[2];
+		int atoms = 0;
+		for (int run = 0; run < 2; run++)
+		{
+			FullScanDebug = modes[run] == 'f';
+			ClearFieldForImport();
+			if (_selfCheckPlainChunks > 0) BuildPlainField(seed, _selfCheckPlainChunks);
+			else BuildSelfCheckField(seed);
+			atoms = TotalAtomCount;
+			hashes[run] = new List<ulong>();
+			var sw = System.Diagnostics.Stopwatch.StartNew();
+			for (int i = 1; i <= ticks; i++)
+			{
+				_globalTick++;
+				SimTick();
+				if (i == _selfCheckDumpTick) DumpState(modes[run]);
+				if (i % every == 0)
+				{
+					sw.Stop();
+					hashes[run].Add(StateHash());
+					sw.Start();
+				}
+			}
+			ms[run] = sw.Elapsed.TotalMilliseconds / ticks;
+		}
+		FullScanDebug = savedMode;
+
+		int firstDiff = -1;
+		for (int i = 0; i < hashes[0].Count; i++)
+			if (hashes[0][i] != hashes[1][i]) { firstDiff = i; break; }
+		GD.Print($"[SimSelfCheck] seed {seed}, атомов {atoms}, тиков {ticks}");
+		for (int run = 0; run < 2; run++)
+			GD.Print($"[SimSelfCheck] {(modes[run] == 'f' ? "полный обход" : "по событиям ")}: {ms[run]:0.000} мс/тик, хеш {hashes[run][^1]:X16}");
+		GD.Print(firstDiff < 0
+			? "[SimSelfCheck] СОВПАДАЕТ"
+			: $"[SimSelfCheck] РАСХОЖДЕНИЕ на тике {(firstDiff + 1) * every} (впервые видно при шаге сверки {every})");
+		GetTree().Quit(firstDiff < 0 ? 0 : 1);
+	}
+
+	private long _selfCheckDumpTick = -1;
+	private int _selfCheckPlainChunks; // --plain=N: поле как у случайного заполнения (T), N×N чанков
+
+	// Как GetOrCreateChunk при RandomFillEnabled: тиры Ж/К/С, FillDensity, частицы цвета тира.
+	private void BuildPlainField(ulong seed, int chunks)
+	{
+		var rng = new RandomNumberGenerator { Seed = seed };
+		int size = chunks * ChunkSize;
+		for (int row = 0; row < size; row++)
+			for (int col = 0; col < size; col++)
+			{
+				if (rng.Randf() >= FillDensity) continue;
+				int tier = rng.RandiRange(0, 2);
+				if (!PlaceNucleusForImport(row, col, tier, 1, 8)) continue;
+				var n = _entAt[(row, col)];
+				for (int k = 0; k < 8; k++)
+					if (rng.Randf() < ParticleFillChance)
+						n.Ring[k] = new RingSlot { Exists = true, IsHole = false, ColorTier = tier };
+				Touch(n);
+			}
+	}
+
+	private void DumpState(char mode)
+	{
+		var all = new List<NucleusEntity>(_activeSet);
+		all.AddRange(_sleepingSet);
+		all.AddRange(_cargoSet);
+		all.Sort(_canonical);
+		foreach (var n in all)
+		{
+			var sb = new System.Text.StringBuilder();
+			foreach (var slot in n.Ring) sb.Append(!slot.Exists ? '.' : slot.IsHole ? 'o' : (char)('0' + slot.ColorTier + (slot.Locked ? 10 : 0)));
+			string cross = n.Cross == null ? "" : $" X{n.Cross.Axes[0].Dir}/{n.Cross.Axes[0].Count} {n.Cross.Axes[1].Dir}/{n.Cross.Axes[1].Count}";
+			GD.Print($"[Dump{mode}] {n.Row},{n.Col} t{n.CoreTier} d{n.Dir} m{(n.IsMoving ? 1 : 0)}{(n.IsFlying ? 1 : 0)} {sb}{cross} cap{n.NextCaptureTick}");
+		}
+	}
+
+	private void BuildSelfCheckField(ulong seed)
+	{
+		var rng = new RandomNumberGenerator { Seed = seed };
+		bool savedFill = RandomFillEnabled;
+		RandomFillEnabled = false;
+		Inventory.Sandbox = true;
+		const int size = 96; // 6×6 чанков
+
+		foreach (var layer in _energyClusterLayers)
+			for (int i = 0; i < 30; i++)
+				layer.PlaceClusterAt(rng.RandiRange(0, size - 1), rng.RandiRange(0, size - 1), 40);
+		_blackHoleLayer?.TryPlace(40, 40, 4, log: false);
+		_starLayer?.TryPlace(20, 70, 0, log: false, recipe: 0);
+
+		int[] holeCounts = { 2, 4, 8 };
+		for (int row = 0; row < size; row++)
+			for (int col = 0; col < size; col++)
+			{
+				if (rng.Randf() >= 0.55f) continue;
+				if (IsCellBlockedForLayer1(row, col)) continue;
+				foreach (var layer in _energyClusterLayers)
+					if (layer.HasClusterAt(row, col)) goto next;
+
+				float r = rng.Randf();
+				int tier = r < 0.24f ? 0 : r < 0.48f ? 1 : r < 0.72f ? 2 : r < 0.88f ? GrayCoreTier : r < 0.94f ? RotatorCoreTier : ThrowerCoreTier;
+				int holes = holeCounts[rng.RandiRange(0, 2)];
+				int dir = rng.Randf() < 0.5f ? 1 : -1;
+				if (!PlaceNucleusForImport(row, col, tier, dir, holes)) continue;
+				var n = _entAt[(row, col)];
+				if (IsSpinnerTier(tier)) continue;
+
+				if (rng.Randf() < 0.08f)
+				{
+					n.Cross = new Crossroad(HoleCountOf(n));
+					_crossSet.Add(n);
+					continue;
+				}
+				for (int k = 0; k < 8; k++)
+				{
+					if (!n.Ring[k].Exists || rng.Randf() >= 0.5f) continue;
+					int color = tier == GrayCoreTier ? rng.RandiRange(0, 2) : tier;
+					n.Ring[k] = new RingSlot { Exists = true, IsHole = false, ColorTier = color };
+				}
+				Touch(n);
+			next:;
+			}
+		RandomFillEnabled = savedFill;
+	}
+
+	// Хеш состояния симуляции (FNV-1a 64): атомы в порядке CanonicalOrder (без Id —
+	// он зависит от истории сессии), счётчики ЧД, звёзды, запасы месторождений.
+	private ulong StateHash()
+	{
+		ulong h = 14695981039346656037UL;
+		void Mix(long v)
+		{
+			for (int i = 0; i < 8; i++) { h ^= (ulong)(v & 0xFF); h *= 1099511628211UL; v >>= 8; }
+		}
+
+		var all = new List<NucleusEntity>(_activeSet);
+		all.AddRange(_sleepingSet);
+		all.AddRange(_cargoSet);
+		all.Sort(_canonical);
+		Mix(_globalTick);
+		Mix(all.Count);
+		foreach (var n in all)
+		{
+			Mix(n.Row); Mix(n.Col); Mix(n.CoreTier); Mix(n.Dir);
+			Mix(n.IsMoving ? 1 : 0); Mix(n.IsFlying ? 1 : 0); Mix(n.IsCargo ? 1 : 0);
+			if (n.IsMoving) { Mix(n.MoveToRow); Mix(n.MoveToCol); Mix(n.MoveStartTick); Mix(n.MoveDurationTicks); }
+			if (n.IsFlying) { Mix(n.FlightDir); Mix(n.FlightCellsRemaining); }
+			Mix(n.PendingFlightDir ?? -1);
+			Mix(n.NextCaptureTick); Mix(n.AsleepUntilTick);
+			foreach (var slot in n.Ring)
+				Mix((slot.Exists ? 1 : 0) | (slot.IsHole ? 2 : 0) | (slot.Locked ? 4 : 0) | (slot.IsItem ? 8 : 0) | (slot.ColorTier << 4));
+			if (n.Cross != null)
+				foreach (var axis in n.Cross.Axes)
+				{
+					Mix(axis.Dir); Mix(axis.Count);
+					for (int i = 0; i < axis.Count; i++)
+						Mix(axis.Items[i].Pos | (axis.Items[i].ColorTier << 8) | (axis.Items[i].IsItem ? 1 << 16 : 0));
+				}
+		}
+		foreach (long v in BlackHoles.AtomsAbsorbed) Mix(v);
+		foreach (long v in BlackHoles.ParticlesAbsorbed) Mix(v);
+		foreach (var star in Stars.All)
+		{
+			Mix(star.Elapsed); Mix(star.Producing ? 1 : 0); Mix(star.Output.Count);
+			foreach (int code in star.Output) Mix(code);
+		}
+		foreach (var layer in _energyClusterLayers)
+		{
+			long sum = 0, count = 0;
+			foreach (var (row, col) in layer.EnumerateCells()) { sum += layer.AmountAt(row, col); count++; }
+			Mix(sum); Mix(count);
+		}
+		return h;
 	}
 
 	private static Vector2 AngleVec(float angle) => new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
