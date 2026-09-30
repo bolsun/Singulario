@@ -22,9 +22,9 @@ public partial class GlowLayer : Node
 	[Export] public float GrayStrength = 0.18f;
 	// Звёзды: радиус (клеток) и сила по состояниям (T017); в работе сила «дышит»
 	// синхронно с короной звезды: × (1 + StarBreath · sin(2π · фаза · StarBreathCycles)).
-	[Export] public float StarRadiusCells = 2.5f;
-	[Export] public float StarStrength = 0.65f;
-	[Export] public float StarBlockedStrength = 0.5f;
+	[Export] public float StarRadiusCells = 3.5f;
+	[Export] public float StarStrength = 0.45f;
+	[Export] public float StarBlockedStrength = 0.35f;
 	[Export] public float StarIdleStrength = 0.2f;
 	[Export] public float StarBreath = 0.15f;
 	[Export] public int StarBreathCycles = 2;
@@ -32,7 +32,7 @@ public partial class GlowLayer : Node
 	[Export] public float GlowClamp = 1f;
 	// ЧД: радиус (клеток) и сила; считается в шейдере фона.
 	[Export] public float BlackHoleRadiusCells = 3f;
-	[Export] public float BlackHoleStrength = 0.65f;
+	[Export] public float BlackHoleStrength = 0.2f;
 	// Сингулярность — свет ЧД на отдалении: ниже SingularityZoom переход (лог-шкала)
 	// до SingularityZoom / SingularityRatio; радиус — не меньше SingularityRadiusCells
 	// клеток и SingularityMinScreenPx пикселей экрана.
