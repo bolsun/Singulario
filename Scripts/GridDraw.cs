@@ -23,11 +23,18 @@ using Godot;
 // пиксель; на слое 1 — обычная сетка клеток. При отдалении ниже CellGridHideZoom
 // сетка клеток пропадает и остаются только границы чанков (серые, как клетки),
 // ниже GridHideZoom сетка не рисуется совсем.
+// T019: линии рисует шейдер Resources/Shaders/grid.gdshader — один прямоугольник
+// на видимый диапазон (_Draw), линия 1 пиксель экрана считается в шейдере по
+// мировым координатам (вид тот же, что у прежних DrawLine шириной 1/zoom).
+// На дальнем зуме (шаг = чанк) линии — цвет ChunkLineColor: граница чанка
+// одного цвета при любом зуме.
 // ChunkSize берём у NucleusLayer (единственный источник истины для него, как
 // CellSize — у GridDraw, см. NucleusLayer._Ready) в _Ready(), это обычное
 // [Export]-поле, так что порядок вызова _Ready() между нодами не важен.
 public partial class GridDraw : Node2D
 {
+    public const string ShaderPath = "res://Resources/Shaders/grid.gdshader";
+
     [Export] public int CellSize = 96;
     [Export] public float CullMargin = 128f; // запас вокруг видимой области — как у NucleusLayer
     // Зум, ниже которого сетка клеток не рисуется: остаются только границы чанков,
@@ -52,6 +59,7 @@ public partial class GridDraw : Node2D
     private float _lineWidth = 1f;
     private bool _haveRange;
     private bool _hidden;
+    private ShaderMaterial _material;
 
     // Включена ли сетка (G) — для других узлов: подробный вид портов (T004,
     // PortLayer, MoleculeLayer, BlackHoleLayer) показывается только с сеткой.
@@ -64,6 +72,10 @@ public partial class GridDraw : Node2D
 
         var nucleusLayer = GetNodeOrNull<NucleusLayer>("../NucleusLayer");
         if (nucleusLayer != null) _chunkSize = nucleusLayer.ChunkSize;
+
+        var shader = GD.Load<Shader>(ShaderPath);
+        if (shader == null) GD.PrintErr($"[GridDraw] не загрузился шейдер {ShaderPath}.");
+        Material = _material = new ShaderMaterial { Shader = shader };
     }
 
     public override void _Input(InputEvent @event)
@@ -102,6 +114,7 @@ public partial class GridDraw : Node2D
             QueueRedraw();
         }
         if (hidden) return;
+        UpdateShader(step);
 
         int minCol = Mathf.FloorToInt(visibleRect.Position.X / step);
         int maxCol = Mathf.CeilToInt((visibleRect.Position.X + visibleRect.Size.X) / step);
@@ -125,35 +138,25 @@ public partial class GridDraw : Node2D
         QueueRedraw();
     }
 
+    private void UpdateShader(int step)
+    {
+        _material.SetShaderParameter("step_size", (float)step);
+        _material.SetShaderParameter("cell_size", (float)CellSize);
+        _material.SetShaderParameter("chunk_size", _chunkSize);
+        _material.SetShaderParameter("cell_mode", step == CellSize);
+        _material.SetShaderParameter("line_color", LineColor);
+        _material.SetShaderParameter("chunk_line_color", ChunkLineColor);
+        _material.SetShaderParameter("warp_on", false);
+    }
+
+    // Один прямоугольник на видимый диапазон — линии (и подсветку границ чанков,
+    // см. IsChunkBoundary: та же floor-логика, в шейдере — mod) рисует шейдер.
     public override void _Draw()
     {
         if (!_haveRange || _hidden) return;
-
-        // Сетка клеток и сетка чанков (см. _Process) — одна и та же отрисовка,
-        // разница только в шаге (_step) и, теперь, в подсветке границ чанка:
-        // в режиме клеток (_step == CellSize) индекс линии c/r — это реальный
-        // мировой номер столбца/строки, поэтому можно спросить, кратен ли он
-        // ChunkSize (см. IsChunkBoundary); в режиме чанков индекс уже сам по
-        // себе номер чанка — разделять там нечего, весь частокол как раньше.
-        bool cellGridMode = _step == CellSize;
-
-        float top = _minRow * _step;
-        float bottom = _maxRow * _step;
-        for (int c = _minCol; c <= _maxCol; c++)
-        {
-            float x = c * _step;
-            var color = cellGridMode && IsChunkBoundary(c) ? ChunkLineColor : LineColor;
-            DrawLine(new Vector2(x, top), new Vector2(x, bottom), color, _lineWidth);
-        }
-
         float left = _minCol * _step;
-        float right = _maxCol * _step;
-        for (int r = _minRow; r <= _maxRow; r++)
-        {
-            float y = r * _step;
-            var color = cellGridMode && IsChunkBoundary(r) ? ChunkLineColor : LineColor;
-            DrawLine(new Vector2(left, y), new Vector2(right, y), color, _lineWidth);
-        }
+        float top = _minRow * _step;
+        DrawRect(new Rect2(left, top, (_maxCol - _minCol) * _step, (_maxRow - _minRow) * _step), Colors.White);
     }
 
     // true, если номер клетки cellIndex лежит РОВНО на границе чанка — то
