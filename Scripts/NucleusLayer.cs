@@ -5571,7 +5571,7 @@ public partial class NucleusLayer : Node2D
 		int firstDiff = -1;
 		for (int i = 0; i < hashes[0].Count; i++)
 			if (hashes[0][i] != hashes[1][i]) { firstDiff = i; break; }
-		GD.Print($"[SimSelfCheck] seed {seed}, атомов {atoms}, тиков {ticks}");
+		GD.Print($"[SimSelfCheck] seed {seed}, атомов {atoms}, звёзд {Stars.Count}, тиков {ticks}");
 		for (int run = 0; run < 2; run++)
 			GD.Print($"[SimSelfCheck] {(modes[run] == 'f' ? "полный обход" : "по событиям ")}: {ms[run]:0.000} мс/тик, хеш {hashes[run][^1]:X16}");
 		GD.Print(firstDiff < 0
@@ -5649,6 +5649,17 @@ public partial class NucleusLayer : Node2D
 		}
 	}
 
+	private void PlaceSelfCheckStar(int row0, int col0, int type, string recipe, int fieldSize)
+	{
+		if (_starLayer == null) return;
+		int side = Catalog.TypeOf(type).Size;
+		for (int i = 0; i < fieldSize * fieldSize; i++)
+		{
+			int row = (row0 + i / fieldSize) % (fieldSize - side), col = (col0 + i % fieldSize) % (fieldSize - side);
+			if (_starLayer.TryPlace(row, col, type, log: false, recipe: recipe) != null) return;
+		}
+	}
+
 	private void BuildSelfCheckField(ulong seed)
 	{
 		var rng = new RandomNumberGenerator { Seed = seed };
@@ -5662,9 +5673,10 @@ public partial class NucleusLayer : Node2D
 				layer.PlaceClusterAt(rng.RandiRange(0, size - 1), rng.RandiRange(0, size - 1), 40);
 		_blackHoleLayer?.TryPlace(40, 40, 4, log: false);
 		// Звёзды всех трёх типов (T027): печь, фабрика (звезда Ж), С.
-		_starLayer?.TryPlace(20, 70, 0, log: false);
-		_starLayer?.TryPlace(60, 10, 1, log: false, recipe: "star_y");
-		_starLayer?.TryPlace(70, 70, 2, log: false);
+		// Место — первое свободное по фиксированному обходу (месторождения случайны).
+		PlaceSelfCheckStar(20, 70, 0, null, size);
+		PlaceSelfCheckStar(60, 10, 1, "star_y", size);
+		PlaceSelfCheckStar(70, 70, 2, null, size);
 
 
 		int[] holeCounts = { 2, 4, 8 };
