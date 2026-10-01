@@ -2309,7 +2309,8 @@ public partial class NucleusLayer : Node2D
 	private bool IsCrossroadAt(int row, int col) =>
 		_entAt.TryGetValue((row, col), out var e) && e.Cross != null;
 
-	// Переключение режима по правилу PlaceDecision.DecideToggle: отказ — красная вспышка клетки (T040).
+	// Переключение режима по правилу PlaceDecision.DecideToggle (T040). Не серый атом режима не имеет —
+	// клик по нему ничего не делает, без вспышки; серый рядом с перекрёстком — красная вспышка клетки.
 	private void TryToggleCrossroad(NucleusEntity n)
 	{
 		var decision = PlaceDecision.DecideToggle(PlaceAtomOf(n), HasCrossroadNeighbor(n.Row, n.Col));
@@ -2318,6 +2319,7 @@ public partial class NucleusLayer : Node2D
 			ToggleCrossroad(n);
 			return;
 		}
+		if (decision.Reason == PlaceDenyReason.CrossroadNotGray) return;
 		FlashPlaceDenied(n.Row, n.Col, decision.Reason);
 		GD.Print($"[NucleusLayer] перекрёсток в ({n.Row},{n.Col}) отклонён: {decision.Reason}.");
 	}
