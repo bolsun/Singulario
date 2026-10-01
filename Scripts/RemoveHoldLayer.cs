@@ -1,24 +1,21 @@
 using Godot;
 
-// Вид удаления ПКМ с удержанием (T026): круг прогресса у курсора, рамка цели,
+// Вид удаления ПКМ с удержанием (T026): полоска прогресса над следом цели, рамка цели,
 // вспышка отказа. Только вид; логика — RemoveHold, ввод — NucleusLayer.
-// Узел создаёт NucleusLayer из кода. ProcessMode.Always — вспышка и круг не
+// Узел создаёт NucleusLayer из кода. ProcessMode.Always — вспышка и полоска не
 // зависят от паузы меню.
 public partial class RemoveHoldLayer : Node2D
 {
-	private static readonly Color RingBack = new Color("#120e1d");
+	private static readonly Color BarBack = new Color("#0a0812");
 	private static readonly Color Gray3 = new Color("#cfcde0");
 	private static readonly Color DenyColor = new Color(1f, 0.2f, 0.2f);
 	private const float FlashSeconds = 0.3f;
-	private const float RingOffsetPx = 14f;
-	private const float BackWidthPx = 5f;
-	private const float ArcWidthPx = 3f;
 	private const float FrameWidthPx = 2f;
-	private const int Segments = 48;
+	private const float BarGapPx = 3f;
 
 	public NucleusLayer Layer;
-	// Диаметр круга в пикселях экрана.
-	public float DiameterPx = 22f;
+	// Толщина полоски в пикселях экрана.
+	public float BarThicknessPx = 4f;
 
 	private RemoveTarget? _target;
 	private float _progress;
@@ -34,11 +31,10 @@ public partial class RemoveHoldLayer : Node2D
 	// target == null — удержания нет, ничего не рисуется.
 	public void SetHold(RemoveTarget? target, float progress)
 	{
-		// Круг идёт за курсором — пока удержание идёт, перерисовка каждый кадр.
 		bool changed = _target != target || !Mathf.IsEqualApprox(_progress, progress);
 		_target = target;
 		_progress = progress;
-		if (changed || target != null) QueueRedraw();
+		if (changed) QueueRedraw();
 	}
 
 	public void FlashDenied(int row, int col, int side)
@@ -79,12 +75,11 @@ public partial class RemoveHoldLayer : Node2D
 		{
 			DrawRect(Footprint(t), new Color(Gray3, 0.6f), false, FrameWidthPx * px);
 
-			var center = GetGlobalMousePosition() + new Vector2(RingOffsetPx, RingOffsetPx) * px;
-			float radius = (DiameterPx * 0.5f - BackWidthPx * 0.5f) * px;
-			DrawArc(center, radius, 0f, Mathf.Tau, Segments, RingBack, BackWidthPx * px, false);
-			float start = -Mathf.Pi / 2f;
-			DrawArc(center, radius, start, start + Mathf.Tau * Mathf.Clamp(_progress, 0f, 1f),
-				Segments, Gray3, ArcWidthPx * px, false);
+			var fp = Footprint(t);
+			float th = BarThicknessPx * px;
+			var bar = new Rect2(fp.Position.X, fp.Position.Y - BarGapPx * px - th, fp.Size.X, th);
+			DrawRect(bar.Grow(px), BarBack, true);
+			DrawRect(new Rect2(bar.Position, new Vector2(bar.Size.X * Mathf.Clamp(_progress, 0f, 1f), th)), Colors.White, true);
 		}
 	}
 }

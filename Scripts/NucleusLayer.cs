@@ -1460,8 +1460,8 @@ public partial class NucleusLayer : Node2D
 	// Удаление с удержанием (T026): логика — RemoveHold, вид — RemoveHoldLayer.
 	// Время — реальное (delta кадра), в симуляцию и StateHash не входит.
 	[Export] public float RemoveHoldSecondsPerCell = 0.2f;
-	// Диаметр круга прогресса в пикселях экрана.
-	[Export] public float RemoveHoldRingPx = 22f;
+	// Толщина полоски прогресса в пикселях экрана.
+	[Export] public float RemoveHoldBarPx = 4f;
 	private readonly RemoveHold _removeHold = new();
 	private RemoveHoldLayer _removeHoldLayer;
 	// Отказ, уже показанный для объекта под курсором (вспышка раз на заход).
@@ -1586,7 +1586,7 @@ public partial class NucleusLayer : Node2D
 		_crossroadLayer = new CrossroadLayer { Name = "CrossroadLayer", Layer = this };
 		GetParent().CallDeferred(Node.MethodName.AddChild, _crossroadLayer);
 		// Круг и рамки удаления с удержанием (T026).
-		_removeHoldLayer = new RemoveHoldLayer { Name = "RemoveHoldLayer", Layer = this, DiameterPx = RemoveHoldRingPx };
+		_removeHoldLayer = new RemoveHoldLayer { Name = "RemoveHoldLayer", Layer = this, BarThicknessPx = RemoveHoldBarPx };
 		GetParent().CallDeferred(Node.MethodName.AddChild, _removeHoldLayer);
 		_starLayer = GetNodeOrNull<StarLayer>("../StarLayer");
 
