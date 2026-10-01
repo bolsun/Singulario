@@ -4223,7 +4223,7 @@ public partial class NucleusLayer : Node2D
 		{
 			Name = $"Particles_{cx}_{cy}",
 			Texture = _particleTexture,
-			Material = _material,
+			Material = _particleMaterial,
 			TextureFilter = CanvasItem.TextureFilterEnum.Nearest,
 			Visible = false
 		};
