@@ -5001,6 +5001,10 @@ public partial class NucleusLayer : Node2D
 		public bool Cargo { get; set; }
 		// Перекрёсток (T010). В старых сохранениях поля нет — false, обычный режим.
 		public bool Crossroad { get; set; }
+		// Ориентация выходов перекрёстка 0..3 (T032: 0 = E,S, далее по часовой). Пишется только
+		// у перекрёстка; нет поля — 0 (E,S).
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public int? CrossOutputs { get; set; }
 	}
 
 	private class SavedSource
@@ -5107,7 +5111,7 @@ public partial class NucleusLayer : Node2D
 	{
 		int holeCount = 0;
 		foreach (var slot in n.Ring) if (slot.Exists) holeCount++;
-		return new SavedNucleus { Row = n.Row, Col = n.Col, CoreTier = n.CoreTier, Dir = n.Dir, HoleCount = holeCount, Cargo = n.IsCargo, Crossroad = n.Cross != null };
+		return new SavedNucleus { Row = n.Row, Col = n.Col, CoreTier = n.CoreTier, Dir = n.Dir, HoleCount = holeCount, Cargo = n.IsCargo, Crossroad = n.Cross != null, CrossOutputs = n.Cross?.OutRot };
 	}
 
 	// Разбирает JSON и полностью заменяет им текущее поле (ядра, источники
@@ -5261,7 +5265,7 @@ public partial class NucleusLayer : Node2D
 			if (ok && sn.Crossroad && !sn.Cargo
 				&& _entAt.TryGetValue((sn.Row + dRow, sn.Col + dCol), out var imported) && CanBeCrossroad(imported))
 			{
-				imported.Cross = new Crossroad(HoleCountOf(imported));
+				imported.Cross = new Crossroad(HoleCountOf(imported), sn.CrossOutputs ?? 0);
 				_crossSet.Add(imported);
 				Touch(imported);
 			}
