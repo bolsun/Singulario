@@ -2845,6 +2845,12 @@ public partial class NucleusLayer : Node2D
 	// свободны: забирается незаблокированная частица из гнезда, смотрящего на
 	// ЧД, с учётом _claimed — то есть на шаге поворота атома, как при передаче
 	// между атомами. Обход — ЧД по порядку BlackHoleSet, стороны N/E/S/W.
+	// T028: единственное место правила «что берёт ЧД» — спрашивает цепочку заданий.
+	// Песочница и нет активного этапа — всё.
+	private bool BlackHoleAccepts(in RingSlot slot) =>
+		!GoalsActive || Inventory.Sandbox
+		|| Goals.Accepts(slot.IsItem ? GoalKind.Atom : GoalKind.Particle, slot.ColorTier);
+
 	private void AbsorbFromHorizon()
 	{
 		foreach (var hole in BlackHoles.Enumerate())
@@ -2866,6 +2872,8 @@ public partial class NucleusLayer : Node2D
 					if (_globalTick < n.AsleepUntilTick) continue; // ещё не проснулся — не крутится
 					// У перекрёстка (T010) — частица у выхода на сторону ЧД.
 					if (!TryPeekGive(n, k, out var slot)) continue;
+					// T028: ненужное этапу остаётся в дырке (затор), сторона не занимается.
+					if (!BlackHoleAccepts(slot)) continue;
 					int p = SideKey(n, k);
 					if (IsClaimed(n, p)) continue;
 					if (!TierSpinAllowed(GrayCoreTier, TransferRules.NoSpin, n.CoreTier, n.Dir)) continue;

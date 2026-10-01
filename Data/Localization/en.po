@@ -164,6 +164,12 @@ msgstr "No tasks"
 msgid "Задание {0}/{1}:"
 msgstr "Task {0}/{1}:"
 
+msgid "ЧД принимает: {0}"
+msgstr "Black hole accepts: {0}"
+
+msgid "ЧД принимает всё (песочница)"
+msgstr "Black hole accepts everything (sandbox)"
+
 msgid "частицы {0}"
 msgstr "particles {0}"
 

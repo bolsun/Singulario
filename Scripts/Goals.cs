@@ -114,6 +114,19 @@ public sealed class GoalChain
 		return req.Id >= 0 && req.Id < BlackHoleSet.TierCount ? holes.AtomsAbsorbed[req.Id] : 0;
 	}
 
+	// Требует ли текущий этап этот вид (T028): частица цвета id или атом тира id.
+	// Цепочка пройдена — принимается всё. Набранное, но не закрытое требование
+	// продолжает приниматься.
+	public bool Accepts(GoalKind kind, int id)
+	{
+		var st = Current;
+		if (st == null) return true;
+		var reqs = st.Requirements;
+		for (int i = 0; i < reqs.Count; i++)
+			if (reqs[i].Kind == kind && reqs[i].Id == id) return true;
+		return false;
+	}
+
 	// Засчитано по пункту i текущего этапа (0..Count).
 	public long Progress(int i, BlackHoleSet holes)
 	{
