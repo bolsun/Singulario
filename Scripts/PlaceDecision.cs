@@ -24,7 +24,7 @@ public enum PlaceDenyReason
 }
 
 // Инструмент в руке: тир, число дырок, спин (±1).
-public readonly record struct PlaceTool(int Tier, int Holes, int Spin, bool IsCarrier);
+public readonly record struct PlaceTool(int Tier, int Holes, int Spin, bool IsCarrier, bool Crossroad = false);
 
 // Атом в клетке. Exists = false — клетка без атома, остальные поля не читаются.
 // IsCarrier — атом, который инструмент может заменить: Ж/К/С (серый — решение GDD 2026-10-01 — и
@@ -53,8 +53,10 @@ public static class PlaceDecision
 		if (atom.Exists)
 		{
 			if (atom.IsCargo) return Deny(PlaceDenyReason.Cargo);
-			// Спин у перекрёстка не сравниваем: у него его нет (SpinOf = NoSpin).
+			// «Такой же» — тир, дырки и режим (T039). Спин сравниваем, только если оба не перекрёстки:
+			// у перекрёстка его нет (SpinOf = NoSpin).
 			bool same = atom.Tier == tool.Tier && atom.Holes == tool.Holes
+				&& atom.IsCrossroad == tool.Crossroad
 				&& (atom.IsCrossroad || atom.Spin == tool.Spin);
 			if (same) return new PlaceResult(PlaceOutcome.Same, PlaceDenyReason.None);
 			// IsCarrier атома = можно заменить инструментом (серый и замороженные — нет).

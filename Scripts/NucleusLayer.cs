@@ -1463,6 +1463,9 @@ public partial class NucleusLayer : Node2D
 	// (иначе — спам одинаковых попыток на неподвижной мыши).
 	private bool _leftMouseHeld;
 	private (int row, int col)? _lastPlacedCell;
+	// Режим атома в руке (T039): пипетка по перекрёстку берёт его вместе с OutRot.
+	private bool _handCrossroad;
+	private int _handCrossOutRot;
 	// ПКМ — удаление ядра под курсором (см. TryRemoveAtMouse), тем же
 	// принципом удержания, что и установка: можно провести мышью с зажатой
 	// ПКМ, чтобы стереть сразу несколько ядер, не кликая по каждому отдельно.
@@ -1850,6 +1853,9 @@ public partial class NucleusLayer : Node2D
 		// чтобы её сообщение в лог сразу показывало актуальное направление.
 		_currentSpinDirection = nucleus.Dir;
 		SelectSpawnPreset(nucleus.CoreTier, holeCount);
+		// После выбора пресета (он сбрасывает руку): перекрёсток берём в руку вместе с OutRot (T039).
+		_handCrossroad = nucleus.Cross != null;
+		_handCrossOutRot = nucleus.Cross?.OutRot ?? 0;
 	}
 
 	// _UnhandledInput (а не _Input) — намеренно: клик по кнопке на панели
@@ -1907,6 +1913,16 @@ public partial class NucleusLayer : Node2D
 					return;
 				}
 				if (!_selectedSpawnTier.HasValue) return;
+				// Такой же атом с инструментом в руке — переключить режим (T039); рука не меняется.
+				if (_entAt.TryGetValue(cargoCell, out var sameAtom) && CanBeCrossroad(sameAtom)
+					&& EvaluatePlace(cargoCell.Item1, cargoCell.Item2, _selectedSpawnTier.Value, _selectedSpawnHoleCount).Outcome == PlaceOutcome.Same)
+				{
+					ToggleCrossroad(sameAtom);
+					_lastPlacedCell = cargoCell; // удержание ЛКМ режим не мигает
+					_leftMouseHeld = true;
+					GetViewport().SetInputAsHandled();
+					return;
+				}
 				_leftMouseHeld = true;
 				_lastPlacedCell = null; // разрешаем установку в клетку под курсором сразу же
 				TryPlaceAtMouseIfSelected();
@@ -1946,6 +1962,8 @@ public partial class NucleusLayer : Node2D
 	{
 		_selectedSpawnTier = tier;
 		_selectedSpawnHoleCount = holeCount;
+		_handCrossroad = false;
+		_handCrossOutRot = 0;
 		_lastPlacedCell = null;
 		_energyLayer?.ClearSelection();
 		foreach (var clusterLayer in _energyClusterLayers) clusterLayer.ClearSelection();
@@ -1975,6 +1993,8 @@ public partial class NucleusLayer : Node2D
 	public void ClearSelection()
 	{
 		_selectedSpawnTier = null;
+		_handCrossroad = false;
+		_handCrossOutRot = 0;
 		_blackHoleLayer?.ClearTool();
 		_starLayer?.ClearTool();
 	}
@@ -4787,7 +4807,7 @@ public partial class NucleusLayer : Node2D
 	private PlaceResult EvaluatePlace(int row, int col, int tier, int holeCount)
 	{
 		_entAt.TryGetValue((row, col), out var e);
-		var tool = new PlaceTool(tier, holeCount, _currentSpinDirection, !IsSpinnerTier(tier));
+		var tool = new PlaceTool(tier, holeCount, _currentSpinDirection, !IsSpinnerTier(tier), _handCrossroad);
 		var atom = e == null
 			? default
 			: new PlaceCellAtom(true, e.CoreTier, HoleCountOf(e), e.Dir, e.Cross != null, e.IsCargo, IsNormalTier(e.CoreTier));
@@ -4853,13 +4873,9 @@ public partial class NucleusLayer : Node2D
 		}
 		if (decision.Outcome == PlaceOutcome.Same) return;
 
-		bool wasCrossroad = false;
-		int crossOutRot = 0;
 		if (decision.Outcome == PlaceOutcome.Replace && _entAt.TryGetValue((row, col), out var existingNucleus))
 		{
 			GD.Print($"[NucleusLayer] клетка ({row},{col}) занята атомом тира {existingNucleus.CoreTier} — заменяю на тир {tier}.");
-			wasCrossroad = existingNucleus.Cross != null; // режим перекрёстка и ориентация выходов сохраняются (T030, T032)
-			if (wasCrossroad) crossOutRot = existingNucleus.Cross.OutRot;
 			RefundToInventory(existingNucleus); // замена = снять старый + поставить новый
 			RemoveNucleusEntity(existingNucleus);
 		}
@@ -4882,15 +4898,16 @@ public partial class NucleusLayer : Node2D
 			LocalIndex = chunk.Nuclei.Count
 		};
 
-		if (wasCrossroad)
+		// Режим и ориентация выходов — из руки, не от старого атома (T039).
+		if (_handCrossroad)
 		{
-			nucleus.Cross = new Crossroad(holeCount, crossOutRot);
+			nucleus.Cross = new Crossroad(holeCount, _handCrossOutRot);
 			_crossSet.Add(nucleus);
 		}
 		chunk.Nuclei.Add(nucleus);
 		_entAt[(row, col)] = nucleus;
 		RegisterEntity(nucleus);
-		if (wasCrossroad) Touch(nucleus);
+		if (_handCrossroad) Touch(nucleus);
 		RebuildChunkMeshes(chunk);
 
 		// Симуляция не завязана на видимость чанка (см. комментарий у
