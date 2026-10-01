@@ -92,8 +92,6 @@ public partial class StarLayer : Node2D
 
 	private static readonly Color BlockedColor = new Color(1f, 0.2f, 0.2f, 0.35f);
 	private static readonly Color AtomBodyColor = new Color(0.08f, 0.08f, 0.1f, 0.9f);
-	// Атом-предмет в эффекте (T007): доля диаметра, закрашенная тёмной серединой.
-	private const float ItemHoleFraction = 0.55f;
 
 	// MultiMesh 2D с цветом: 8 float трансформа (2 строки по 4) + 4 float цвета.
 	private const int Stride = 12;
@@ -104,7 +102,7 @@ public partial class StarLayer : Node2D
 		public float Age;      // секунд с начала
 		public int Tier;       // тир атома; -1 — одиночная частица
 		public int Color;      // цвет частицы или тир предмета (только для Tier == -1)
-		public bool Item;      // атом-предмет из дырки (T007): полое кольцо размером с частицу
+		public bool Item;      // атом-предмет из дырки (T007): шар размером с частицу
 		public Atom Particles; // частицы в гнёздах атома (цвета)
 
 		public readonly int Instances => Tier < 0 ? (Item ? 2 : 1) : 2 + Particles.Count;
@@ -637,7 +635,6 @@ public partial class StarLayer : Node2D
 				{
 					float pr = _particleRadius * shrink;
 					Put(ref n, pos, 2f * pr, new Color(FxColor(f.Color, colors), alpha));
-					if (f.Item) Put(ref n, pos, 2f * pr * ItemHoleFraction, new Color(AtomBodyColor, AtomBodyColor.A * alpha));
 					continue;
 				}
 

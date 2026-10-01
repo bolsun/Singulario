@@ -1244,6 +1244,40 @@ public partial class NucleusLayer : Node2D
 	private HashSet<(int cx, int cy)> _newVisible = new();
 	private Texture2D _holeTexture;
 	private Texture2D _particleTexture;
+	private ShaderMaterial _particleMaterial;
+
+	// T023: атлас 2×1 — осколок-частица (слева) и шар атома-предмета (справа), оба 16×16 px.
+	// Нет шара или он другого размера — правая половина повторяет осколок.
+	[Export] public string ItemSpritePath = "res://Resources/Textures/atom_item_gray_16px.png";
+
+	private Texture2D BuildParticleAtlas()
+	{
+		var shard = LoadImageOf(ParticleSpritePath);
+		if (shard == null) return null;
+		var ball = LoadImageOf(ItemSpritePath);
+		if (ball == null || ball.GetSize() != shard.GetSize())
+		{
+			GD.PrintErr("NucleusLayer: спрайт атома-предмета не загрузился — рисуется осколком.");
+			ball = shard;
+		}
+		var w = shard.GetWidth();
+		var atlas = Image.CreateEmpty(w * 2, shard.GetHeight(), false, Image.Format.Rgba8);
+		shard.Convert(Image.Format.Rgba8);
+		ball.Convert(Image.Format.Rgba8);
+		atlas.BlitRect(shard, new Rect2I(Vector2I.Zero, shard.GetSize()), Vector2I.Zero);
+		atlas.BlitRect(ball, new Rect2I(Vector2I.Zero, ball.GetSize()), new Vector2I(w, 0));
+		return ImageTexture.CreateFromImage(atlas);
+	}
+
+	// Картинка из импортированной текстуры; нет импорта (новый файл до открытия редактора) — прямо из PNG.
+	private static Image LoadImageOf(string path)
+	{
+		var tex = GD.Load<Texture2D>(path);
+		if (tex != null) return tex.GetImage();
+		var img = new Image();
+		return img.Load(ProjectSettings.GlobalizePath(path)) == Error.Ok ? img : null;
+	}
+
 	private ShaderMaterial _material; // общий и для ядра, и для частиц — один и тот же шейдер/атлас палитр
 	private QuadMesh _coreQuad;
 	private QuadMesh _holeQuad;
@@ -1381,7 +1415,7 @@ public partial class NucleusLayer : Node2D
 
 		_coreTexture = GD.Load<Texture2D>(CoreSpritePath);
 		_holeTexture = GD.Load<Texture2D>(HoleSpritePath);
-		_particleTexture = GD.Load<Texture2D>(ParticleSpritePath);
+		_particleTexture = BuildParticleAtlas();
 		var shader = GD.Load<Shader>(ShaderPath);
 
 		if (_coreTexture == null || shader == null || _holeTexture == null || _particleTexture == null)
@@ -1398,6 +1432,9 @@ public partial class NucleusLayer : Node2D
 		_material = new ShaderMaterial { Shader = shader };
 		_material.SetShaderParameter("palette_tex", paletteAtlas);
 		_dotMaterial = (ShaderMaterial)_material.Duplicate();
+		// T023: частицы чанка берут из атласа осколок (слева) или шар предмета (справа).
+		_particleMaterial = (ShaderMaterial)_material.Duplicate();
+		_particleMaterial.SetShaderParameter("atlas_halves", 1.0f);
 
 		_coreQuad = new QuadMesh { Size = new Vector2(SpriteSize, SpriteSize) };
 		_holeQuad = new QuadMesh { Size = new Vector2(HoleSpriteSize, HoleSpriteSize) };

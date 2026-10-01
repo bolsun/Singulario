@@ -23,13 +23,10 @@ varying float v_palette_row;
 // кто их не задаёт, там 0 — цвет не меняется.
 varying float v_glow;
 varying float v_dim;
-// T007: INSTANCE_CUSTOM.w > 0.5 — атом-предмет в дырке: спрайт частицы с
-// вырезанным центром (полое кольцо цвета тира). Вырез считается по пиксельной
-// сетке спрайта (item_pixels), чтобы край остался пиксельным.
+// T007/T023: INSTANCE_CUSTOM.w > 0.5 — атом-предмет в дырке. При atlas_halves = 1 текстура —
+// атлас 2×1 (осколок | шар): частица берёт левую половину, предмет — правую.
 varying float v_item;
-uniform float item_pixels = 16.0;
-uniform float item_hole_radius = 0.22;  // доля стороны квада — прозрачный центр
-uniform float item_edge_width = 0.07;   // тёмная обводка внутреннего края
+uniform float atlas_halves = 0.0;
 // T015: общая проявленность (материал точек дальнего зума гасит их к туманностям).
 uniform float fade = 1.0;
 
@@ -47,6 +44,7 @@ void fragment() {
 	// отрисован перевёрнутым по вертикали.
 	vec2 uv = vec2(UV.x, 1.0 - UV.y);
 
+	if (atlas_halves > 0.5) uv.x = uv.x * 0.5 + (v_item > 0.5 ? 0.5 : 0.0);
 	vec4 src = texture(TEXTURE, uv);
 	float idx = src.r; // 0..1 — квантованный маркер уровня из index-спрайта
 	vec3 final_color = texture(palette_tex, vec2(idx, v_palette_row)).rgb;
@@ -58,11 +56,5 @@ void fragment() {
 	float dim = clamp(v_dim, 0.0, 1.0);
 	final_color = mix(final_color, vec3(luma), dim * 0.6) * (1.0 - dim * 0.5);
 	float alpha = src.a;
-	if (v_item > 0.5) {
-		vec2 cell = (floor(uv * item_pixels) + 0.5) / item_pixels;
-		float r = length(cell - vec2(0.5));
-		if (r < item_hole_radius) alpha = 0.0;
-		else if (r < item_hole_radius + item_edge_width) final_color *= 0.15;
-	}
 	COLOR = vec4(final_color, alpha * fade);
 }
