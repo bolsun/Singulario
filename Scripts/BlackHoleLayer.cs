@@ -6,10 +6,16 @@ using System.Collections.Generic;
 // захват атомов и частиц на горизонте — NucleusLayer (FinishArrivedMoves,
 // SimTick). Этот узел только:
 //   - инструмент установки (кнопка «ЧД» на панели слоя 1, SelectTool): ЛКМ —
-//     поставить (верхняя левая клетка под курсором), превью спрайта или
-//     красный квадрат, если нельзя; удаление — ПКМ через NucleusLayer
-//     (RemoveAllAtMouse → RemoveAt);
-//   - отрисовка: спрайт на Size×Size клеток, без дырок портов;
+//     поставить (верхняя левая клетка под курсором), превью (та же ЧД с
+//     прозрачностью 0,5) или красный квадрат, если нельзя; удаление — ПКМ через
+//     NucleusLayer (RemoveAllAtMouse → RemoveAt);
+//   - отрисовка (T025): шейдер black_hole_f.gdshader (PixelPlanets, MIT), вариант F
+//     «Сингулярность» — горизонт, фотонное кольцо, диск с линзой. Все ЧД — один
+//     MultiMesh (квад = след Size×Size клеток, узла на ЧД нет), под _Draw и под
+//     эффектом падения (ShowBehindParent). 1 арт-пиксель = 1 пиксель мира, при
+//     отдалении ступенями 2^n; фаза — от GlobalTick (LoopTicks), все ЧД синхронны,
+//     на паузе стоит; ниже BhLodZoom — упрощённый вид без шума и анимации. Спрайт
+//     black_hole_96px.png больше не рисуется (файл остаётся);
 //   - эффект падения.
 //
 // Эффект падения (GDD «Падение в ЧД») — только визуал: захваченный атом или
@@ -26,7 +32,7 @@ using System.Collections.Generic;
 // заводит, не обновляет и не рисует (её текущие анимации сбрасываются).
 public partial class BlackHoleLayer : Node2D
 {
-	public const string TexturePath = "res://Resources/Textures/black_hole_96px.png";
+	public const string ShaderPath = "res://Resources/Shaders/ThirdParty/PixelPlanets/black_hole_f.gdshader";
 
 	// Сторона новой ЧД в клетках слоя 1 (T006d: 4×4).
 	// У поставленной ЧД размер хранится в ней самой (и в сохранении).
@@ -42,8 +48,18 @@ public partial class BlackHoleLayer : Node2D
 	// Радиус атома на экране (px), ниже которого атом рисуется одним кружком.
 	[Export] public float FallLodPixels = 5f;
 
-	private static readonly Color HotColor = new Color(1f, 0.25f, 0.15f);
-	private static readonly Color FlashColor = new Color(0.85f, 0.6f, 1f);
+	// Цикл анимации в тиках симуляции (кратен 256): фаза = (тик mod LoopTicks) / LoopTicks.
+	[Export] public int LoopTicks = 256;
+	// Ниже этого зума — упрощённый вид (ядро, кольцо, полоса диска), без шума и анимации.
+	[Export] public float BhLodZoom = 0.15f;
+	// Рампа варианта F (Docs/Art/black-hole-visual-spec.md). Тело: ядро, внутреннее кольцо, край.
+	[Export] public Color[] BodyColors = { new("0a0812"), new("ff7ae0"), new("8a2d9e") };
+	// Диск: порядок спецификации, ярче → темнее. Индекс в шейдере растёт с (шум + расстояние до
+	// источника света), поэтому плотная полоса у горизонта — яркая, дуги и края — тёмные.
+	[Export] public Color[] DiskColors = { new("ffffff"), new("ff7ae0"), new("8a2d9e"), new("372d4d"), new("1b1629") };
+
+	private static readonly Color HotColor = new Color("ff7ae0");
+	private static readonly Color FlashColor = new Color("ff7ae0");
 	private static readonly Color AtomBodyColor = new Color(0.08f, 0.08f, 0.1f, 0.9f);
 	private static readonly Color BlockedColor = new Color(1f, 0.2f, 0.2f, 0.35f);
 
@@ -79,18 +95,23 @@ public partial class BlackHoleLayer : Node2D
 	private MultiMesh _fxMesh;
 	private float[] _fxBuffer = System.Array.Empty<float>();
 	private int _fxCapacity;
-	private bool _hadHoles;
+	private bool _hadDraw;
+
+	// Тела ЧД: MultiMesh с custom data — 8 float трансформа + 4 float (пикселей квада, альфа, 0, 0).
+	private const int BodyStride = 12;
+	private MultiMesh _bodyMesh;
+	private ShaderMaterial _bodyMaterial;
+	private float[] _bodyBuffer = System.Array.Empty<float>();
+	private int _bodyCapacity;
 
 	private NucleusLayer _nucleusLayer;
 	private EnergyLayer _energyLayer;
 	private readonly List<EnergyClusterLayer> _clusterLayers = new();
 	private BlackHoleSet _holes;
-	private Texture2D _texture;
 	private float _cellSize;
 	private bool _ready;
 
 	private bool _toolSelected;
-	private bool _hadPreview;
 	private Rect2 _viewRect;
 
 	public override void _Ready()
@@ -106,15 +127,13 @@ public partial class BlackHoleLayer : Node2D
 			if (child is EnergyClusterLayer layer)
 				_clusterLayers.Add(layer);
 
-		_texture = GD.Load<Texture2D>(TexturePath);
-		if (_texture == null) GD.PrintErr($"[BlackHoleLayer] не загрузился спрайт {TexturePath}.");
-
 		_holes = _nucleusLayer.BlackHoles;
 		_cellSize = _nucleusLayer.CellSize;
 		_atomRadius = _cellSize * 0.4f;
 		_particleRadius = _cellSize * 0.1f;
 		TextureFilter = TextureFilterEnum.Nearest;
 
+		CreateBodyMesh();
 		_fxMesh = new MultiMesh
 		{
 			TransformFormat = MultiMesh.TransformFormatEnum.Transform2D,
@@ -135,6 +154,35 @@ public partial class BlackHoleLayer : Node2D
 		});
 		SetProcessUnhandledInput(true);
 		_ready = true;
+	}
+
+	// Тела ЧД на шейдере: один MultiMesh, квад 1×1 масштабируется трансформом инстанса.
+	// Добавляется раньше эффекта и с ShowBehindParent — рисуется под _Draw (вспышки) и под падением.
+	private void CreateBodyMesh()
+	{
+		var shader = GD.Load<Shader>(ShaderPath);
+		if (shader == null) GD.PrintErr($"[BlackHoleLayer] не загрузился шейдер {ShaderPath}.");
+		_bodyMaterial = new ShaderMaterial { Shader = shader };
+		_bodyMaterial.SetShaderParameter("body_colors", BodyColors);
+		_bodyMaterial.SetShaderParameter("disk_colors", DiskColors);
+		_bodyMaterial.SetShaderParameter("n_colors", DiskColors.Length);
+
+		_bodyMesh = new MultiMesh
+		{
+			TransformFormat = MultiMesh.TransformFormatEnum.Transform2D,
+			UseCustomData = true,
+			Mesh = new QuadMesh { Size = Vector2.One },
+			// Границы на весь мир (см. _fxMesh); по экрану фильтрует FillBodyMesh.
+			CustomAabb = new Aabb(new Vector3(-1e7f, -1e7f, -1f), new Vector3(2e7f, 2e7f, 2f)),
+		};
+		AddChild(new MultiMeshInstance2D
+		{
+			Name = "BlackHolesShader",
+			Multimesh = _bodyMesh,
+			Material = _bodyMaterial,
+			TextureFilter = TextureFilterEnum.Nearest,
+			ShowBehindParent = true,
+		});
 	}
 
 	// Белый круг с мягким краем — общая текстура всех кружков эффекта
@@ -274,12 +322,76 @@ public partial class BlackHoleLayer : Node2D
 		if (_rewardFlash > 0f) _rewardFlash = Mathf.Max(0f, _rewardFlash - (float)delta);
 		UpdateViewRect();
 		UpdateEffects((float)delta);
+		FillBodyMesh();
 		FillEffectMesh();
-		// Последнюю удалённую ЧД и погасшее превью тоже нужно стереть.
+		// _Draw рисует только вспышки и красный квадрат отказа; погасшее тоже нужно стереть.
+		bool draw = (_toolSelected && !ViewLayer.IsLayer2) || _rewardFlash > 0f || AnyHitFlash();
+		if (draw || _hadDraw) QueueRedraw();
+		_hadDraw = draw;
+	}
+
+	private bool AnyHitFlash()
+	{
+		if (!ShowHitFlash) return false;
+		foreach (var fx in _fx.Values)
+			if (fx.Flash > 0f) return true;
+		return false;
+	}
+
+	// Тела видимых ЧД (и превью последним инстансом) → буфер MultiMesh. Пиксель — 1 пиксель
+	// мира; при отдалении — не мельче пикселя экрана, ступенями степени двойки (иначе сетка
+	// «плывёт» с зумом — рябь). Целое число пикселей на сторону квада при любой ступени.
+	private void FillBodyMesh()
+	{
+		var cam = GetViewport().GetCamera2D();
+		float zoom = cam != null ? cam.Zoom.X : 1f;
+		float pixel = 1f;
+		if (zoom < 1f) pixel = Mathf.Pow(2f, Mathf.Ceil(Mathf.Log(1f / zoom) / Mathf.Log(2f) - 1e-4f));
+
 		bool preview = _toolSelected && !ViewLayer.IsLayer2;
-		if (_holes.Count > 0 || _hadHoles || preview || _hadPreview || _rewardFlash > 0f) QueueRedraw();
-		_hadHoles = _holes.Count > 0;
-		_hadPreview = preview;
+		var (prow, pcol) = preview ? CellUnderMouse() : (0, 0);
+		preview = preview && PlaceBlockReason(prow, pcol, BlackHoleSize) == null;
+
+		int needed = (preview ? 1 : 0) + _holes.Count;
+		if (needed > _bodyCapacity)
+		{
+			_bodyCapacity = Mathf.Max(needed, _bodyCapacity * 2);
+			_bodyBuffer = new float[_bodyCapacity * BodyStride];
+			_bodyMesh.InstanceCount = _bodyCapacity; // растёт только до пика, не каждый кадр
+		}
+
+		int n = 0;
+		foreach (var hole in _holes.Enumerate())
+			if (_viewRect.Intersects(HoleRect(hole))) PutBody(ref n, hole.Row, hole.Col, hole.Size, pixel, 1f);
+		if (preview) PutBody(ref n, prow, pcol, BlackHoleSize, pixel, 0.5f);
+
+		if (n > 0) RenderingServer.MultimeshSetBuffer(_bodyMesh.GetRid(), _bodyBuffer);
+		_bodyMesh.VisibleInstanceCount = n;
+
+		int loop = Mathf.Max(256, LoopTicks);
+		long tick = _nucleusLayer.GlobalTick;
+		float phase = ((float)(tick % loop) + _nucleusLayer.SubTickFraction) / loop;
+		_bodyMaterial.SetShaderParameter("phase", phase);
+		_bodyMaterial.SetShaderParameter("lod", zoom < BhLodZoom);
+	}
+
+	private void PutBody(ref int n, int row, int col, int size, float pixel, float alpha)
+	{
+		float footprint = size * _cellSize;
+		// Не меньше 6 арт-пикселей на сторону: на очень мелких ступенях пиксель становится
+		// мельче пикселя экрана, зато след не раздувается.
+		float px = pixel;
+		while (px > 1f && footprint / px < 6f) px /= 2f;
+		int quadPx = Mathf.Max(6, Mathf.RoundToInt(footprint / px));
+		float side = quadPx * px;
+		var center = new Vector2((col + size / 2f) * _cellSize, (row + size / 2f) * _cellSize);
+
+		int o = n * BodyStride;
+		var b = _bodyBuffer;
+		b[o] = side; b[o + 1] = 0f; b[o + 2] = 0f; b[o + 3] = center.X;
+		b[o + 4] = 0f; b[o + 5] = side; b[o + 6] = 0f; b[o + 7] = center.Y;
+		b[o + 8] = quadPx; b[o + 9] = alpha; b[o + 10] = 0f; b[o + 11] = 0f;
+		n++;
 	}
 
 	private void UpdateEffects(float dt)
@@ -323,21 +435,19 @@ public partial class BlackHoleLayer : Node2D
 		{
 			var rect = HoleRect(hole);
 			if (!_viewRect.Intersects(rect)) continue;
-			if (_texture != null) DrawTextureRect(_texture, rect, false);
 			if (ShowHitFlash && _fx.TryGetValue(hole, out var fx) && fx.Flash > 0f) DrawFlash(hole, fx.Flash);
 			if (_rewardFlash > 0f) DrawRewardFlash(hole);
 		}
 		if (_toolSelected && !ViewLayer.IsLayer2) DrawPreview();
 	}
 
-	// Превью под курсором: полупрозрачный спрайт или красный квадрат, если нельзя.
+	// Превью под курсором: красный квадрат, если нельзя (сама полупрозрачная ЧД — в FillBodyMesh).
 	private void DrawPreview()
 	{
 		var (row, col) = CellUnderMouse();
 		int size = BlackHoleSize;
 		var rect = new Rect2(col * _cellSize, row * _cellSize, size * _cellSize, size * _cellSize);
 		if (PlaceBlockReason(row, col, size) != null) DrawRect(rect, BlockedColor);
-		else if (_texture != null) DrawTextureRect(_texture, rect, false, new Color(1f, 1f, 1f, 0.5f));
 	}
 
 	// Вспышка диска при попадании.

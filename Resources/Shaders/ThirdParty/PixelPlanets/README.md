@@ -15,3 +15,4 @@
 - `black_hole_disk_loop.gdshader` — аккреционный диск, производное от `Planets/BlackHole/BlackHoleRing.gdshader`:
   время заменено на `phase` 0..1 (`loop_turns`, `wobble_cycles` — целые, петля бесшовная). Утверждённый вид — вариант F,
   параметры и цвета — `Docs/Art/black-hole-visual-spec.md`.
+- `black_hole_f.gdshader` — игровой шейдер ЧД (T025): тело и диск в одном кваде для MultiMesh, см. шапку файла и `CLAUDE.md`.
