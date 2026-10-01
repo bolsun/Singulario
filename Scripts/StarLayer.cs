@@ -45,15 +45,16 @@ public partial class StarLayer : Node2D
 	[Export] public int LoopTicks = 512;
 	// Простой: тело дрейфует в IdleSlowdown раз медленнее работы (целое — цикл бесшовный), без короны.
 	[Export] public int IdleSlowdown = 4;
-	// Диаметр тела в клетках; квад с короной — CoronaScale диаметров тела.
-	[Export] public float BodyDiameterCells = 2.2f;
+	// Диаметр тела — доля стороны следа (T027, спецификация типов: 2,2 / 3,7 / 5,1
+	// клетки у 3×3 / 5×5 / 7×7); квад с короной — CoronaScale диаметров тела.
+	[Export] public float BodyFraction = 2.2f / 3f;
 	[Export] public float CoronaScale = 2f;
 	// Только вид (занимаемые клетки не меняются): 2 — посмотреть гиганта 6×6.
 	[Export] public float DebugVisualScale = 1f;
 	// Ниже этого зума — диск тона 3 с краем тона 1, без поверхности и короны.
 	[Export] public float StarLodZoom = 0.15f;
-	// Сид на тир (Ж, К, С, З), как в мастерской PixelPlanets.
-	[Export] public int[] TierSeeds = { 753, 753, 753, 753 };
+	// Сид на тип (Ж, К, С; З — запас), как в мастерской PixelPlanets.
+	[Export] public int[] TierSeeds = { 753, 412, 961, 753 };
 	// Шеврон выхода у давно забитой звезды: тиков на ступень пульса.
 	[Export] public int ChevronStepTicks = 24;
 
@@ -153,7 +154,7 @@ public partial class StarLayer : Node2D
 	private const float ModeLabelSeconds = 1.5f;
 	private const float ModeLabelFadeSeconds = 0.4f;
 
-	private int? _toolTier;
+	private int? _toolType;
 	private bool _hadPreview;
 	private bool _hadStars;
 	private bool _hadPickups;
@@ -178,12 +179,12 @@ public partial class StarLayer : Node2D
 		_cellSize = _nucleusLayer.CellSize;
 		TextureFilter = TextureFilterEnum.Nearest;
 
-		float side = Star.Size * _cellSize;
+		// Квад 1×1 — сторона следа задаётся трансформом инстанса (размер по типу, T027).
 		_mesh = new MultiMesh
 		{
 			TransformFormat = MultiMesh.TransformFormatEnum.Transform2D,
 			UseCustomData = true,
-			Mesh = new QuadMesh { Size = new Vector2(side, side) },
+			Mesh = new QuadMesh { Size = Vector2.One },
 			// Как у эффекта ЧД: границы на весь мир, иначе canvas item отсекает
 			// MultiMesh по прямоугольнику, закэшированному, пока он был пуст.
 			CustomAabb = new Aabb(new Vector3(-1e7f, -1e7f, -1f), new Vector3(2e7f, 2e7f, 2f)),
@@ -291,18 +292,29 @@ public partial class StarLayer : Node2D
 
 	// --- инструмент (панель слоя 1) ---
 
-	public void SelectTool(int tier)
+	// Тип звезды (T027): 0 Ж печь, 1 К фабрика, 2 С сверхгигант.
+	public void SelectTool(int type)
 	{
-		if (!_ready) return;
+		if (!_ready || !StarCatalog.IsType(type)) return;
 		_nucleusLayer.ClearSelection(); // сбрасывает и этот инструмент
 		_energyLayer?.ClearSelection();
 		foreach (var layer in _clusterLayers) layer.ClearSelection();
-		_toolTier = tier;
-		GD.Print($"[StarLayer] выбрана звезда тира {tier}: ЛКМ — поставить (центр под курсором), ПКМ — удалить.");
+		_toolType = type;
+		var t = _nucleusLayer.Catalog.TypeOf(type);
+		GD.Print($"[StarLayer] выбрана звезда «{t.Name}» {t.Size}×{t.Size}: ЛКМ — поставить (центр под курсором), ПКМ — удалить.");
 	}
 
-	public void ClearTool() => _toolTier = null;
-	public bool HasTool => _toolTier.HasValue;
+	public void ClearTool() => _toolType = null;
+	public bool HasTool => _toolType.HasValue;
+
+	// Короткая надпись по центру сверху (как у F6) — для F9 (перезагрузка рецептов).
+	public void ShowMessage(string text)
+	{
+		if (!_ready) return;
+		_modeLabel.Text = text;
+		_modeLabel.Visible = true;
+		_modeLabelLeft = ModeLabelSeconds;
+	}
 
 	public override void _UnhandledInput(InputEvent @event)
 	{
@@ -329,39 +341,47 @@ public partial class StarLayer : Node2D
 			GetViewport().SetInputAsHandled();
 			return;
 		}
-		// ЛКМ по звезде — следующий доступный рецепт (в настоящем режиме —
-		// только открытые заданиями, T011; в песочнице — все), с любым инструментом.
+		// ЛКМ по звезде (T027), с любым инструментом: печь — выход на следующую
+		// сторону (как R); фабрика — следующий доступный рецепт своего типа (в
+		// настоящем режиме — только открытые заданиями, T011); С — ничего.
 		if (_stars.TryGetAt(row, col, out var star))
 		{
-			int next = NextAvailableRecipe(star.Recipe);
-			if (next < 0)
-				GD.Print($"[StarLayer] звезда ({star.Row},{star.Col}): других открытых рецептов нет (текущий «{star.RecipeData.Name}»).");
-			else
-			{
-				bool burned = star.SetRecipe(next);
-				GD.Print($"[StarLayer] звезда ({star.Row},{star.Col}): рецепт «{star.RecipeData.Name}».{(burned ? " Ингредиенты в работе и в буфере сгорели." : "")}");
-			}
+			if (star.Choice == StarChoice.Auto) _nucleusLayer.TurnStarOutput(star);
+			else if (star.Choice == StarChoice.Player) NextRecipe(star);
 			GetViewport().SetInputAsHandled();
 			return;
 		}
-		if (_toolTier.HasValue)
+		if (_toolType.HasValue)
 		{
-			PlaceFromTool(row - Star.Size / 2, col - Star.Size / 2, _toolTier.Value);
+			int size = _nucleusLayer.Catalog.TypeOf(_toolType.Value).Size;
+			PlaceFromTool(row - size / 2, col - size / 2, _toolType.Value);
 			GetViewport().SetInputAsHandled();
 		}
 	}
 
-	// Установка инструментом (T011): в настоящем режиме тратит звезду тира из
+	private void NextRecipe(Star star)
+	{
+		string next = _nucleusLayer.Catalog.NextRecipe(star.Type, star.RecipeId, _nucleusLayer.RecipeAvailable);
+		if (next == null)
+			GD.Print($"[StarLayer] звезда ({star.Row},{star.Col}): других открытых рецептов нет (текущий «{star.Recipe?.Name}»).");
+		else
+		{
+			bool burned = star.SetRecipe(next);
+			GD.Print($"[StarLayer] звезда ({star.Row},{star.Col}): рецепт «{star.Recipe?.Name}».{(burned ? " Ингредиенты в работе и в буфере сгорели." : "")}");
+		}
+	}
+
+	// Установка инструментом (T011): в настоящем режиме тратит звезду типа из
 	// инвентаря; нет звезды — отказ. Шаблоны и загрузка ставят бесплатно (TryPlace).
-	private void PlaceFromTool(int row, int col, int tier)
+	private void PlaceFromTool(int row, int col, int type)
 	{
 		var inventory = _nucleusLayer.Inventory;
-		if (!inventory.CanAffordStar(tier))
+		if (!inventory.CanAffordStar(type))
 		{
-			GD.Print($"[StarLayer] нет звезды тира {tier} в инвентаре — не ставится.");
+			GD.Print($"[StarLayer] нет звезды типа {type} в инвентаре — не ставится.");
 			return;
 		}
-		if (TryPlace(row, col, tier, log: true) != null) inventory.TrySpendStar(tier);
+		if (TryPlace(row, col, type, log: true) != null) inventory.TrySpendStar(type);
 	}
 
 	// Выходной буфер звезды → инвентарь (T008): все предметы или один, самый
@@ -438,62 +458,36 @@ public partial class StarLayer : Node2D
 		return (Mathf.FloorToInt(p.Y / _cellSize), Mathf.FloorToInt(p.X / _cellSize));
 	}
 
-	// Причина, по которой звезду нельзя поставить (верхняя левая клетка), или null.
-	private string PlaceBlockReason(int row, int col)
+	// Причина, по которой звезду стороны size нельзя поставить (верхняя левая клетка), или null.
+	public string PlaceBlockReason(int row, int col, int size)
 	{
-		if (_stars.Overlaps(row, col, Star.Size)) return "пересекается с другой звездой";
-		for (int r = row; r < row + Star.Size; r++)
-			for (int c = col; c < col + Star.Size; c++)
+		if (_stars.Overlaps(row, col, size)) return "пересекается с другой звездой";
+		for (int r = row; r < row + size; r++)
+			for (int c = col; c < col + size; c++)
 				if (!_nucleusLayer.CanPlaceStarCell(r, c)) return $"клетка ({r},{c}) занята";
 		return null;
 	}
 
-	// Установка звезды (инструмент и загрузка сохранения). Рецепт по умолчанию —
-	// атом тира звезды (если такой рецепт есть).
-	public Star TryPlace(int row, int col, int tier, bool log, int? recipe = null)
+	// Установка звезды (инструмент, загрузка, шаблоны). Рецепт фабрики не задан —
+	// первый доступный своего типа (StarCatalog.DefaultRecipe).
+	public Star TryPlace(int row, int col, int type, bool log, string recipe = null)
 	{
-		if (!_ready) return null;
-		string reason = PlaceBlockReason(row, col);
+		if (!_ready || !StarCatalog.IsType(type)) return null;
+		var catalog = _nucleusLayer.Catalog;
+		int size = catalog.TypeOf(type).Size;
+		string reason = PlaceBlockReason(row, col, size);
 		if (reason != null)
 		{
 			if (log) GD.Print($"[StarLayer] звезда в клетку ({row},{col}): {reason} — пропуск.");
 			return null;
 		}
-		var star = new Star(row, col, tier, recipe ?? DefaultRecipe(tier));
+		var star = new Star(row, col, type, catalog, recipe ?? catalog.DefaultRecipe(type, _nucleusLayer.RecipeAvailable));
 		_stars.Add(star);
-		if (log) GD.Print($"[StarLayer] установлена звезда тира {tier} в клетке ({row},{col}), рецепт «{star.RecipeData.Name}».");
+		if (log) GD.Print($"[StarLayer] установлена звезда «{star.TypeData.Name}» в клетке ({row},{col}){(star.Recipe != null ? $", рецепт «{star.Recipe.Name}»" : "")}.");
 		return star;
 	}
 
-	// Следующий после current доступный рецепт по кругу; -1 — кроме current доступных нет.
-	private int NextAvailableRecipe(int current)
-	{
-		for (int step = 1; step < StarRecipes.Count; step++)
-		{
-			int i = (current + step) % StarRecipes.Count;
-			if (_nucleusLayer.IsRecipeAvailable(i)) return i;
-		}
-		return -1;
-	}
-
-	// Рецепт новой звезды: доступный «атом тира звезды», иначе первый доступный,
-	// иначе «атом тира звезды» (рецепты ещё не открыты — звезда ждёт).
-	private int DefaultRecipe(int tier)
-	{
-		int own = -1, firstAvailable = -1;
-		for (int i = 0; i < StarRecipes.Count; i++)
-		{
-			var r = StarRecipes.All[i];
-			bool isOwn = r.Kind == RecipeResult.Atom && r.ResultTier == tier;
-			if (isOwn && own < 0) own = i;
-			if (!_nucleusLayer.IsRecipeAvailable(i)) continue;
-			if (isOwn) return i;
-			if (firstAvailable < 0) firstAvailable = i;
-		}
-		return firstAvailable >= 0 ? firstAvailable : System.Math.Max(0, own);
-	}
-
-	// Удаление звезды по ПКМ после удержания 0,1 с × 3 (T026, RemoveHold); вызывает NucleusLayer.RemoveAllAtMouse.
+	// Удаление звезды по ПКМ после удержания 0,1 с × сторона (T026, RemoveHold); вызывает NucleusLayer.RemoveAllAtMouse.
 	// Недособранные ингредиенты сгорают. Настоящий режим (T011, GDD «звезду
 	// можно забрать ПКМ и переставить»): звезда и её выходной буфер — в инвентарь.
 	public void RemoveAt(int row, int col)
@@ -507,7 +501,7 @@ public partial class StarLayer : Node2D
 		{
 			int items = star.Output.Count;
 			while (star.Output.Count > 0) inventory.AddItem(star.Output.Dequeue());
-			inventory.AddStar(star.Tier);
+			inventory.AddStar(star.Type);
 			refunded = $" В инвентарь: звезда{(items > 0 ? $" и {items} предмет(ов) из буфера" : "")}.";
 		}
 		GD.Print($"[StarLayer] удалена звезда из клетки ({star.Row},{star.Col}).{burned}{refunded}");
@@ -542,10 +536,13 @@ public partial class StarLayer : Node2D
 	}
 
 	private Vector2 StarCenter(Star s) =>
-		new Vector2((s.Col + Star.Size / 2f) * _cellSize, (s.Row + Star.Size / 2f) * _cellSize);
+		new Vector2((s.Col + s.Size / 2f) * _cellSize, (s.Row + s.Size / 2f) * _cellSize);
 
 	private Rect2 StarRect(Star s) =>
-		new Rect2(s.Col * _cellSize, s.Row * _cellSize, Star.Size * _cellSize, Star.Size * _cellSize);
+		new Rect2(s.Col * _cellSize, s.Row * _cellSize, s.Size * _cellSize, s.Size * _cellSize);
+
+	// Масштаб вида от звезды 3×3 (числа вида заданы для неё).
+	private static float SizeScale(Star s) => s.Size / 3f;
 
 	private void UpdateViewRect()
 	{
@@ -607,10 +604,7 @@ public partial class StarLayer : Node2D
 		var colors = _nucleusLayer.TierPreviewColors;
 		var cam = GetViewport().GetCamera2D();
 		float zoom = cam != null ? cam.Zoom.X : 1f;
-		float endR = DiskRadiusCells * _cellSize * IntakeEndFraction;
 		float fade = Mathf.Clamp(IntakeFadeFraction, 0.01f, 1f);
-		// Дуга не выходит за корону: начальный радиус не дальше её края.
-		float coronaR = BodyDiameterCells * CoronaScale * 0.5f * DebugVisualScale * _cellSize;
 		// В мире Godot ось Y вниз: рост угла atan2 — по часовой на экране.
 		float sweep = IntakeArcTurns * Mathf.Tau * (IntakeArcClockwise ? 1f : -1f);
 		int n = 0;
@@ -619,6 +613,9 @@ public partial class StarLayer : Node2D
 			var fx = pair.Value;
 			if (fx.Count == 0) continue;
 			var center = StarCenter(pair.Key);
+			float endR = DiskRadiusCells * SizeScale(pair.Key) * _cellSize * IntakeEndFraction;
+			// Дуга не выходит за корону: начальный радиус не дальше её края.
+			float coronaR = BodyFraction * pair.Key.Size * CoronaScale * 0.5f * DebugVisualScale * _cellSize;
 			for (int i = 0; i < fx.Count; i++)
 			{
 				ref var f = ref fx.Items[i];
@@ -683,7 +680,7 @@ public partial class StarLayer : Node2D
 		UpdateModeLabel((float)delta);
 		FillEffectMesh();
 		UpdateMesh();
-		bool preview = _toolTier.HasValue && !ViewLayer.IsLayer2;
+		bool preview = _toolType.HasValue && !ViewLayer.IsLayer2;
 		// _hadStars — ещё один кадр после удаления последней звезды, чтобы стереть её рецепт.
 		bool pickups = _pickups.Count > 0;
 		if (_stars.Count > 0 || _hadStars || preview || _hadPreview || pickups || _hadPickups) QueueRedraw();
@@ -714,10 +711,10 @@ public partial class StarLayer : Node2D
 		for (int i = 0; i < stars.Count; i++)
 		{
 			var s = stars[i];
-			var center = new Vector2((s.Col + Star.Size / 2f) * _cellSize, (s.Row + Star.Size / 2f) * _cellSize);
-			_mesh.SetInstanceTransform2D(i, new Transform2D(0f, center));
-			bool working = s.Producing && s.Elapsed < _nucleusLayer.StarDuration(s);
-			float rowUv = (s.Tier + 0.5f) / _nucleusLayer.TierCount;
+			float side = s.Size * _cellSize;
+			_mesh.SetInstanceTransform2D(i, new Transform2D(new Vector2(side, 0f), new Vector2(0f, side), StarCenter(s)));
+			bool working = StateOf(s) == StarState.Working;
+			float rowUv = (s.Type + 0.5f) / _nucleusLayer.TierCount;
 			float glow = working ? ProducingGlow + ProducingPulse * pulse : 0f;
 			float dim = working ? 0f : IdleDim;
 			_mesh.SetInstanceCustomData(i, new Color(rowUv, glow, dim, 0f));
@@ -726,10 +723,10 @@ public partial class StarLayer : Node2D
 
 	public enum StarState { Working = 0, Idle = 1, Blocked = 2 }
 
-	// Публично — для свечения звезды (T020).
+	// Публично — для свечения звезды (T020). С (без рецептов) — всегда простой.
 	public StarState StateOf(Star s) =>
-		!s.Producing ? StarState.Idle
-		: s.Elapsed < _nucleusLayer.StarDuration(s) ? StarState.Working
+		!s.Producing || s.Choice == StarChoice.None ? StarState.Idle
+		: s.Elapsed < s.Duration ? StarState.Working
 		: StarState.Blocked;
 
 	// Звезда на шейдере. Пиксель — 1 пиксель мира; при отдалении — не мельче пикселя
@@ -741,12 +738,6 @@ public partial class StarLayer : Node2D
 		float zoom = cam != null ? cam.Zoom.X : 1f;
 		float pixel = 1f;
 		if (zoom < 1f) pixel = Mathf.Pow(2f, Mathf.Ceil(Mathf.Log(1f / zoom) / Mathf.Log(2f) - 1e-4f));
-		float diameter = BodyDiameterCells * _cellSize * Mathf.Max(DebugVisualScale, 0.01f);
-		int bodyPx = Mathf.Max(2, 2 * Mathf.RoundToInt(diameter / pixel / 2f));
-		int margin = Mathf.Max(0, Mathf.RoundToInt(bodyPx * (Mathf.Max(CoronaScale, 1f) - 1f) / 2f));
-		int quadPx = bodyPx + 2 * margin;
-		float side = quadPx * pixel;
-
 		int loop = Mathf.Max(256, LoopTicks);
 		long tick = _nucleusLayer.GlobalTick;
 		float phase = ((float)(tick % loop) + _nucleusLayer.SubTickFraction) / loop;
@@ -759,8 +750,14 @@ public partial class StarLayer : Node2D
 		for (int i = 0; i < stars.Count; i++)
 		{
 			var s = stars[i];
+			// Тело — доля стороны следа (размер по типу, T027).
+			float diameter = BodyFraction * s.Size * _cellSize * Mathf.Max(DebugVisualScale, 0.01f);
+			int bodyPx = Mathf.Max(2, 2 * Mathf.RoundToInt(diameter / pixel / 2f));
+			int margin = Mathf.Max(0, Mathf.RoundToInt(bodyPx * (Mathf.Max(CoronaScale, 1f) - 1f) / 2f));
+			int quadPx = bodyPx + 2 * margin;
+			float side = quadPx * pixel;
 			_shaderMesh.SetInstanceTransform2D(i, new Transform2D(new Vector2(side, 0f), new Vector2(0f, side), StarCenter(s)));
-			_shaderMesh.SetInstanceCustomData(i, new Color(s.Tier, (int)StateOf(s), bodyPx, quadPx));
+			_shaderMesh.SetInstanceCustomData(i, new Color(s.Type, (int)StateOf(s), bodyPx, quadPx));
 		}
 	}
 
@@ -793,7 +790,7 @@ public partial class StarLayer : Node2D
 		var outCenter = new Vector2((ocol + 0.5f) * _cellSize, (orow + 0.5f) * _cellSize);
 		var dir = (outCenter - center).Normalized();
 		var perp = new Vector2(-dir.Y, dir.X);
-		float edge = Star.Size / 2f * _cellSize;
+		float edge = star.Size / 2f * _cellSize;
 		float h = _cellSize * 0.22f;
 		var tip = center + dir * (edge + h * 0.5f);
 		var back = center + dir * (edge - h * 0.5f);
@@ -805,17 +802,17 @@ public partial class StarLayer : Node2D
 		if (!_ready || ViewLayer.IsLayer2) return;
 		var hovered = StarUnderMouse();
 		foreach (var star in _stars.All) DrawStarInfo(star, star == hovered);
-		if (_toolTier.HasValue) DrawPreview();
+		if (_toolType.HasValue) DrawPreview();
 		DrawPickups();
 	}
 
-	// Звезда, над одной из 9 клеток которой или над клеткой выхода которой курсор.
+	// Звезда, над клеткой следа которой или над клеткой выхода которой курсор.
 	private Star StarUnderMouse()
 	{
 		var (row, col) = CellUnderMouse();
 		if (_stars.TryGetAt(row, col, out var star)) return star;
 		foreach (var s in _stars.All)
-			if (s.OutputCell == (row, col)) return s;
+			if (s.Choice != StarChoice.None && s.OutputCell == (row, col)) return s;
 		return null;
 	}
 
@@ -828,25 +825,29 @@ public partial class StarLayer : Node2D
 		return colors != null && tier >= 0 && tier < colors.Length ? colors[tier] : Colors.White;
 	}
 
-	// Рецепт (атом-результат в центре), прогресс работы (дуга), буфер (подписи
+	// Рецепт (результат в центре), прогресс работы (дуга), буфер (подписи
 	// «набрано/нужно» цветом ингредиента), выходной буфер (T008) и клетка выхода (рамка). Дуга — всегда
-	// (статус), остальное — только у звезды под курсором (hovered).
+	// (статус), остальное — только у звезды под курсором (hovered). Печь (T027):
+	// значок — что делает сейчас (в простое нет), подписи — что набрано. С — ничего.
 	private void DrawStarInfo(Star star, bool hovered)
 	{
-		var center = new Vector2((star.Col + Star.Size / 2f) * _cellSize, (star.Row + Star.Size / 2f) * _cellSize);
-		var recipe = star.RecipeData;
+		if (star.Choice == StarChoice.None) return;
+		var center = StarCenter(star);
+		float scale = SizeScale(star);
+		bool furnace = star.Choice == StarChoice.Auto;
+		var recipe = furnace ? star.ActiveRecipe : star.Recipe;
 
 		if (star.Producing)
 		{
-			int duration = _nucleusLayer.StarDuration(star);
+			int duration = star.Duration;
 			float t = Mathf.Clamp((float)star.Elapsed / duration, 0f, 1f);
 			var arcColor = t >= 1f ? new Color(1f, 0.35f, 0.3f, 0.9f) : new Color(1f, 1f, 1f, 0.85f); // красная — готово, выходной буфер полон
-			// Шейдер (T017): цвета из палитры — тон 3 тира, забитый выход — #d23a4a.
-			if (UseShader) arcColor = t >= 1f ? BlockedArcColor : TierTone(star.Tier, 3);
-			DrawArc(center, _cellSize * 0.6f, -Mathf.Pi / 2f, -Mathf.Pi / 2f + Mathf.Tau * t, 32, arcColor, _cellSize * 0.08f);
+			// Шейдер (T017): цвета из палитры — тон 3 типа, забитый выход — #d23a4a.
+			if (UseShader) arcColor = t >= 1f ? BlockedArcColor : TierTone(star.Type, 3);
+			DrawArc(center, _cellSize * 0.6f * scale, -Mathf.Pi / 2f, -Mathf.Pi / 2f + Mathf.Tau * t, 32, arcColor, _cellSize * 0.08f);
 		}
 		// Выход забит дольше одного цикла рецепта — шеврон выхода мягко пульсирует (без наведения).
-		if (UseShader && BlockedTicks(star) > _nucleusLayer.StarDuration(star))
+		if (UseShader && BlockedTicks(star) > star.Duration)
 		{
 			int step = System.Math.Max(1, ChevronStepTicks);
 			int i = (int)(_nucleusLayer.GlobalTick / step % ChevronPulse.Length);
@@ -856,42 +857,63 @@ public partial class StarLayer : Node2D
 
 		float icon = _cellSize * 0.8f;
 		// Значок результата: атом — ядро цвета тира, звезда (T011) — спрайт звезды.
-		var iconTex = recipe.Kind == RecipeResult.Star ? _texture : _nucleusLayer.CoreTexture;
-		if (recipe.Kind == RecipeResult.Star) icon *= 1.4f;
-		if (iconTex != null)
-			DrawTextureRect(iconTex, new Rect2(center - new Vector2(icon, icon) / 2f, new Vector2(icon, icon)), false, TierColor(recipe.ResultTier));
+		if (recipe != null)
+		{
+			var iconTex = recipe.Kind == RecipeResult.Star ? _texture : _nucleusLayer.CoreTexture;
+			if (recipe.Kind == RecipeResult.Star) icon *= 1.4f;
+			if (iconTex != null)
+				DrawTextureRect(iconTex, new Rect2(center - new Vector2(icon, icon) / 2f, new Vector2(icon, icon)), false, TierColor(recipe.ResultId));
+		}
 
 		var font = ThemeDB.FallbackFont;
 		int fontSize = Mathf.Max(6, Mathf.RoundToInt(_cellSize * 0.3f));
 		float y = center.Y + _cellSize * 0.75f;
-		for (int i = 0; i < recipe.Ingredients.Length; i++)
+		// Подписи: фабрика — «набрано/нужно» по ингредиентам рецепта; печь — что набрано.
+		_labels.Clear();
+		if (furnace)
 		{
-			var ing = recipe.Ingredients[i];
-			string text = ing.Kind == IngredientKind.Atom ? $"◯{star.Buffer[i]}/{ing.Count}" : $"•{star.Buffer[i]}/{ing.Count}";
-			float x = center.X + (i - (recipe.Ingredients.Length - 1) / 2f) * _cellSize * 0.9f - _cellSize * 0.4f;
-			DrawString(font, new Vector2(x, y + fontSize * 0.35f), text, HorizontalAlignment.Left, -1, fontSize, TierColor(ing.Id));
+			for (int slot = 0; slot < star.Buffer.Length; slot++)
+				if (star.Buffer[slot] > 0) _labels.Add((slot, $"{SlotMark(slot)}{star.Buffer[slot]}"));
+		}
+		else if (recipe != null)
+		{
+			foreach (var ing in recipe.Ingredients)
+				_labels.Add((ing.Slot, $"{SlotMark(ing.Slot)}{star.Buffer[ing.Slot]}/{ing.Count}"));
+		}
+		for (int i = 0; i < _labels.Count; i++)
+		{
+			var (slot, text) = _labels[i];
+			float x = center.X + (i - (_labels.Count - 1) / 2f) * _cellSize * 0.9f - _cellSize * 0.4f;
+			DrawString(font, new Vector2(x, y + fontSize * 0.35f), text, HorizontalAlignment.Left, -1, fontSize, TierColor(slot % StarCatalog.ColorCount));
 		}
 		// Выходной буфер (T008) — строкой под ингредиентами.
-		string output = string.Format(Tr("в буфере: {0} / {1}"), star.Output.Count, _nucleusLayer.StarOutputCapacity);
+		string output = string.Format(Tr("в буфере: {0} / {1}"), star.Output.Count, star.OutputCapacity);
 		var outSize = font.GetStringSize(output, HorizontalAlignment.Left, -1, fontSize);
 		DrawString(font, new Vector2(center.X - outSize.X / 2f, y + fontSize * 1.6f), output, HorizontalAlignment.Left, -1, fontSize, Colors.White);
 
 		var (orow, ocol) = star.OutputCell;
 		var outRect = new Rect2(ocol * _cellSize, orow * _cellSize, _cellSize, _cellSize).Grow(-_cellSize * 0.06f);
-		DrawRect(outRect, new Color(TierColor(star.Tier), 0.9f), false, _cellSize * 0.06f);
+		DrawRect(outRect, new Color(TierColor(star.Type), 0.9f), false, _cellSize * 0.06f);
 	}
+
+	private readonly System.Collections.Generic.List<(int slot, string text)> _labels = new();
+
+	// Знак ячейки буфера: ◯ — атом-предмет, • — частица.
+	private static string SlotMark(int slot) => slot >= StarCatalog.ColorCount ? "◯" : "•";
 
 	private void DrawPreview()
 	{
+		int type = _toolType.Value;
+		int size = _nucleusLayer.Catalog.TypeOf(type).Size;
 		var (row, col) = CellUnderMouse();
-		row -= Star.Size / 2;
-		col -= Star.Size / 2;
-		var rect = new Rect2(col * _cellSize, row * _cellSize, Star.Size * _cellSize, Star.Size * _cellSize);
-		if (PlaceBlockReason(row, col) != null || !_nucleusLayer.Inventory.CanAffordStar(_toolTier.Value)) DrawRect(rect, BlockedColor);
+		row -= size / 2;
+		col -= size / 2;
+		var rect = new Rect2(col * _cellSize, row * _cellSize, size * _cellSize, size * _cellSize);
+		if (PlaceBlockReason(row, col, size) != null || !_nucleusLayer.Inventory.CanAffordStar(type)) DrawRect(rect, BlockedColor);
 		else if (_texture != null)
 		{
 			var colors = _nucleusLayer.TierPreviewColors;
-			var tint = colors != null && _toolTier.Value < colors.Length ? colors[_toolTier.Value] : Colors.White;
+			var tint = colors != null && type < colors.Length ? colors[type] : Colors.White;
 			DrawTextureRect(_texture, rect, false, new Color(tint, 0.6f));
 		}
 	}

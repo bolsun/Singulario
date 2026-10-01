@@ -58,11 +58,8 @@
     {
       "Row": 6,
       "Col": 6,
-      "Tier": 0,
-      "Recipe": 0,
+      "Type": 0,
       "OutputSide": 2,
-      "Buffer": [],
-      "Producing": false,
       "Elapsed": 0,
       "Output": []
     }

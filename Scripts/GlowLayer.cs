@@ -343,10 +343,11 @@ public partial class GlowLayer : Node
 		float phase = ((float)(_layer.GlobalTick % loop) + _layer.SubTickFraction) / loop;
 		float breath = 1f + StarBreath * Mathf.Sin(Mathf.Tau * phase * StarBreathCycles);
 		float cell = _layer.CellSize;
-		float side = 2f * StarRadiusCells * cell;
 		for (int i = 0; i < count; i++)
 		{
 			var s = stars[i];
+			// Радиус пятна задан для звезды 3×3, растёт со стороной следа (T027).
+			float side = 2f * StarRadiusCells * s.Size / 3f * cell;
 			var state = _starLayer?.StateOf(s) ?? StarLayer.StarState.Working;
 			float strength = state switch
 			{
@@ -354,9 +355,9 @@ public partial class GlowLayer : Node
 				StarLayer.StarState.Blocked => StarBlockedStrength,
 				_ => StarIdleStrength,
 			};
-			var center = new Vector2((s.Col + Star.Size / 2f) * cell, (s.Row + Star.Size / 2f) * cell);
+			var center = new Vector2((s.Col + s.Size / 2f) * cell, (s.Row + s.Size / 2f) * cell);
 			mm.SetInstanceTransform2D(i, new Transform2D(new Vector2(side, 0f), new Vector2(0f, side), center));
-			mm.SetInstanceCustomData(i, TierWeights(s.Tier, strength));
+			mm.SetInstanceCustomData(i, TierWeights(s.Type, strength));
 		}
 	}
 }

@@ -58,7 +58,8 @@ public partial class GridDraw : Node2D
     // отдельно для ЧД и звезды; в шейдер — не больше MaxWarpObjects ближайших к
     // центру экрана (из тех, чей след с запасом виден). Вкл/выкл — Shift+G.
     [Export] public float BlackHoleWarp = 0.25f;
-    [Export] public float StarWarp = 0.12f; // звезда меньше ЧД — прогиб слабее
+    // Звезда — по типу (T027, Ж 3×3 / К 5×5 / С 7×7); меньше ЧД — главный центр взгляда.
+    [Export] public float[] StarWarpByType = { 0.12f, 0.16f, 0.2f };
     [Export] public int MaxWarpObjects = 16;
     private const int WarpCapacity = 16; // размер массива warp_objects в grid.gdshader
 
@@ -212,6 +213,9 @@ public partial class GridDraw : Node2D
     // Объекты прогиба: центр следа, полусторона, сила (мировые единицы). Порядок —
     // по расстоянию до центра экрана, при равенстве — по порядку обхода наборов
     // (ЧД и звёзды хранятся упорядоченно), так что выбор детерминирован.
+    private float StarWarpOf(int type) =>
+        StarWarpByType != null && StarWarpByType.Length > 0 ? StarWarpByType[System.Math.Clamp(type, 0, StarWarpByType.Length - 1)] : 0f;
+
     private void UpdateWarp(Rect2 visibleRect, Vector2 screenCenter)
     {
         _warpScratch.Clear();
@@ -223,7 +227,7 @@ public partial class GridDraw : Node2D
                     AddWarp(view, screenCenter, hole.Row, hole.Col, hole.Size, BlackHoleWarp);
             if (_nucleusLayer.Stars != null)
                 foreach (var star in _nucleusLayer.Stars.All)
-                    AddWarp(view, screenCenter, star.Row, star.Col, Star.Size, StarWarp);
+                    AddWarp(view, screenCenter, star.Row, star.Col, star.Size, StarWarpOf(star.Type));
         }
         _warpScratch.Sort((a, b) => a.dist != b.dist ? a.dist.CompareTo(b.dist) : a.order.CompareTo(b.order));
         int count = System.Math.Min(_warpScratch.Count, System.Math.Clamp(MaxWarpObjects, 0, WarpCapacity));

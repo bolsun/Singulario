@@ -1,183 +1,214 @@
 using System;
 using System.Collections.Generic;
 
-// Звезда-сборщик (T006, GDD «Производство → Звезда — сборщик») — чистые данные
-// без Godot. Звезда — объект слоя 1, квадрат Size×Size клеток, (Row, Col) —
-// верхняя левая клетка. Вокруг — 12 клеток подвода (по 3 на сторону, без
-// углов): из атомов в них звезда берёт частицы, в них же ей доставляют
-// атомы-ингредиенты (правила — в NucleusLayer, как у горизонта ЧД). Выход —
-// средняя клетка одной из сторон (OutputSide), туда кладётся готовый атом грузом.
+// Звезда (T006, T027; GDD «Производство → Роли звёзд») — чистые данные без
+// Godot. Звезда — объект слоя 1, квадрат Size×Size клеток (Size — из типа,
+// нечётный), (Row, Col) — верхняя левая клетка. Тип (0 Ж печь, 1 К фабрика,
+// 2 С сверхгигант) и рецепты — StarCatalog. Вокруг — 4 × Size клеток подвода
+// (без углов): из атомов в них звезда берёт частицы и атомы-предметы (правила
+// приёма — Accepts, обход — NucleusLayer, как у горизонта ЧД). Выход — средняя
+// клетка одной из сторон (OutputSide).
 //
-// Производство: ингредиенты набираются в буфер (на 1 рецепт); полный буфер,
-// пока звезда не занята, уходит в работу; работа длится Duration тиков; готовый
-// атом уходит в выходной буфер (T008, очередь тиров), если в нём есть место,
-// иначе ждёт внутри — звезда стоит. Из выходного буфера атомы уходят в линию
-// (NucleusLayer.OutputStarsToHoles) или руками в инвентарь. Пока идёт работа
-// (или ждёт выход), буфер набирается на следующий рецепт.
-
-public enum IngredientKind { Particle, Atom }
-
-// Particle: Id — цвет частицы (RingSlot.ColorTier: 0 Ж, 1 К, 2 С).
-// Atom: Id — тир атома-переносчика (CoreTier).
-public readonly record struct Ingredient(IngredientKind Kind, int Id, int Count);
-
-// Результат рецепта: атом-предмет (едет по линии) или звезда-предмет (T011) —
-// звезда 3×3 по дыркам не едет, только в выходной буфер и оттуда в инвентарь.
-public enum RecipeResult { Atom, Star }
-
-// Id — стабильное имя (по нему рецепты открываются заданиями и сохраняются).
-public sealed record StarRecipe(string Id, string Name, RecipeResult Kind, int ResultTier, int ResultHoles, Ingredient[] Ingredients);
-
-// Рецепты — данные в одном месте. Любая звезда может делать любой рецепт
-// (в настоящем режиме игрок выбирает только открытые, T011).
-public static class StarRecipes
-{
-	// Сколько атомов Ж стоит звезда Ж (умеренно — звёзд нужно много, GDD).
-	public const int StarYellowAtoms = 8;
-
-	public static readonly StarRecipe[] All =
-	{
-		new("atom_y", "атом Ж", RecipeResult.Atom, 0, 8, new[] { new Ingredient(IngredientKind.Particle, 0, 8) }),
-		new("atom_r", "атом К", RecipeResult.Atom, 1, 8, new[] { new Ingredient(IngredientKind.Atom, 0, 1), new Ingredient(IngredientKind.Particle, 1, 8) }),
-		new("atom_b", "атом С", RecipeResult.Atom, 2, 8, new[] { new Ingredient(IngredientKind.Atom, 0, 1), new Ingredient(IngredientKind.Particle, 2, 8) }),
-		new("star_y", "звезда Ж", RecipeResult.Star, 0, 0, new[] { new Ingredient(IngredientKind.Atom, 0, StarYellowAtoms) }),
-	};
-
-	public static int Count => All.Length;
-
-	// Индекс рецепта по Id или -1.
-	public static int IndexOf(string id)
-	{
-		for (int i = 0; i < All.Length; i++) if (All[i].Id == id) return i;
-		return -1;
-	}
-}
-
-// Предмет выходного буфера звезды — целый код (так он и сохраняется):
-// 0..StarBase-1 — атом тира (как до T011), StarBase + тир — звезда тира.
-public static class StarItem
-{
-	public const int StarBase = 16;
-
-	public static int Of(StarRecipe recipe) =>
-		recipe.Kind == RecipeResult.Star ? StarBase + recipe.ResultTier : recipe.ResultTier;
-	public static bool IsStar(int code) => code >= StarBase;
-	public static int Tier(int code) => IsStar(code) ? code - StarBase : code;
-}
+// Буфер ингредиентов — счётчики по виду предмета (частица 0..2, атом 0..2),
+// на 1 рецепт. Рецепт: у фабрики (Player) — выбранный игроком (RecipeId), у
+// печи (Auto) — по входу (правило — Accepts/TryStart), у С (None) — нет.
+// Набранный рецепт, пока звезда не занята, уходит в работу (ActiveRecipe);
+// работа длится Ticks рецепта; готовый предмет — в выходной буфер (T008), если
+// там есть место (ёмкость — из типа), иначе ждёт внутри — звезда стоит. Пока
+// идёт работа, буфер набирается на следующий рецепт.
 
 public sealed class Star
 {
-	public const int Size = 3;
 	// Стороны выхода: 0 N, 1 E, 2 S, 3 W (R — следующая по часовой).
 	public const int SideCount = 4;
 	public const int DefaultOutputSide = 2;
 
-	public readonly int Row, Col, Tier;
-	public int Recipe { get; private set; }
+	public int Row { get; private set; }
+	public int Col { get; private set; }
+	public readonly int Type;
+	public StarCatalog Catalog { get; private set; }
+	// Выбранный рецепт фабрики (Player); у остальных типов — null.
+	public string RecipeId { get; private set; }
+	// Что звезда делает сейчас; null — не работает.
+	public StarRecipe ActiveRecipe { get; private set; }
 	public int OutputSide;
-	// Набрано в буфер по каждому ингредиенту рецепта (индексы — как в Ingredients).
-	public int[] Buffer { get; private set; }
-	public bool Producing;
+	// Набрано по ячейкам (StarCatalog.SlotOf: частица 0..2, атом 3..5).
+	public readonly int[] Buffer = new int[StarCatalog.SlotCount];
 	public int Elapsed; // тиков работы; == Duration — готово, ждёт места в выходном буфере
 	// Выходной буфер (T008): коды готовых предметов (StarItem — атом или
-	// звезда, T011), голова — самый старый.
-	// Смена рецепта его не сжигает — атомы уже сделаны.
+	// звезда, T011), голова — самый старый. Смена рецепта его не сжигает.
 	public readonly Queue<int> Output = new();
 
-	public Star(int row, int col, int tier, int recipe)
+	public Star(int row, int col, int type, StarCatalog catalog, string recipeId)
 	{
-		Row = row; Col = col; Tier = tier;
-		SetRecipe(recipe);
+		Row = row; Col = col; Type = type; Catalog = catalog;
 		OutputSide = DefaultOutputSide;
+		RecipeId = Choice == StarChoice.Player ? recipeId : null;
 	}
 
-	public StarRecipe RecipeData => StarRecipes.All[Recipe];
+	public StarType TypeData => Catalog.TypeOf(Type);
+	public int Size => TypeData.Size;
+	public StarChoice Choice => TypeData.Choice;
+	public int OutputCapacity => TypeData.OutputCapacity;
+	public StarRecipe Recipe => RecipeId != null ? Catalog.Get(RecipeId) : null;
+	public bool Producing => ActiveRecipe != null;
+	public int Duration => ActiveRecipe?.Ticks ?? 1;
 
-	// Смена рецепта сжигает буфер и работу. true — что-то сгорело.
-	public bool SetRecipe(int recipe)
+	// Смена рецепта фабрики сжигает буфер и работу. true — что-то сгорело.
+	public bool SetRecipe(string id)
 	{
 		bool burned = Producing || HasBuffered;
-		Recipe = ((recipe % StarRecipes.Count) + StarRecipes.Count) % StarRecipes.Count;
-		Buffer = new int[RecipeData.Ingredients.Length];
-		Producing = false;
-		Elapsed = 0;
+		RecipeId = Choice == StarChoice.Player ? id : null;
+		Burn();
 		return burned;
+	}
+
+	private void Burn()
+	{
+		Array.Clear(Buffer);
+		ActiveRecipe = null;
+		Elapsed = 0;
 	}
 
 	public bool HasBuffered
 	{
 		get
 		{
-			if (Buffer == null) return false;
 			foreach (int b in Buffer) if (b > 0) return true;
 			return false;
 		}
 	}
 
-	public bool BufferFull
+	// Примет ли звезда этот предмет (T027). Фабрика — если выбранному рецепту
+	// (доступному) его не хватает. Печь — если есть доступный рецепт печи r, у
+	// которого (буфер + предмет) ⊆ ингредиенты r и среди них есть стартовый предмет r
+	// (атом-основа или частица рецепта без основы): при пустом буфере рецепт
+	// начинает только его стартовый предмет. С — ничего.
+	public bool Accepts(IngredientKind kind, int id, Func<StarRecipe, bool> available)
 	{
-		get
+		if (id < 0 || id >= StarCatalog.ColorCount) return false;
+		int slot = StarCatalog.SlotOf(kind, id);
+		switch (Choice)
 		{
-			var ing = RecipeData.Ingredients;
-			for (int i = 0; i < ing.Length; i++) if (Buffer[i] < ing[i].Count) return false;
-			return true;
+			case StarChoice.Player:
+			{
+				var r = Recipe;
+				return r != null && available(r) && Buffer[slot] < r.Need[slot];
+			}
+			case StarChoice.Auto:
+				foreach (var r in Catalog.RecipesOf(Type))
+					if (available(r) && FitsWith(r, slot)) return true;
+				return false;
+			default:
+				return false;
 		}
 	}
 
-	// Индекс ингредиента, которому нужен ещё один такой предмет, или -1.
-	public int NeedIndex(IngredientKind kind, int id)
+	private bool FitsWith(StarRecipe r, int slot)
 	{
-		var ing = RecipeData.Ingredients;
-		for (int i = 0; i < ing.Length; i++)
-			if (ing[i].Kind == kind && ing[i].Id == id && Buffer[i] < ing[i].Count) return i;
-		return -1;
+		for (int s = 0; s < Buffer.Length; s++)
+			if (Buffer[s] + (s == slot ? 1 : 0) > r.Need[s]) return false;
+		return r.StarterSlot >= 0 && (Buffer[r.StarterSlot] > 0 || r.StarterSlot == slot);
 	}
 
-	public void Put(int index) => Buffer[index]++;
+	public void Put(IngredientKind kind, int id) => Buffer[StarCatalog.SlotOf(kind, id)]++;
 
-	// Для загрузки: восстановить буфер (лишнее обрезается по рецепту).
-	public void RestoreBuffer(IReadOnlyList<int> counts)
+	// Рецепт, которому хватает буфера, или null. Фабрика — выбранный; печь —
+	// первый в порядке каталога, у которого буфер совпал с ингредиентами.
+	private StarRecipe ReadyRecipe()
 	{
-		var ing = RecipeData.Ingredients;
-		for (int i = 0; i < ing.Length && counts != null && i < counts.Count; i++)
-			Buffer[i] = Math.Clamp(counts[i], 0, ing[i].Count);
+		switch (Choice)
+		{
+			case StarChoice.Player:
+			{
+				var r = Recipe;
+				return r != null && Covers(r) ? r : null;
+			}
+			case StarChoice.Auto:
+				foreach (var r in Catalog.RecipesOf(Type))
+					if (Covers(r)) return r;
+				return null;
+			default:
+				return null;
+		}
 	}
 
-	public int Duration(int recipeTicks, int[] speedByTier)
+	private bool Covers(StarRecipe r)
 	{
-		int speed = Tier >= 0 && Tier < speedByTier.Length ? speedByTier[Tier] : 1;
-		return Math.Max(1, recipeTicks / Math.Max(1, speed));
+		for (int s = 0; s < Buffer.Length; s++) if (Buffer[s] < r.Need[s]) return false;
+		return true;
 	}
 
-	// Полный буфер уходит в работу, если звезда свободна.
+	// Набранный рецепт уходит в работу, если звезда свободна.
 	public bool TryStart()
 	{
-		if (Producing || !BufferFull) return false;
-		Array.Clear(Buffer);
-		Producing = true;
+		if (Producing) return false;
+		var r = ReadyRecipe();
+		if (r == null) return false;
+		for (int s = 0; s < Buffer.Length; s++) Buffer[s] -= r.Need[s];
+		ActiveRecipe = r;
 		Elapsed = 0;
 		return true;
 	}
 
 	// Один тик. true — работа готова (ждёт выход).
-	public bool Advance(int duration)
+	public bool Advance()
 	{
 		TryStart();
 		if (!Producing) return false;
-		if (Elapsed < duration) Elapsed++;
-		return Elapsed >= duration;
+		if (Elapsed < Duration) Elapsed++;
+		return Elapsed >= Duration;
 	}
 
-	// Готовая работа — в выходной буфер, если там есть место (capacity);
-	// звезда свободна, буфер ингредиентов сразу уходит в работу. true — положено.
-	public bool TryFinishToOutput(int duration, int capacity)
+	// Готовая работа — в выходной буфер, если там есть место; звезда свободна,
+	// набранный рецепт сразу уходит в работу. true — положено.
+	public bool TryFinishToOutput()
 	{
-		if (!Producing || Elapsed < duration || Output.Count >= capacity) return false;
-		Output.Enqueue(StarItem.Of(RecipeData));
-		Producing = false;
+		if (!Producing || Elapsed < Duration || Output.Count >= OutputCapacity) return false;
+		Output.Enqueue(StarItem.Of(ActiveRecipe));
+		ActiveRecipe = null;
 		Elapsed = 0;
 		TryStart();
 		return true;
+	}
+
+	// Загрузка сохранения: буфер (лишнее обрезается до 0..Need всех рецептов типа)
+	// и работа (рецепт должен принадлежать типу).
+	public void RestoreBuffer(IReadOnlyList<int> counts)
+	{
+		Array.Clear(Buffer);
+		if (counts == null || Choice == StarChoice.None) return;
+		for (int s = 0; s < Buffer.Length && s < counts.Count; s++)
+		{
+			int max = 0;
+			foreach (var r in Catalog.RecipesOf(Type)) max = Math.Max(max, r.Need[s]);
+			Buffer[s] = Math.Clamp(counts[s], 0, max);
+		}
+	}
+
+	public void RestoreWork(StarRecipe active, int elapsed)
+	{
+		ActiveRecipe = active != null && active.Producer == Type ? active : null;
+		Elapsed = ActiveRecipe != null ? Math.Clamp(elapsed, 0, ActiveRecipe.Ticks) : 0;
+	}
+
+	// Перезагрузка каталога (F9, отладка): буфер и работа сгорают, рецепт фабрики
+	// — по Id (пропал — null, вызывающий ставит рецепт по умолчанию), выходной
+	// буфер обрезается до новой ёмкости (старые остаются), звезда переезжает в
+	// (row, col) (центр сохраняется вызывающим).
+	public void Rebind(StarCatalog catalog, int row, int col)
+	{
+		Catalog = catalog;
+		Row = row; Col = col;
+		Burn();
+		var r = Recipe;
+		if (Choice != StarChoice.Player || r == null || r.Producer != Type) RecipeId = null;
+		if (Output.Count > OutputCapacity)
+		{
+			var keep = Output.ToArray();
+			Output.Clear();
+			for (int i = 0; i < OutputCapacity; i++) Output.Enqueue(keep[i]);
+		}
 	}
 
 	public bool ContainsCell(int row, int col) =>
@@ -188,30 +219,36 @@ public sealed class Star
 
 	public (int row, int col) OutputCell => SideMiddle(OutputSide);
 
-	public (int row, int col) SideMiddle(int side) => side switch
+	public (int row, int col) SideMiddle(int side)
 	{
-		0 => (Row - 1, Col + Size / 2),
-		1 => (Row + Size / 2, Col + Size),
-		2 => (Row + Size, Col + Size / 2),
-		_ => (Row + Size / 2, Col - 1),
-	};
+		int size = Size;
+		return side switch
+		{
+			0 => (Row - 1, Col + size / 2),
+			1 => (Row + size / 2, Col + size),
+			2 => (Row + size, Col + size / 2),
+			_ => (Row + size / 2, Col - 1),
+		};
+	}
 
-	// 12 клеток подвода по порядку (N слева направо, E сверху вниз, S, W);
+	// 4 × Size клеток подвода по порядку (N слева направо, E сверху вниз, S, W);
 	// k — сторона света (компас Adj8 NucleusLayer) из клетки на звезду.
 	public IEnumerable<(int row, int col, int k)> RingCells()
 	{
-		for (int i = 0; i < Size; i++) yield return (Row - 1, Col + i, 4);
-		for (int i = 0; i < Size; i++) yield return (Row + i, Col + Size, 6);
-		for (int i = 0; i < Size; i++) yield return (Row + Size, Col + i, 0);
-		for (int i = 0; i < Size; i++) yield return (Row + i, Col - 1, 2);
+		int size = Size;
+		for (int i = 0; i < size; i++) yield return (Row - 1, Col + i, 4);
+		for (int i = 0; i < size; i++) yield return (Row + i, Col + size, 6);
+		for (int i = 0; i < size; i++) yield return (Row + size, Col + i, 0);
+		for (int i = 0; i < size; i++) yield return (Row + i, Col - 1, 2);
 	}
 
 	public bool IsRingCell(int row, int col)
 	{
-		bool inRows = row >= Row && row < Row + Size;
-		bool inCols = col >= Col && col < Col + Size;
-		return (inRows && (col == Col - 1 || col == Col + Size))
-			|| (inCols && (row == Row - 1 || row == Row + Size));
+		int size = Size;
+		bool inRows = row >= Row && row < Row + size;
+		bool inCols = col >= Col && col < Col + size;
+		return (inRows && (col == Col - 1 || col == Col + size))
+			|| (inCols && (row == Row - 1 || row == Row + size));
 	}
 }
 
@@ -241,7 +278,7 @@ public sealed class StarSet
 
 	public bool Add(Star star)
 	{
-		if (Overlaps(star.Row, star.Col, Star.Size)) return false;
+		if (Overlaps(star.Row, star.Col, star.Size)) return false;
 		int i = 0;
 		while (i < _stars.Count && (_stars[i].Row < star.Row || (_stars[i].Row == star.Row && _stars[i].Col < star.Col))) i++;
 		_stars.Insert(i, star);
