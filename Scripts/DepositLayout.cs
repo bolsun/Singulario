@@ -33,7 +33,7 @@ public sealed class DepositLayout
 
 	// Стадия запаса 0..3 (>75 / 50–75 / 25–50 / <25%).
 	public float[] StageRadius = { 1.0f, 0.85f, 0.7f, 0.5f };
-	public float[] StageStrength = { 0.30f, 0.25f, 0.18f, 0.10f };
+	public float[] StageStrength = { 0.14f, 0.11f, 0.08f, 0.05f };
 	// Видна частица с приоритетом < порога (у стадии 0 — все).
 	public float[] StageThreshold = { 1.01f, 0.72f, 0.46f, 0.24f };
 
@@ -41,7 +41,7 @@ public sealed class DepositLayout
 	public float NeighborPullMax = 0.2f;  // не больше
 	public float CoreJitter = 0.06f;      // ± разброс из хеша
 	public int CoreCount = 20;            // частиц на клетку
-	public float CoreDistScale = 0.4f;    // |r1+r2+r3−1,5| · scale
+	public float CoreDistScale = 0.42f;   // √r · scale — почти равномерно по кругу клетки
 	public int BridgeCount = 5;           // частиц на пару
 	public float BridgeBend = 0.12f;
 	public float ShareLarge = 0.15f;      // доли размеров 16 / 8 / 4 px
@@ -50,7 +50,7 @@ public sealed class DepositLayout
 	public int BridgePeriodMin = 4, BridgePeriodMax = 8;
 
 	// Максимальное расстояние частицы от ядра (3 равномерных: |сумма − 1,5| ≤ 1,5).
-	private float MaxDist => 1.5f * CoreDistScale;
+	private float MaxDist => CoreDistScale;
 
 	// stageAt(row, col) — стадия клетки (<0 — нет клетки); linked(r1, c1, r2, c2) — обе клетки
 	// есть и принадлежат одному скоплению. Собирает раскладку для клеток cells.
@@ -71,7 +71,7 @@ public sealed class DepositLayout
 			{
 				ulong h = Mix(cellHash + (ulong)(i + 1) * 0x9E3779B97F4A7C15UL);
 				float angle = U(ref h) * MathF.Tau;
-				float dist = MathF.Abs(U(ref h) + U(ref h) + U(ref h) - 1.5f) * CoreDistScale;
+				float dist = MathF.Sqrt(U(ref h)) * CoreDistScale;
 				float size = U(ref h), phase = U(ref h), period = U(ref h), rnd = U(ref h);
 				float priority = 0.65f * (dist / MaxDist) + 0.35f * rnd;
 				if (priority >= threshold) continue;
