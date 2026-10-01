@@ -47,7 +47,7 @@
 | `Resources/Textures/particle_variants_gray_8px.png` | 3 | 8×8 |
 | `Resources/Textures/particle_variants_gray_4px.png` | 3 | 4×4 |
 | `Resources/Textures/particle_variants_gray_2px.png` | 1 | 2×2 (точка, новый размер) |
-Одиночные `particle_gray_16/8/4px.png` пока остаются (их использует игра); после задачи — убрать.
+Одиночные `particle_gray_16/8/4px.png` убраны в T024 — игра берёт только полосы вариантов.
 
 Что сделать в коде:
 1. **Месторождение:** вариант кадра — из хеша частицы (как размер), постоянный. Доли размеров:

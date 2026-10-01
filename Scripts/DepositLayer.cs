@@ -16,9 +16,14 @@ using System.Collections.Generic;
 public partial class DepositLayer : Node2D
 {
 	private const string ShaderPath = "res://Resources/Shaders/deposit_particle.gdshader";
-	private const string Sprite16 = "res://Resources/Textures/particle_gray_16px.png";
-	private const string Sprite8 = "res://Resources/Textures/particle_gray_8px.png";
-	private const string Sprite4 = "res://Resources/Textures/particle_gray_4px.png";
+	// Полосы вариантов (T024): кадры n×n слева направо; размеры 16 / 8 / 4 / 2 px = SizeClass 0..3.
+	private static readonly string[] Strips =
+	{
+		"res://Resources/Textures/particle_variants_gray_16px.png",
+		"res://Resources/Textures/particle_variants_gray_8px.png",
+		"res://Resources/Textures/particle_variants_gray_4px.png",
+		"res://Resources/Textures/particle_variants_gray_2px.png",
+	};
 	private const float LabelSeconds = 1.5f;
 	private const float LabelFadeSeconds = 0.4f;
 	// Общий период всех периодов частиц (256 · k, k = 2..8): тик берётся по модулю — без потери точности.
@@ -93,7 +98,7 @@ public partial class DepositLayer : Node2D
 
 		var shader = GD.Load<Shader>(ShaderPath);
 		_material = new ShaderMaterial { Shader = shader };
-		_material.SetShaderParameter("atlas_tex", BuildAtlas());
+		BuildAtlas();
 		_quad = new QuadMesh { Size = Vector2.One };
 
 		var labelLayer = new CanvasLayer { Name = "DepositLabelLayer", Layer = 90 };
@@ -117,21 +122,37 @@ public partial class DepositLayer : Node2D
 		ApplyLook();
 	}
 
-	// Атлас 16+8+4 px по горизонтали (28×16), собирается при загрузке из трёх спрайтов.
-	private static ImageTexture BuildAtlas()
+	// Атлас из четырёх полос в один ряд (T024: 48+24+12+2 = 86×16). Смещения полос (strip_x0),
+	// размер атласа и число кадров каждого размера (ширина / высота) — из самих картинок:
+	// шейдеру и раскладке (_layout.Frames).
+	private void BuildAtlas()
 	{
-		var atlas = Image.CreateEmpty(28, 16, false, Image.Format.Rgba8);
-		int x = 0;
-		foreach (var path in new[] { Sprite16, Sprite8, Sprite4 })
+		var imgs = new Image[Strips.Length];
+		int width = 0, height = 1;
+		for (int i = 0; i < Strips.Length; i++)
 		{
-			var tex = GD.Load<Texture2D>(path);
-			if (tex == null) { GD.PrintErr($"DepositLayer: не загрузился {path}"); continue; }
-			var img = tex.GetImage();
-			img.Convert(Image.Format.Rgba8);
-			atlas.BlitRect(img, new Rect2I(Vector2I.Zero, img.GetSize()), new Vector2I(x, 0));
-			x += img.GetWidth();
+			var tex = GD.Load<Texture2D>(Strips[i]);
+			if (tex == null) { GD.PrintErr($"DepositLayer: не загрузился {Strips[i]}"); continue; }
+			imgs[i] = tex.GetImage();
+			imgs[i].Convert(Image.Format.Rgba8);
+			width += imgs[i].GetWidth();
+			height = Mathf.Max(height, imgs[i].GetHeight());
 		}
-		return ImageTexture.CreateFromImage(atlas);
+		var atlas = Image.CreateEmpty(Mathf.Max(1, width), height, false, Image.Format.Rgba8);
+		var x0 = new float[4];
+		int x = 0;
+		for (int i = 0; i < Strips.Length; i++)
+		{
+			x0[i] = x;
+			if (imgs[i] == null) { _layout.Frames[i] = 1; continue; }
+			int side = imgs[i].GetHeight();
+			_layout.Frames[i] = Mathf.Max(1, imgs[i].GetWidth() / side);
+			atlas.BlitRect(imgs[i], new Rect2I(Vector2I.Zero, imgs[i].GetSize()), new Vector2I(x, 0));
+			x += imgs[i].GetWidth();
+		}
+		_material.SetShaderParameter("atlas_tex", ImageTexture.CreateFromImage(atlas));
+		_material.SetShaderParameter("atlas_size", new Vector2(atlas.GetWidth(), atlas.GetHeight()));
+		_material.SetShaderParameter("strip_x0", new Vector4(x0[0], x0[1], x0[2], x0[3]));
 	}
 
 	public override void _UnhandledInput(InputEvent @event)
@@ -370,7 +391,9 @@ public partial class DepositLayer : Node2D
 			minX = Mathf.Min(minX, ax); maxX = Mathf.Max(maxX, ax);
 			minY = Mathf.Min(minY, ay); maxY = Mathf.Max(maxY, ay);
 			mm.SetInstanceTransform2D(i, new Transform2D(Vector2.Right, Vector2.Down, new Vector2(ax, ay)));
-			mm.SetInstanceCustomData(i, new Color((tier + 0.5f) / _layer.TierCount, p.SizeClass, p.Phase, p.PeriodK));
+			// y — упаковка size + 4·variant + 16·dark (T024, разбор — в шейдере).
+			float packed = p.SizeClass + 4 * p.Variant + (p.Dark ? 16 : 0);
+			mm.SetInstanceCustomData(i, new Color((tier + 0.5f) / _layer.TierCount, packed, p.Phase, p.PeriodK));
 			mm.SetInstanceColor(i, p.Kind == 0
 				? new Color(p.Angle, p.Dist, 0f, 0f)
 				: new Color(p.Dx, p.Dy, p.Bend, 1f));

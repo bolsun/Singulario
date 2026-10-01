@@ -162,7 +162,8 @@ public partial class NucleusLayer : Node2D
 	[Export] public float CargoDim = 0.7f;
 
 	// --- частицы ---
-	[Export] public string ParticleSpritePath = "res://Resources/Textures/particle_gray_16px.png";
+	// T024: полоса вариантов осколка (кадры n×n слева направо; число кадров = ширина / высота).
+	[Export] public string ParticleSpritePath = "res://Resources/Textures/particle_variants_gray_16px.png";
 	[Export] public int ParticleSpriteSize = 16;
 	[Export] public float ParticleFillChance = 0.5f; // доля слотов кольца (из 8), становящихся частицей вместо дырки при генерации
 	// При Zoom.X меньше этого значения слой частиц вообще не считается и не
@@ -706,7 +707,15 @@ public partial class NucleusLayer : Node2D
 		// атом-переносчик тира ColorTier. Едет по линии по тем же правилам, что
 		// частица (материал на перенос не влияет). Значим, только если !IsHole.
 		public bool IsItem;
+		// T024: только вид — форма осколка (сырой байт хеша; кадр = Variant % кадров атласа).
+		// Задаётся при рождении частицы и копируется при передаче; на законы не влияет,
+		// в StateHash не входит, не сохраняется.
+		public byte Variant;
 	}
+
+	// T024: вариант частицы — детерминированный целочисленный хеш (SplitMix64), без Random.
+	private static byte ParticleVariant(long a, long b, long c) =>
+		(byte)(Rng.Mix(Rng.Mix(((ulong)(uint)a << 32) | (uint)b) ^ (ulong)c) >> 56);
 
 	private class NucleusEntity
 	{
@@ -1246,28 +1255,33 @@ public partial class NucleusLayer : Node2D
 	private Texture2D _particleTexture;
 	private ShaderMaterial _particleMaterial;
 
-	// T023: атлас 2×1 — осколок-частица (слева) и шар атома-предмета (справа), оба 16×16 px.
-	// Нет шара или он другого размера — правая половина повторяет осколок.
+	// T023/T024: атлас в ряд — кадры осколка (полоса ParticleSpritePath), последним — шар
+	// атома-предмета (16×16 → 64×16). Нет шара или он другого размера — последний кадр — осколок 0.
 	[Export] public string ItemSpritePath = "res://Resources/Textures/atom_item_gray_16px.png";
+	private int _shardFrames = 1; // кадров осколка в атласе частиц (кадр предмета — _shardFrames)
 
 	private Texture2D BuildParticleAtlas()
 	{
-		var shard = LoadImageOf(ParticleSpritePath);
-		if (shard == null) return null;
+		var strip = LoadImageOf(ParticleSpritePath);
+		if (strip == null) return null;
+		int side = strip.GetHeight();
+		_shardFrames = Mathf.Max(1, strip.GetWidth() / side);
 		var ball = LoadImageOf(ItemSpritePath);
-		if (ball == null || ball.GetSize() != shard.GetSize())
+		strip.Convert(Image.Format.Rgba8);
+		if (ball == null || ball.GetSize() != new Vector2I(side, side))
 		{
 			GD.PrintErr("NucleusLayer: спрайт атома-предмета не загрузился — рисуется осколком.");
-			ball = shard;
+			ball = strip.GetRegion(new Rect2I(0, 0, side, side));
 		}
-		var w = shard.GetWidth();
-		var atlas = Image.CreateEmpty(w * 2, shard.GetHeight(), false, Image.Format.Rgba8);
-		shard.Convert(Image.Format.Rgba8);
 		ball.Convert(Image.Format.Rgba8);
-		atlas.BlitRect(shard, new Rect2I(Vector2I.Zero, shard.GetSize()), Vector2I.Zero);
-		atlas.BlitRect(ball, new Rect2I(Vector2I.Zero, ball.GetSize()), new Vector2I(w, 0));
+		var atlas = Image.CreateEmpty(side * (_shardFrames + 1), side, false, Image.Format.Rgba8);
+		atlas.BlitRect(strip, new Rect2I(0, 0, side * _shardFrames, side), Vector2I.Zero);
+		atlas.BlitRect(ball, new Rect2I(Vector2I.Zero, ball.GetSize()), new Vector2I(side * _shardFrames, 0));
 		return ImageTexture.CreateFromImage(atlas);
 	}
+
+	// Кадр атласа частиц: предмет — шар (последний), частица — свой вариант осколка.
+	private float ParticleFrame(bool isItem, byte variant) => isItem ? _shardFrames : variant % _shardFrames;
 
 	// Картинка из импортированной текстуры; нет импорта (новый файл до открытия редактора) — прямо из PNG.
 	private static Image LoadImageOf(string path)
@@ -1432,9 +1446,9 @@ public partial class NucleusLayer : Node2D
 		_material = new ShaderMaterial { Shader = shader };
 		_material.SetShaderParameter("palette_tex", paletteAtlas);
 		_dotMaterial = (ShaderMaterial)_material.Duplicate();
-		// T023: частицы чанка берут из атласа осколок (слева) или шар предмета (справа).
+		// T023/T024: частицы чанка берут из атласа кадр осколка или шар предмета (INSTANCE_CUSTOM.w).
 		_particleMaterial = (ShaderMaterial)_material.Duplicate();
-		_particleMaterial.SetShaderParameter("atlas_halves", 1.0f);
+		_particleMaterial.SetShaderParameter("atlas_frames", (float)(_shardFrames + 1));
 
 		_coreQuad = new QuadMesh { Size = new Vector2(SpriteSize, SpriteSize) };
 		_holeQuad = new QuadMesh { Size = new Vector2(HoleSpriteSize, HoleSpriteSize) };
@@ -2635,7 +2649,8 @@ public partial class NucleusLayer : Node2D
 				long got = layer.ConsumeAt(srcRow, srcCol, EnergyCaptureAmount);
 				if (got <= 0) continue;
 
-				n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = layer.Tier, Locked = true };
+				n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = layer.Tier, Locked = true,
+					Variant = ParticleVariant(srcRow, srcCol, _globalTick) };
 				Touch(n);
 				Claim(n, p);
 				n.NextCaptureTick = _globalTick + _energyCaptureTicks;
@@ -3828,7 +3843,7 @@ public partial class NucleusLayer : Node2D
 		if (n.Cross != null)
 		{
 			bool ready = n.Cross.TryPeekExit(k / 2, out var cp);
-			content = ready ? new RingSlot { Exists = true, IsHole = false, ColorTier = cp.ColorTier, IsItem = cp.IsItem } : default;
+			content = ready ? new RingSlot { Exists = true, IsHole = false, ColorTier = cp.ColorTier, IsItem = cp.IsItem, Variant = cp.Variant } : default;
 			return ready;
 		}
 		content = n.Ring[PhysicalSlotForCompass(n, k)];
@@ -3856,9 +3871,9 @@ public partial class NucleusLayer : Node2D
 	private void PutReceived(NucleusEntity n, int k, RingSlot content)
 	{
 		Touch(n);
-		if (n.Cross != null) { n.Cross.Enter(k / 2, content.ColorTier, content.IsItem); return; }
+		if (n.Cross != null) { n.Cross.Enter(k / 2, content.ColorTier, content.IsItem, content.Variant); return; }
 		n.Ring[PhysicalSlotForCompass(n, k)] = new RingSlot
-			{ Exists = true, IsHole = false, ColorTier = content.ColorTier, Locked = true, IsItem = content.IsItem };
+			{ Exists = true, IsHole = false, ColorTier = content.ColorTier, Locked = true, IsItem = content.IsItem, Variant = content.Variant };
 	}
 
 	// requireMatchingSpin=true — раньше не блокировало ничего (все ядра
@@ -4050,8 +4065,8 @@ public partial class NucleusLayer : Node2D
 				else
 				{
 					PutTransform(particleBuf, po, pos, 1f);
-					// .w = 1 — атом-предмет (T007): шейдер рисует полое кольцо.
-					PutCustom(particleBuf, po + 8, (slot.ColorTier + 0.5f) / _tierCount, 0f, 0f, slot.IsItem ? 1f : 0f);
+					// .w — кадр атласа частиц (T024): вариант осколка или шар атома-предмета.
+					PutCustom(particleBuf, po + 8, (slot.ColorTier + 0.5f) / _tierCount, 0f, 0f, ParticleFrame(slot.IsItem, slot.Variant));
 					HideTransform(holeBuf, ho);
 				}
 			}
@@ -4116,7 +4131,7 @@ public partial class NucleusLayer : Node2D
 				int po = (n.LocalIndex * 8 + a * 4 + i) * ParticleStride;
 				PutTransform(particleBuf, po, pos, scale);
 				float dim = 0.45f * (1f - height);
-				PutCustom(particleBuf, po + 8, (cp.ColorTier + 0.5f) / _tierCount, 0f, dim, cp.IsItem ? 1f : 0f);
+				PutCustom(particleBuf, po + 8, (cp.ColorTier + 0.5f) / _tierCount, 0f, dim, ParticleFrame(cp.IsItem, cp.Variant));
 			}
 		}
 	}
@@ -4173,7 +4188,8 @@ public partial class NucleusLayer : Node2D
 					for (int k = 0; k < 8; k++)
 					{
 						bool isParticle = _rng.Randf() < ParticleFillChance;
-						ring[k] = new RingSlot { Exists = true, IsHole = !isParticle, ColorTier = particleTier, Locked = false };
+						ring[k] = new RingSlot { Exists = true, IsHole = !isParticle, ColorTier = particleTier, Locked = false,
+							Variant = ParticleVariant(worldRow, worldCol, k) };
 					}
 
 					var nucleus = new NucleusEntity
@@ -5374,7 +5390,7 @@ public partial class NucleusLayer : Node2D
 				var n = _entAt[(row, col)];
 				for (int k = 0; k < 8; k++)
 					if (rng.Randf() < ParticleFillChance)
-						n.Ring[k] = new RingSlot { Exists = true, IsHole = false, ColorTier = tier };
+						n.Ring[k] = new RingSlot { Exists = true, IsHole = false, ColorTier = tier, Variant = ParticleVariant(row, col, k) };
 				Touch(n);
 			}
 	}
@@ -5435,7 +5451,7 @@ public partial class NucleusLayer : Node2D
 				{
 					if (!n.Ring[k].Exists || rng.Randf() >= 0.5f) continue;
 					int color = tier == GrayCoreTier ? rng.RandiRange(0, 2) : tier;
-					n.Ring[k] = new RingSlot { Exists = true, IsHole = false, ColorTier = color };
+					n.Ring[k] = new RingSlot { Exists = true, IsHole = false, ColorTier = color, Variant = ParticleVariant(row, col, k) };
 				}
 				Touch(n);
 			next:;
@@ -5467,6 +5483,8 @@ public partial class NucleusLayer : Node2D
 			if (n.IsFlying) { Mix(n.FlightDir); Mix(n.FlightCellsRemaining); }
 			Mix(n.PendingFlightDir ?? -1);
 			Mix(n.NextCaptureTick); Mix(n.AsleepUntilTick);
+			// RingSlot.Variant / CrossParticle.Variant (T024) — только вид, в хеш не входят:
+			// хеш = законы, selfcheck до и после правок вида обязан совпадать.
 			foreach (var slot in n.Ring)
 				Mix((slot.Exists ? 1 : 0) | (slot.IsHole ? 2 : 0) | (slot.Locked ? 4 : 0) | (slot.IsItem ? 8 : 0) | (slot.ColorTier << 4));
 			if (n.Cross != null)

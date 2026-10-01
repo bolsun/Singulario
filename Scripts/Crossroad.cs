@@ -13,6 +13,7 @@ public struct CrossParticle
 	public int ColorTier; // цвет частицы или тир атома-предмета
 	public bool IsItem;   // атом-предмет (T007)
 	public int Pos;       // 0 — только вошла (вход занят), ExitPos — у выхода, можно отдавать
+	public byte Variant;  // T024: только вид (форма осколка), на законы не влияет
 }
 
 public sealed class CrossAxis
@@ -70,11 +71,11 @@ public sealed class Crossroad
 		return axis.Items[axis.Count - 1].Pos > 0; // вход ещё занят вошедшей на этом шаге
 	}
 
-	public void Enter(int side, int colorTier, bool isItem)
+	public void Enter(int side, int colorTier, bool isItem, byte variant = 0)
 	{
 		var axis = Axes[AxisOf(side)];
 		if (axis.Count == 0) axis.Dir = DirFromEntry(side);
-		axis.Items[axis.Count++] = new CrossParticle { ColorTier = colorTier, IsItem = isItem, Pos = 0 };
+		axis.Items[axis.Count++] = new CrossParticle { ColorTier = colorTier, IsItem = isItem, Pos = 0, Variant = variant };
 	}
 
 	// Частица у выхода на стороне side, готовая уйти.
