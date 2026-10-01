@@ -36,8 +36,8 @@ public partial class DepositLayer : Node2D
 	}
 
 	// Облако: по стадии запаса 0..3 (>75 / 50–75 / 25–50 / <25%).
-	[Export] public float[] StageRadius = { 1.0f, 0.85f, 0.7f, 0.5f };
-	[Export] public float[] StageStrength = { 0.30f, 0.25f, 0.18f, 0.10f };
+	[Export] public float[] StageRadius = { 1.0f, 0.99f, 0.97f, 0.94f };
+	[Export] public float[] StageStrength = { 0.20f, 0.15f, 0.07f, 0.04f };
 	// Частица видна, если её приоритет меньше порога стадии.
 	[Export] public float[] StageThreshold = { 1.01f, 0.72f, 0.46f, 0.24f };
 	[Export] public float NeighborPull = 0.1f;
