@@ -20,6 +20,8 @@ public partial class Main : Node2D
 		camera.Zoom = new Vector2(InitialZoom, InitialZoom);
 		// Фон-туманность (T016) — позади всего поля.
 		AddChild(new NebulaBackground { Name = "NebulaBackground" });
+		// Живое месторождение (T022): частицы и общий индекс чанков для свечения облаков.
+		AddChild(new DepositLayer { Name = "DepositLayer" });
 		// Главное меню (T013) — поверх всего, при запуске ставит игру на паузу.
 		AddChild(new GameMenu { Name = "GameMenu" });
 	}

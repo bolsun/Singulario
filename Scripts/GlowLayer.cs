@@ -64,6 +64,17 @@ public partial class GlowLayer : Node
 	private ShaderMaterial _atomMaterial, _starMaterial;
 	private QuadMesh _quad;
 	private MultiMeshInstance2D _stars;
+	private DepositLayer _deposit;
+
+	// Облака месторождений (T022): один MultiMesh пятен на видимый чанк месторождений.
+	private sealed class DepositGlow
+	{
+		public MultiMeshInstance2D Node;
+		public int Version = -1;
+	}
+
+	private readonly Dictionary<(int cx, int cy), DepositGlow> _depositChunks = new();
+	private readonly List<(int cx, int cy)> _depositRemove = new();
 
 	private sealed class ChunkGlow
 	{
@@ -125,6 +136,7 @@ public partial class GlowLayer : Node
 		_world.Transform = new Transform2D(new Vector2(scale, 0f), new Vector2(0f, scale), -(Vector2)Origin);
 
 		UpdateAtoms(zoom);
+		UpdateDeposits();
 		UpdateStars();
 	}
 
@@ -249,6 +261,50 @@ public partial class GlowLayer : Node
 		}
 		glow.Gray.Multimesh = grayMesh;
 		glow.Tier.Multimesh = tierMesh;
+	}
+
+	// Облака месторождений: пятно на клетку источника цвета тира, радиус и сила — по стадии
+	// запаса (раскладка — DepositLayout). Гаснут тем же fade, что и ореолы атомов (материал
+	// общий, fade выставляет UpdateAtoms); на слое 2 и в старом виде (F7) не рисуются.
+	private void UpdateDeposits()
+	{
+		_deposit ??= GetNodeOrNull<DepositLayer>("/root/Main/DepositLayer");
+		if (_deposit == null) return;
+		_deposit.Refresh();
+		var visible = _deposit.VisibleChunks;
+		float cell = _layer.CellSize;
+		foreach (var key in visible)
+		{
+			if (!_deposit.TryGetSpots(key, out int version, out var spots)) continue;
+			if (!_depositChunks.TryGetValue(key, out var glow))
+			{
+				glow = new DepositGlow { Node = new MultiMeshInstance2D { Material = _atomMaterial } };
+				_tierRoot.AddChild(glow.Node);
+				_depositChunks[key] = glow;
+			}
+			if (glow.Version == version) continue;
+			glow.Version = version;
+			float chunkWorld = _layer.ChunkSize * cell;
+			var rect = new Rect2(key.cx * chunkWorld, key.cy * chunkWorld, chunkWorld, chunkWorld).Grow(2f * cell);
+			var mm = NewMultiMesh(spots.Count, new Aabb(new Vector3(rect.Position.X, rect.Position.Y, -1f), new Vector3(rect.Size.X, rect.Size.Y, 2f)));
+			for (int i = 0; i < spots.Count; i++)
+			{
+				var (tier, s) = (spots[i].Tier, spots[i].Spot);
+				float side = 2f * s.Radius * cell;
+				mm.SetInstanceTransform2D(i, new Transform2D(new Vector2(side, 0f), new Vector2(0f, side), new Vector2(s.X * cell, s.Y * cell)));
+				mm.SetInstanceCustomData(i, TierWeights(tier, s.Strength));
+			}
+			glow.Node.Multimesh = mm;
+		}
+		// Ушедшие из кадра, исчезнувшие и при выключенном виде — удалить.
+		_depositRemove.Clear();
+		foreach (var key in _depositChunks.Keys)
+			if (!_deposit.IsChunkVisible(key)) _depositRemove.Add(key);
+		foreach (var key in _depositRemove)
+		{
+			_depositChunks[key].Node.QueueFree();
+			_depositChunks.Remove(key);
+		}
 	}
 
 	private MultiMesh NewMultiMesh(int count, Aabb aabb) => new()

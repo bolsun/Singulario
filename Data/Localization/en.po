@@ -226,6 +226,15 @@ msgstr "Frame, ms:"
 msgid "Отрисовка атомов, мс:"
 msgstr "Atom render, ms:"
 
+msgid "Месторождения: {0}"
+msgstr "Deposits: {0}"
+
+msgid "Облако"
+msgstr "Cloud"
+
+msgid "Тайлы"
+msgstr "Tiles"
+
 msgid "Фон: {0}"
 msgstr "Background: {0}"
 
