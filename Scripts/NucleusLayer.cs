@@ -5444,6 +5444,7 @@ public partial class NucleusLayer : Node2D
 	private void ApplyFieldData(FieldSaveData data, int dRow, int dCol, string what)
 	{
 		int placed = 0;
+		int colorCrossroads = 0; // T040: перекрёсток только у серого — цветные грузятся обычными атомами
 		var nucleiList = data.Nuclei ?? new List<SavedNucleus>();
 		foreach (var sn in nucleiList)
 		{
@@ -5458,13 +5459,21 @@ public partial class NucleusLayer : Node2D
 			if (ok && sn.Crossroad && !sn.Cargo
 				&& _entAt.TryGetValue((sn.Row + dRow, sn.Col + dCol), out var imported) && IsToggleClickTarget(imported))
 			{
-				imported.Cross = new Crossroad(HoleCountOf(imported), sn.CrossOutputs ?? 0);
-				_crossSet.Add(imported);
-				Touch(imported);
+				// Соседство при загрузке не проверяем: стоящие вплотную серые грузятся как есть (T040).
+				if (imported.CoreTier != PlaceDecision.GrayTier)
+					colorCrossroads++;
+				else
+				{
+					imported.Cross = new Crossroad(HoleCountOf(imported), sn.CrossOutputs ?? 0);
+					_crossSet.Add(imported);
+					Touch(imported);
+				}
 			}
 			if (ok) placed++;
 			else GD.PrintErr($"[NucleusLayer] импорт: клетка ({sn.Row + dRow},{sn.Col + dCol}) уже занята — ядро пропущено.");
 		}
+		if (colorCrossroads > 0)
+			GD.Print($"[NucleusLayer] импорт: цветных перекрёстков {colorCrossroads} — поставлены обычными атомами (перекрёсток только у серого).");
 
 		int sourcesPlaced = 0;
 		var sourcesList = data.Sources ?? new List<SavedSource>();
