@@ -23,10 +23,10 @@ varying float v_palette_row;
 // кто их не задаёт, там 0 — цвет не меняется.
 varying float v_glow;
 varying float v_dim;
-// T007/T023: INSTANCE_CUSTOM.w > 0.5 — атом-предмет в дырке. При atlas_halves = 1 текстура —
-// атлас 2×1 (осколок | шар): частица берёт левую половину, предмет — правую.
-varying float v_item;
-uniform float atlas_halves = 0.0;
+// T007/T023/T024: при atlas_frames > 0 текстура — атлас из atlas_frames кадров в ряд (осколки, последним —
+// шар атома-предмета), INSTANCE_CUSTOM.w — номер кадра. 0 (по умолчанию) — вся текстура (тела, дырки, точки).
+varying float v_frame;
+uniform float atlas_frames = 0.0;
 // T015: общая проявленность (материал точек дальнего зума гасит их к туманностям).
 uniform float fade = 1.0;
 
@@ -34,7 +34,7 @@ void vertex() {
 	v_palette_row = INSTANCE_CUSTOM.x;
 	v_glow = INSTANCE_CUSTOM.y;
 	v_dim = INSTANCE_CUSTOM.z;
-	v_item = INSTANCE_CUSTOM.w;
+	v_frame = INSTANCE_CUSTOM.w;
 }
 
 void fragment() {
@@ -44,7 +44,7 @@ void fragment() {
 	// отрисован перевёрнутым по вертикали.
 	vec2 uv = vec2(UV.x, 1.0 - UV.y);
 
-	if (atlas_halves > 0.5) uv.x = uv.x * 0.5 + (v_item > 0.5 ? 0.5 : 0.0);
+	if (atlas_frames > 0.5) uv.x = (clamp(uv.x, 0.0, 0.999) + floor(v_frame + 0.5)) / atlas_frames;
 	vec4 src = texture(TEXTURE, uv);
 	float idx = src.r; // 0..1 — квантованный маркер уровня из index-спрайта
 	vec3 final_color = texture(palette_tex, vec2(idx, v_palette_row)).rgb;
