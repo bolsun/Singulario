@@ -1459,7 +1459,7 @@ public partial class NucleusLayer : Node2D
 	private (int row, int col)? _lastRemovedCell;
 	// Удаление с удержанием (T026): логика — RemoveHold, вид — RemoveHoldLayer.
 	// Время — реальное (delta кадра), в симуляцию и StateHash не входит.
-	[Export] public float RemoveHoldSecondsPerCell = 0.1f;
+	[Export] public float RemoveHoldSecondsPerCell = 0.2f;
 	// Диаметр круга прогресса в пикселях экрана.
 	[Export] public float RemoveHoldRingPx = 22f;
 	private readonly RemoveHold _removeHold = new();

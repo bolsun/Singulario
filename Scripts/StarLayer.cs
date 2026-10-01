@@ -487,7 +487,7 @@ public partial class StarLayer : Node2D
 		return star;
 	}
 
-	// Удаление звезды по ПКМ после удержания 0,1 с × сторона (T026, RemoveHold); вызывает NucleusLayer.RemoveAllAtMouse.
+	// Удаление звезды по ПКМ после удержания 0,2 с × сторона (T026, RemoveHold); вызывает NucleusLayer.RemoveAllAtMouse.
 	// Недособранные ингредиенты сгорают. Настоящий режим (T011, GDD «звезду
 	// можно забрать ПКМ и переставить»): звезда и её выходной буфер — в инвентарь.
 	public void RemoveAt(int row, int col)
