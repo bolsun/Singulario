@@ -1,0 +1,27 @@
+{
+  "StarTypes": [
+    { "Type": 0, "Name": "печь",        "Size": 3, "OutputCapacity": 10, "Choice": "Auto"   },
+    { "Type": 1, "Name": "фабрика",     "Size": 5, "OutputCapacity": 10, "Choice": "Player" },
+    { "Type": 2, "Name": "сверхгигант", "Size": 7, "OutputCapacity": 10, "Choice": "None"   }
+  ],
+  "Recipes": [
+    { "Id": "atom_y", "Name": "атом Ж", "Producer": 0, "Ticks": 256,
+      "Result": { "Kind": "Atom", "Tier": 0, "Holes": 8 },
+      "Ingredients": [ { "Kind": "Particle", "Id": 0, "Count": 8 } ] },
+    { "Id": "atom_r", "Name": "атом К", "Producer": 0, "Ticks": 256,
+      "Result": { "Kind": "Atom", "Tier": 1, "Holes": 8 },
+      "Ingredients": [ { "Kind": "Atom", "Id": 0, "Count": 1 }, { "Kind": "Particle", "Id": 1, "Count": 8 } ] },
+    { "Id": "atom_b", "Name": "атом С", "Producer": 0, "Ticks": 256,
+      "Result": { "Kind": "Atom", "Tier": 2, "Holes": 8 },
+      "Ingredients": [ { "Kind": "Atom", "Id": 0, "Count": 1 }, { "Kind": "Particle", "Id": 2, "Count": 8 } ] },
+    { "Id": "star_y", "Name": "звезда Ж", "Producer": 1, "Ticks": 256,
+      "Result": { "Kind": "Star", "Type": 0 },
+      "Ingredients": [ { "Kind": "Atom", "Id": 0, "Count": 8 } ] },
+    { "Id": "star_r", "Name": "звезда К", "Producer": 1, "Ticks": 256,
+      "Result": { "Kind": "Star", "Type": 1 },
+      "Ingredients": [ { "Kind": "Atom", "Id": 0, "Count": 4 }, { "Kind": "Atom", "Id": 1, "Count": 4 } ] },
+    { "Id": "star_b", "Name": "звезда С", "Producer": 1, "Ticks": 256,
+      "Result": { "Kind": "Star", "Type": 2 },
+      "Ingredients": [ { "Kind": "Atom", "Id": 0, "Count": 4 }, { "Kind": "Atom", "Id": 1, "Count": 4 }, { "Kind": "Atom", "Id": 2, "Count": 4 } ] }
+  ]
+}

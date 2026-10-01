@@ -163,9 +163,9 @@ public sealed class GoalChain
 		return true;
 	}
 
-	public void OpenAllRecipes()
+	public void OpenAllRecipes(StarCatalog catalog)
 	{
-		foreach (var r in StarRecipes.All) _recipes.Add(r.Id);
+		foreach (var r in catalog.Recipes) _recipes.Add(r.Id);
 		Version++;
 	}
 
@@ -175,11 +175,16 @@ public sealed class GoalChain
 		Version++;
 	}
 
-	// Открытые рецепты в порядке таблицы StarRecipes — для сохранения.
-	public List<string> SortedRecipes()
+	// Открытые рецепты в порядке каталога, затем неизвестные каталогу (F9 мог
+	// убрать рецепт — открытие не теряется) по алфавиту — для сохранения.
+	public List<string> SortedRecipes(StarCatalog catalog)
 	{
 		var list = new List<string>();
-		foreach (var r in StarRecipes.All) if (_recipes.Contains(r.Id)) list.Add(r.Id);
+		foreach (var r in catalog.Recipes) if (_recipes.Contains(r.Id)) list.Add(r.Id);
+		var rest = new List<string>();
+		foreach (var id in _recipes) if (catalog.IndexOf(id) < 0) rest.Add(id);
+		rest.Sort(StringComparer.Ordinal);
+		list.AddRange(rest);
 		return list;
 	}
 

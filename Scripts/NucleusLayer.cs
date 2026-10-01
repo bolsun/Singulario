@@ -457,6 +457,34 @@ public partial class NucleusLayer : Node2D
 	// (запуск, старые сохранения) — стоит.
 	[Export] public string GoalsPath = "res://Data/goals.json";
 	public GoalChain Goals { get; private set; }
+
+	// Типы звёзд и рецепты (T027): таблица из RecipesPath (данные — StarCatalog).
+	// Ошибка при старте — встроенная таблица StarCatalog.Default; F9 — перечитать.
+	[Export] public string RecipesPath = "res://Data/recipes.json";
+	public StarCatalog Catalog { get; private set; } = StarCatalog.Default;
+	private System.Func<StarRecipe, bool> _recipeAvailable;
+	public System.Func<StarRecipe, bool> RecipeAvailable => _recipeAvailable ??= IsRecipeAvailable;
+
+	// Каталог из файла; null — ошибка в error.
+	private StarCatalog ReadCatalog(out string error)
+	{
+		if (!FileAccess.FileExists(RecipesPath)) { error = $"файл {RecipesPath} не найден."; return null; }
+		using var file = FileAccess.Open(RecipesPath, FileAccess.ModeFlags.Read);
+		if (file == null) { error = $"не удалось открыть {RecipesPath}: {FileAccess.GetOpenError()}."; return null; }
+		return StarCatalog.Parse(file.GetAsText(), out error);
+	}
+
+	private StarCatalog LoadCatalog()
+	{
+		var catalog = ReadCatalog(out string error);
+		if (catalog == null)
+		{
+			GD.PrintErr($"[NucleusLayer] рецепты: {error} Работает встроенная таблица.");
+			return StarCatalog.Default;
+		}
+		GD.Print($"[NucleusLayer] рецепты: {catalog.Recipes.Count} из {RecipesPath}.");
+		return catalog;
+	}
 	public bool GoalsActive => Goals != null && !Territory.AllOpen;
 
 	// Цепочка из файла; ошибка — пустая цепочка (заданий нет) и сообщение.
@@ -478,14 +506,14 @@ public partial class NucleusLayer : Node2D
 		}
 		foreach (var st in data.Stages)
 			foreach (var id in st.Reward.Recipes)
-				if (StarRecipes.IndexOf(id) < 0) GD.PushWarning($"[NucleusLayer] задания: этап «{st.Name}» открывает неизвестный рецепт «{id}».");
+				if (Catalog.IndexOf(id) < 0) GD.PushWarning($"[NucleusLayer] задания: этап «{st.Name}» открывает неизвестный рецепт «{id}».");
 		GD.Print($"[NucleusLayer] задания: {data.Stages.Count} этап(ов) из {GoalsPath}, seed {data.Seed}.");
 		return new GoalChain(data);
 	}
 
 	// Рецепт звезды доступен игроку: в песочнице — все, иначе — открытые заданиями.
-	public bool IsRecipeAvailable(int index) =>
-		index >= 0 && index < StarRecipes.Count && (Inventory.Sandbox || Goals.IsRecipeOpen(StarRecipes.All[index].Id));
+	public bool IsRecipeAvailable(StarRecipe recipe) =>
+		recipe != null && (Inventory.Sandbox || Goals.IsRecipeOpen(recipe.Id));
 
 	// После каждого тика: этап выполнен — награда и следующий этап.
 	private void CheckGoals()
@@ -504,9 +532,9 @@ public partial class NucleusLayer : Node2D
 		var reward = st.Reward;
 		foreach (var id in reward.Recipes)
 		{
-			int index = StarRecipes.IndexOf(id);
-			if (index < 0) { GD.PushWarning($"[NucleusLayer] награда: неизвестный рецепт «{id}» — пропущен."); continue; }
-			if (Goals.OpenRecipe(id)) GD.Print($"[NucleusLayer] открыт рецепт «{StarRecipes.All[index].Name}».");
+			var recipe = Catalog.Get(id);
+			if (recipe == null) { GD.PushWarning($"[NucleusLayer] награда: неизвестный рецепт «{id}» — пропущен."); continue; }
+			if (Goals.OpenRecipe(id)) GD.Print($"[NucleusLayer] открыт рецепт «{recipe.Name}».");
 		}
 		bool shown = false;
 		if (reward.Ring)
@@ -615,12 +643,6 @@ public partial class NucleusLayer : Node2D
 		return true;
 	}
 	private static readonly Color DeniedPreviewColor = new Color(1f, 0.2f, 0.2f, 0.5f);
-	// Время рецепта для звезды Ж (тиков) и скорость по тиру звезды Ж/К/С.
-	[Export] public int StarRecipeTicks = 256;
-	[Export] public int[] StarSpeedByTier = new int[] { 1, 2, 4 };
-	// Выходной буфер звезды (T008): сколько готовых атомов она копит.
-	[Export] public int StarOutputCapacity = 10;
-	public int StarDuration(Star star) => star.Duration(StarRecipeTicks, StarSpeedByTier);
 
 	// Клетка свободна под звезду: как под ЧД, и не в ЧД. Пересечение звёзд — StarSet.
 	public bool CanPlaceStarCell(int row, int col) =>
@@ -1501,8 +1523,9 @@ public partial class NucleusLayer : Node2D
 		Inventory = new Inventory { Sandbox = SandboxMode };
 		Territory = new Territory();
 		// Запуск — песочное поле (вся карта открыта): все рецепты открыты, цепочка стоит.
+		Catalog = LoadCatalog();
 		Goals = LoadGoals();
-		Goals.OpenAllRecipes();
+		Goals.OpenAllRecipes(Catalog);
 		Goals.BeginStage(0, BlackHoles);
 		// Затемнение закрытых чанков — отдельный узел поверх объектов слоя 1,
 		// создаётся из кода (в сцене его нет).
@@ -1603,15 +1626,23 @@ public partial class NucleusLayer : Node2D
 	// летящие ядра. Заодно синхронизирует _currentSpinDirection с новым
 	// значением — чтобы следующая установка (ЛКМ) по умолчанию продолжила
 	// тем же направлением, а не молча вернулась к старому.
+	// Выход звезды — на следующую сторону по часовой (R, ЛКМ по печи, T027).
+	// У звезды без рецептов (С) выхода нет — ничего.
+	public void TurnStarOutput(Star star)
+	{
+		if (star.Choice == StarChoice.None) return;
+		star.OutputSide = (star.OutputSide + 1) % Star.SideCount;
+		var (orow, ocol) = star.OutputCell;
+		GD.Print($"[NucleusLayer] выход звезды ({star.Row},{star.Col}) — клетка ({orow},{ocol}).");
+	}
+
 	private void ToggleSpinDirectionUnderMouse()
 	{
 		// R над звездой (T006) — выход на следующую сторону по часовой.
 		var mouse = GetGlobalMousePosition();
 		if (Stars.TryGetAt(Mathf.FloorToInt(mouse.Y / CellSize), Mathf.FloorToInt(mouse.X / CellSize), out var star))
 		{
-			star.OutputSide = (star.OutputSide + 1) % Star.SideCount;
-			var (orow, ocol) = star.OutputCell;
-			GD.Print($"[NucleusLayer] выход звезды ({star.Row},{star.Col}) — клетка ({orow},{ocol}).");
+			TurnStarOutput(star);
 			return;
 		}
 
@@ -1704,7 +1735,7 @@ public partial class NucleusLayer : Node2D
 		int mrow = Mathf.FloorToInt(mouse.Y / CellSize), mcol = Mathf.FloorToInt(mouse.X / CellSize);
 		if (Stars.TryGetAt(mrow, mcol, out var star) && _starLayer != null)
 		{
-			_starLayer.SelectTool(star.Tier);
+			_starLayer.SelectTool(star.Type);
 			return;
 		}
 		if (BlackHoles.TryGetAt(mrow, mcol, out _) && _blackHoleLayer != null)
@@ -1935,7 +1966,7 @@ public partial class NucleusLayer : Node2D
 		denied = null;
 		if (_entAt.ContainsKey((row, col))) return new RemoveTarget(0, row, col, 1);
 		if (Stars.TryGetAt(row, col, out var star))
-			return new RemoveTarget(1, star.Row, star.Col, Star.Size);
+			return new RemoveTarget(1, star.Row, star.Col, star.Size);
 		if (BlackHoles.TryGetAt(row, col, out var hole))
 		{
 			var t = new RemoveTarget(2, hole.Row, hole.Col, hole.Size);
@@ -2851,6 +2882,7 @@ public partial class NucleusLayer : Node2D
 	{
 		foreach (var star in Stars.All)
 		{
+			if (star.Choice == StarChoice.None) continue; // С ничего не принимает
 			foreach (var (row, col, k) in star.RingCells())
 			{
 				if (!_entAt.TryGetValue((row, col), out var n)) continue;
@@ -2860,13 +2892,13 @@ public partial class NucleusLayer : Node2D
 				int p = SideKey(n, k);
 				if (IsClaimed(n, p)) continue;
 				// Атом-предмет (T007) — ингредиент-атом его тира, частица — по цвету.
-				int need = star.NeedIndex(slot.IsItem ? IngredientKind.Atom : IngredientKind.Particle, slot.ColorTier);
-				if (need < 0) continue;
+				var kind = slot.IsItem ? IngredientKind.Atom : IngredientKind.Particle;
+				if (!star.Accepts(kind, slot.ColorTier, RecipeAvailable)) continue;
 				if (!TierSpinAllowed(GrayCoreTier, TransferRules.NoSpin, n.CoreTier, n.Dir)) continue;
 
 				TakeGiven(n, k);
 				Claim(n, p);
-				star.Put(need);
+				star.Put(kind, slot.ColorTier);
 				var (dr, dc) = Adj8[k];
 				var from = n.Center + new Vector2(dc, dr) * _orbitRadius;
 				if (slot.IsItem) _starLayer?.OnItemTaken(star, from, slot.ColorTier);
@@ -2883,9 +2915,8 @@ public partial class NucleusLayer : Node2D
 	{
 		foreach (var star in Stars.All)
 		{
-			int duration = StarDuration(star);
-			star.Advance(duration);
-			star.TryFinishToOutput(duration, StarOutputCapacity);
+			star.Advance();
+			star.TryFinishToOutput();
 		}
 	}
 
@@ -2916,7 +2947,7 @@ public partial class NucleusLayer : Node2D
 			PutReceived(n, k, new RingSlot { Exists = true, IsHole = false, ColorTier = star.Output.Dequeue(), IsItem = true });
 			Claim(n, p);
 			// Место в буфере освободилось — ждущая готовая работа уходит туда же.
-			star.TryFinishToOutput(StarDuration(star), StarOutputCapacity);
+			star.TryFinishToOutput();
 		}
 	}
 
@@ -2939,9 +2970,8 @@ public partial class NucleusLayer : Node2D
 		foreach (var star in Stars.All)
 		{
 			if (!star.ContainsCell(row, col) && !star.IsRingCell(row, col)) continue;
-			int need = star.NeedIndex(IngredientKind.Atom, n.CoreTier);
-			if (need < 0) continue;
-			star.Put(need);
+			if (!star.Accepts(IngredientKind.Atom, n.CoreTier, RecipeAvailable)) continue;
+			star.Put(IngredientKind.Atom, n.CoreTier);
 			if (_starLayer != null)
 			{
 				var particles = new Atom();
@@ -4717,19 +4747,46 @@ public partial class NucleusLayer : Node2D
 		public int Cy { get; set; }
 	}
 
+	// Звезда (T027). Новый формат — есть Type; Row/Col — верхняя левая клетка.
+	// Старый формат (до T027) — Tier и Recipe (индекс StarCatalog.LegacyRecipeIds),
+	// Row/Col — верхняя левая клетка следа 3×3; переводится в ApplySavedStar.
 	private class SavedStar
 	{
-		public int Row { get; set; }   // верхняя левая клетка
+		public int Row { get; set; }
 		public int Col { get; set; }
-		public int Tier { get; set; }
-		public int Recipe { get; set; } // индекс в StarRecipes.All
+		[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+		public int? Type { get; set; }
+		// Выбранный рецепт фабрики (StarRecipe.Id); у печи и С — нет.
+		[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+		public string RecipeId { get; set; }
+		// Буфер ингредиентов по ячейкам (StarCatalog.SlotOf: частицы 0..2, атомы 0..2).
+		[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+		public List<int> Items { get; set; }
+		// Рецепт в работе (Id) или нет.
+		[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+		public string ActiveRecipe { get; set; }
 		public int OutputSide { get; set; } = Star.DefaultOutputSide; // 0 N, 1 E, 2 S, 3 W
-		public List<int> Buffer { get; set; } = new(); // набрано по ингредиентам рецепта
-		public bool Producing { get; set; }
 		public int Elapsed { get; set; }
 		// Выходной буфер (T008): коды предметов (StarItem: тир атома или звезда, T011), первый — самый старый. В старых сохранениях нет.
 		public List<int> Output { get; set; } = new();
+		// Старый формат (только чтение).
+		[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+		public int? Tier { get; set; }
+		[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+		public int? Recipe { get; set; }
+		[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+		public bool? Producing { get; set; }
 	}
+
+	private static SavedStar ToSavedStar(Star star, int dRow, int dCol, bool withState) => new()
+	{
+		Row = star.Row + dRow, Col = star.Col + dCol, Type = star.Type, RecipeId = star.RecipeId,
+		OutputSide = star.OutputSide,
+		Items = withState ? new List<int>(star.Buffer) : null,
+		ActiveRecipe = withState ? star.ActiveRecipe?.Id : null,
+		Elapsed = withState ? star.Elapsed : 0,
+		Output = withState ? new List<int>(star.Output) : new List<int>(),
+	};
 
 	private class SavedLayer2BlackHole
 	{
@@ -4831,7 +4888,7 @@ public partial class NucleusLayer : Node2D
 			Goals = new SavedGoals
 			{
 				Stage = Goals.Stage, Baseline = new List<long>(Goals.Baseline),
-				Recipes = Goals.SortedRecipes(), Seed = Goals.Seed,
+				Recipes = Goals.SortedRecipes(Catalog), Seed = Goals.Seed,
 			},
 			Hints = new SavedHints { Camera = Hints.CameraDone, Grid = Hints.GridDone },
 		};
@@ -4872,13 +4929,7 @@ public partial class NucleusLayer : Node2D
 		}
 
 		foreach (var star in Stars.All)
-			data.Stars.Add(new SavedStar
-			{
-				Row = star.Row, Col = star.Col, Tier = star.Tier, Recipe = star.Recipe,
-				OutputSide = star.OutputSide, Buffer = new List<int>(star.Buffer),
-				Producing = star.Producing, Elapsed = star.Elapsed,
-				Output = new List<int>(star.Output),
-			});
+			data.Stars.Add(ToSavedStar(star, 0, 0, withState: true));
 
 		if (Ports != null)
 			foreach (var pair in Ports.Enumerate())
@@ -4962,18 +5013,77 @@ public partial class NucleusLayer : Node2D
 		if (saved == null)
 		{
 			Goals.Seed = Goals.Data.Seed;
-			if (sandbox) Goals.OpenAllRecipes();
+			if (sandbox) Goals.OpenAllRecipes(Catalog);
 			Goals.BeginStage(0, BlackHoles);
 			return;
 		}
 		Goals.Seed = saved.Seed;
 		foreach (var id in saved.Recipes ?? new List<string>())
 		{
-			if (StarRecipes.IndexOf(id) >= 0) Goals.OpenRecipe(id);
+			if (Catalog.IndexOf(id) >= 0) Goals.OpenRecipe(id);
 			else GD.PushWarning($"[NucleusLayer] импорт: неизвестный рецепт «{id}» — пропущен.");
 		}
 		Goals.Restore(saved.Stage, saved.Baseline);
-		GD.Print($"[NucleusLayer] задания: этап {System.Math.Min(Goals.Stage + 1, Goals.StageCount)}/{Goals.StageCount}{(Goals.AllDone ? " (все выполнены)" : "")}, рецептов открыто {Goals.SortedRecipes().Count}.");
+		GD.Print($"[NucleusLayer] задания: этап {System.Math.Min(Goals.Stage + 1, Goals.StageCount)}/{Goals.StageCount}{(Goals.AllDone ? " (все выполнены)" : "")}, рецептов открыто {Goals.SortedRecipes(Catalog).Count}.");
+	}
+
+	// Звезда из сохранения или шаблона (T027). Старый формат (нет Type): тир →
+	// тип с тем же номером, центр следа 3×3 остаётся центром, рецепт — индекс
+	// прежней таблицы → Id (чужой типу — рецепт по умолчанию, работа сгорает),
+	// буфер ингредиентов сгорает. Выходной буфер восстанавливается всегда
+	// (предметы уже сделаны). Не помещается — пропуск с предупреждением.
+	private bool ApplySavedStar(SavedStar ss, int dRow, int dCol)
+	{
+		bool legacy = ss.Type == null;
+		int type = ss.Type ?? ss.Tier ?? 0;
+		if (!StarCatalog.IsType(type))
+		{
+			GD.PushWarning($"[NucleusLayer] импорт: звезда в клетке ({ss.Row},{ss.Col}) неизвестного типа {type} — пропущена.");
+			return false;
+		}
+		int size = Catalog.TypeOf(type).Size;
+		int row = ss.Row + dRow, col = ss.Col + dCol;
+		string recipeId = ss.RecipeId;
+		StarRecipe active = null;
+		if (legacy)
+		{
+			// Старый след 3×3: центр = верхняя левая + 1.
+			row = row + 1 - size / 2;
+			col = col + 1 - size / 2;
+			int index = ss.Recipe ?? 0;
+			var old = index >= 0 && index < StarCatalog.LegacyRecipeIds.Length ? Catalog.Get(StarCatalog.LegacyRecipeIds[index]) : null;
+			bool own = old != null && old.Producer == type;
+			recipeId = own ? old.Id : null;
+			if ((ss.Producing ?? false) && own) active = old;
+		}
+		else if (ss.ActiveRecipe != null)
+		{
+			active = Catalog.Get(ss.ActiveRecipe);
+			if (active == null || active.Producer != type)
+				GD.PushWarning($"[NucleusLayer] импорт: у звезды ({ss.Row},{ss.Col}) работа «{ss.ActiveRecipe}» не из каталога её типа — сгорела.");
+		}
+		var recipe = Catalog.Get(recipeId);
+		if (Catalog.TypeOf(type).Choice == StarChoice.Player && (recipe == null || recipe.Producer != type))
+		{
+			if (recipeId != null) GD.PushWarning($"[NucleusLayer] импорт: у звезды ({ss.Row},{ss.Col}) рецепт «{recipeId}» не её типа — рецепт по умолчанию.");
+			recipeId = null; // TryPlace поставит рецепт по умолчанию
+		}
+		var star = _starLayer?.TryPlace(row, col, type, log: false, recipe: recipeId);
+		if (star == null)
+		{
+			GD.PushWarning($"[NucleusLayer] импорт: звезда типа {type} {size}×{size} в клетке ({row},{col}) не ставится (занято или закрыто) — пропущена.");
+			return false;
+		}
+		star.OutputSide = ((ss.OutputSide % Star.SideCount) + Star.SideCount) % Star.SideCount;
+		if (!legacy) star.RestoreBuffer(ss.Items);
+		star.RestoreWork(active, ss.Elapsed);
+		foreach (int code in ss.Output ?? new List<int>())
+		{
+			if (star.Output.Count >= star.OutputCapacity) break;
+			int id = StarItem.Tier(code);
+			if (StarItem.IsStar(code) ? StarCatalog.IsType(id) : Inventory.IsAtomTier(id)) star.Output.Enqueue(code);
+		}
+		return true;
 	}
 
 	// Расставляет объекты из данных сохранения (или шаблона, T009) поверх
@@ -5052,26 +5162,7 @@ public partial class NucleusLayer : Node2D
 		int starsPlaced = 0;
 		var starsList = data.Stars ?? new List<SavedStar>();
 		foreach (var ss in starsList)
-		{
-			var star = ss.Recipe >= 0 && ss.Recipe < StarRecipes.Count
-				? _starLayer?.TryPlace(ss.Row + dRow, ss.Col + dCol, ss.Tier, log: false, recipe: ss.Recipe)
-				: null;
-			if (star == null)
-			{
-				GD.PushWarning($"[NucleusLayer] импорт: звезда в клетке ({ss.Row},{ss.Col}) не ставится (занято или неверный рецепт {ss.Recipe}) — пропущена.");
-				continue;
-			}
-			star.OutputSide = ((ss.OutputSide % Star.SideCount) + Star.SideCount) % Star.SideCount;
-			star.RestoreBuffer(ss.Buffer);
-			star.Producing = ss.Producing;
-			star.Elapsed = ss.Producing ? System.Math.Clamp(ss.Elapsed, 0, StarDuration(star)) : 0;
-			foreach (int code in ss.Output ?? new List<int>())
-			{
-				if (star.Output.Count >= StarOutputCapacity) break;
-				if (Inventory.IsAtomTier(StarItem.Tier(code))) star.Output.Enqueue(code);
-			}
-			starsPlaced++;
-		}
+			if (ApplySavedStar(ss, dRow, dCol)) starsPlaced++;
 
 		// ЧД слоя 2 (T003) больше нет — старые записи пропускаются.
 		var oldHoles = data.BlackHoles ?? new List<SavedLayer2BlackHole>();
@@ -5183,9 +5274,9 @@ public partial class NucleusLayer : Node2D
 
 		foreach (var star in Stars.All)
 		{
-			bool first = Inside(star.Row, star.Col), last = Inside(star.Row + Star.Size - 1, star.Col + Star.Size - 1);
+			bool first = Inside(star.Row, star.Col), last = Inside(star.Row + star.Size - 1, star.Col + star.Size - 1);
 			if (first && last)
-				t.Stars.Add(new SavedStar { Row = star.Row - row0, Col = star.Col - col0, Tier = star.Tier, Recipe = star.Recipe, OutputSide = star.OutputSide });
+				t.Stars.Add(ToSavedStar(star, -row0, -col0, withState: false));
 			else if (first || last)
 				GD.PushWarning($"[NucleusLayer] шаблон: звезда в клетке ({star.Row},{star.Col}) выходит за границу — пропущена.");
 		}
@@ -5519,7 +5610,11 @@ public partial class NucleusLayer : Node2D
 			for (int i = 0; i < 30; i++)
 				layer.PlaceClusterAt(rng.RandiRange(0, size - 1), rng.RandiRange(0, size - 1), 40);
 		_blackHoleLayer?.TryPlace(40, 40, 4, log: false);
-		_starLayer?.TryPlace(20, 70, 0, log: false, recipe: 0);
+		// Звёзды всех трёх типов (T027): печь, фабрика (звезда Ж), С.
+		_starLayer?.TryPlace(20, 70, 0, log: false);
+		_starLayer?.TryPlace(60, 10, 1, log: false, recipe: "star_y");
+		_starLayer?.TryPlace(70, 70, 2, log: false);
+
 
 		int[] holeCounts = { 2, 4, 8 };
 		for (int row = 0; row < size; row++)
@@ -5596,6 +5691,8 @@ public partial class NucleusLayer : Node2D
 		foreach (long v in BlackHoles.ParticlesAbsorbed) Mix(v);
 		foreach (var star in Stars.All)
 		{
+			Mix(star.Type); Mix(Catalog.IndexOf(star.RecipeId)); Mix(Catalog.IndexOf(star.ActiveRecipe?.Id));
+			foreach (int b in star.Buffer) Mix(b);
 			Mix(star.Elapsed); Mix(star.Producing ? 1 : 0); Mix(star.Output.Count);
 			foreach (int code in star.Output) Mix(code);
 		}
