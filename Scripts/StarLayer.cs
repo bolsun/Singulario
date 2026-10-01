@@ -22,10 +22,13 @@ using Godot;
 //   - эффект поглощения (T006c).
 //
 // Эффект поглощения — только визуал: частица или атом, которых забрала звезда
-// (в симуляции — мгновенно), летит по прямой к центру с ускорением и на
-// IntakeEndFraction радиуса диска исчезает (уменьшается и растворяется на
-// последней IntakeFadeFraction пути). Цвет свой, без спирали и красного
-// смещения. Идёт по времени кадра, в сохранение не попадает. Устройство как у
+// (в симуляции — мгновенно), подхватывается по короткой дуге (T021): за время
+// поглощения угол вокруг центра звезды меняется на IntakeArcTurns оборота, радиус
+// равномерно убывает от начального (не дальше короны) до IntakeEndFraction
+// радиуса диска, где объект исчезает (уменьшается и растворяется на последней
+// IntakeFadeFraction пути). Скорость ровная, без ускорения к центру. Направление —
+// по дрейфу поверхности и короны шейдера (по часовой на экране), IntakeArcClockwise.
+// Цвет свой, без красного смещения и без вспышки (это язык ЧД, BlackHoleLayer). Идёт по времени кадра, в сохранение не попадает. Устройство как у
 // падения в ЧД (BlackHoleLayer): узлов на объект нет, у звезды заранее
 // выделенный массив из MaxIntakePerStar структур, всё летящее всех звёзд — один
 // MultiMesh, буфер пишется одним вызовом за кадр. Сверх лимита — без анимации.
@@ -80,6 +83,10 @@ public partial class StarLayer : Node2D
 	[Export] public float IntakeEndFraction = 2f / 3f;
 	// Доля пути в конце, на которой объект уменьшается и растворяется.
 	[Export] public float IntakeFadeFraction = 0.35f;
+	// Дуга подхвата (T021): сколько оборота вокруг центра за время поглощения.
+	[Export] public float IntakeArcTurns = 0.25f;
+	// Направление дуги — как дрейф ячеек и короны в star_assembler.gdshader (по часовой).
+	[Export] public bool IntakeArcClockwise = true;
 	// Радиус атома на экране (px), ниже которого атом рисуется одним кружком.
 	[Export] public float IntakeLodPixels = 5f;
 
@@ -602,6 +609,10 @@ public partial class StarLayer : Node2D
 		float zoom = cam != null ? cam.Zoom.X : 1f;
 		float endR = DiskRadiusCells * _cellSize * IntakeEndFraction;
 		float fade = Mathf.Clamp(IntakeFadeFraction, 0.01f, 1f);
+		// Дуга не выходит за корону: начальный радиус не дальше её края.
+		float coronaR = BodyDiameterCells * CoronaScale * 0.5f * DebugVisualScale * _cellSize;
+		// В мире Godot ось Y вниз: рост угла atan2 — по часовой на экране.
+		float sweep = IntakeArcTurns * Mathf.Tau * (IntakeArcClockwise ? 1f : -1f);
 		int n = 0;
 		foreach (var pair in _fx)
 		{
@@ -612,13 +623,13 @@ public partial class StarLayer : Node2D
 			{
 				ref var f = ref fx.Items[i];
 				float t = Mathf.Clamp(f.Age / IntakeSeconds, 0f, 1f);
-				float e = t * t; // ускорение к центру
-				float r0 = f.Start.Length();
-				var dir = r0 > 0f ? f.Start / r0 : Vector2.Up;
-				// Приехал уже внутрь 2/3 диска — только растворяется на месте.
+				float r0 = Mathf.Min(f.Start.Length(), coronaR);
+				float a0 = r0 > 0f ? Mathf.Atan2(f.Start.Y, f.Start.X) : -Mathf.Pi / 2f;
+				// Приехал уже внутрь 2/3 диска — тонет по дуге на том же радиусе.
 				float r1 = Mathf.Min(endR, r0);
-				var pos = center + dir * Mathf.Lerp(r0, r1, e);
-				float k = Mathf.Clamp((e - (1f - fade)) / fade, 0f, 1f); // 0..1 на последнем участке
+				float a = a0 + sweep * t;
+				var pos = center + Mathf.Lerp(r0, r1, t) * new Vector2(Mathf.Cos(a), Mathf.Sin(a));
+				float k = Mathf.Clamp((t - (1f - fade)) / fade, 0f, 1f); // 0..1 на последнем участке
 				float shrink = 1f - 0.85f * k;
 				float alpha = 1f - k;
 
