@@ -2980,7 +2980,7 @@ public partial class NucleusLayer : Node2D
 	{
 		foreach (var star in Stars.All)
 		{
-			if (star.Output.Count == 0) continue;
+			if (star.Output.Count == 0 || star.Choice == StarChoice.None) continue; // С в линию не отдаёт (T027)
 			// Звезда-предмет (T011) по дыркам не едет — ждёт в буфере, пока игрок
 			// не заберёт её в инвентарь; до тех пор выдача в линию стоит.
 			if (StarItem.IsStar(star.Output.Peek())) continue;
