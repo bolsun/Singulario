@@ -66,7 +66,6 @@ public partial class StarLayer : Node2D
 		new("1a1f5c"), new("26479e"), new("3a7fe0"), new("69b8ff"), new("c2ecff"), // С
 		new("0d3b3f"), new("146e4e"), new("25a860"), new("6ddb5e"), new("b4f2a0"), // З
 	};
-	private static readonly Color BlockedArcColor = new("d23a4a");
 	private static readonly Color[] ChevronPulse = { new("ff6e5e"), new("d23a4a"), new("8c1c3a"), new("d23a4a") };
 
 	// Свечение во время производства — прибавка яркости (0.5 — в 1.5 раза ярче):
@@ -842,10 +841,13 @@ public partial class StarLayer : Node2D
 		{
 			int duration = star.Duration;
 			float t = Mathf.Clamp((float)star.Elapsed / duration, 0f, 1f);
-			var arcColor = t >= 1f ? new Color(1f, 0.35f, 0.3f, 0.9f) : new Color(1f, 1f, 1f, 0.85f); // красная — готово, выходной буфер полон
-			// Шейдер (T017): цвета из палитры — тон 3 типа, забитый выход — #d23a4a.
-			if (UseShader) arcColor = t >= 1f ? BlockedArcColor : TierTone(star.Type, 3);
-			DrawArc(center, _cellSize * 0.6f * scale, -Mathf.Pi / 2f, -Mathf.Pi / 2f + Mathf.Tau * t, 32, arcColor, _cellSize * 0.08f);
+			// Выход забит (t >= 1) — дуги нет совсем: сигнал один, шеврон выхода.
+			if (t < 1f)
+			{
+				// Шейдер (T017): тон 3 типа; спрайтовый режим — белая.
+				var arcColor = UseShader ? TierTone(star.Type, 3) : new Color(1f, 1f, 1f, 0.85f);
+				DrawArc(center, _cellSize * 0.6f * scale, -Mathf.Pi / 2f, -Mathf.Pi / 2f + Mathf.Tau * t, 32, arcColor, _cellSize * 0.08f);
+			}
 		}
 		// Выход забит дольше одного цикла рецепта — шеврон выхода мягко пульсирует (без наведения).
 		if (UseShader && BlockedTicks(star) > star.Duration)
