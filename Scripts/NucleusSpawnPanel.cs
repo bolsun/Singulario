@@ -332,7 +332,12 @@ public partial class NucleusSpawnPanel : Control
 				starButton.AddThemeColorOverride("font_focus_color", c);
 			}
 			int starTier = tier;
-			starButton.Pressed += () => GetNodeOrNull<StarLayer>("/root/Main/StarLayer")?.SelectTool(starTier);
+			starButton.Pressed += () =>
+			{
+				var starLayer = GetNodeOrNull<StarLayer>("/root/Main/StarLayer");
+				if (starLayer == null) return;
+				if (starLayer.IsToolType(starTier)) _nucleusLayer?.ClearAllTools(); else starLayer.SelectTool(starTier);
+			};
 			grid.AddChild(starButton);
 		}
 
@@ -343,7 +348,12 @@ public partial class NucleusSpawnPanel : Control
 			Text = "ЧД",
 			CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
 		};
-		holeButton.Pressed += () => GetNodeOrNull<BlackHoleLayer>("/root/Main/BlackHoleLayer")?.SelectTool();
+		holeButton.Pressed += () =>
+		{
+			var holeLayer = GetNodeOrNull<BlackHoleLayer>("/root/Main/BlackHoleLayer");
+			if (holeLayer == null) return;
+			if (holeLayer.HasTool) _nucleusLayer?.ClearAllTools(); else holeLayer.SelectTool();
+		};
 		grid.AddChild(holeButton);
 
 		// Кнопки молекул — только при включённом слое 2 (T005).
@@ -491,6 +501,8 @@ public partial class NucleusSpawnPanel : Control
 			GD.PrintErr("[NucleusSpawnPanel] не найден NucleusLayer — выбор пресета невозможен.");
 			return;
 		}
+		// Повторный клик по кнопке выбранного инструмента снимает его (T030).
+		if (_nucleusLayer.IsSpawnPresetSelected(tier, holeCount)) { _nucleusLayer.ClearAllTools(); return; }
 		_nucleusLayer.SelectSpawnPreset(tier, holeCount);
 	}
 
@@ -506,6 +518,7 @@ public partial class NucleusSpawnPanel : Control
 			GD.PrintErr("[NucleusSpawnPanel] не найден NucleusLayer — выбор пресета невозможен.");
 			return;
 		}
+		if (_nucleusLayer.IsSpawnPresetSelected(_nucleusLayer.GrayCoreTier, holeCount)) { _nucleusLayer.ClearAllTools(); return; }
 		_nucleusLayer.SelectSpawnPreset(_nucleusLayer.GrayCoreTier, holeCount);
 	}
 
@@ -546,6 +559,7 @@ public partial class NucleusSpawnPanel : Control
 			GD.PrintErr("[NucleusSpawnPanel] не найден EnergyLayer — выбор типа энергии невозможен.");
 			return;
 		}
+		if (_energyLayer.IsTierSelected(tier)) { _nucleusLayer?.ClearAllTools(); return; }
 		_energyLayer.SelectEnergyType(tier);
 	}
 
@@ -556,6 +570,7 @@ public partial class NucleusSpawnPanel : Control
 		// (см. EnergyClusterLayer._UnhandledInput/TryPlaceAtMouseIfSelected).
 		// Ссылка на layer гарантированно не null — кнопка создаётся только
 		// для уже найденных узлов (см. LoadParticleLayers).
+		if (layer.IsPlacing) { _nucleusLayer?.ClearAllTools(); return; }
 		layer.SelectClusterMode();
 	}
 }

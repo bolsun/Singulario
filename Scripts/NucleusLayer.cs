@@ -1803,10 +1803,7 @@ public partial class NucleusLayer : Node2D
 		if (nucleus == null)
 		{
 			// Пустая клетка — снять любой инструмент (атом, звезда, ЧД, источник).
-			ClearSelection();
-			_energyLayer?.ClearSelection();
-			foreach (var clusterLayer in _energyClusterLayers) clusterLayer.ClearSelection();
-			GetViewport().GuiReleaseFocus(); // кнопка панели не остаётся подсвеченной
+			ClearAllTools();
 			GD.Print($"[NucleusLayer] пипетка: в клетке ({row},{col}) нет ядра — инструмент снят.");
 			return;
 		}
@@ -1909,6 +1906,20 @@ public partial class NucleusLayer : Node2D
 		_starLayer?.ClearTool();
 		GD.Print($"[NucleusLayer] выбрано для установки: тир {tier}, дырок {holeCount}/8, направление {(_currentSpinDirection > 0 ? "по часовой" : "против часовой")} (R — переключить). Клик (или удержание ЛКМ) по полю — поставить.");
 	}
+
+	// Снять любой инструмент слоя 1 (атом, звезда, ЧД, источник) — Q по пустой клетке
+	// и повторный клик по кнопке панели (T030).
+	public void ClearAllTools()
+	{
+		ClearSelection();
+		_energyLayer?.ClearSelection();
+		foreach (var clusterLayer in _energyClusterLayers) clusterLayer.ClearSelection();
+		GetViewport().GuiReleaseFocus(); // кнопка панели не остаётся подсвеченной
+	}
+
+	// Выбран ли ровно этот пресет атома (тир и число дырок) — для повторного клика по кнопке.
+	public bool IsSpawnPresetSelected(int tier, int holeCount) =>
+		_selectedSpawnTier == tier && _selectedSpawnHoleCount == holeCount;
 
 	// Вызывается EnergyLayer при выборе типа энергии на панели — сбрасывает
 	// выбор ядра (см. комментарий у SelectSpawnPreset).
@@ -2474,17 +2485,21 @@ public partial class NucleusLayer : Node2D
 		int col = Mathf.FloorToInt(worldPos.X / CellSize);
 		int row = Mathf.FloorToInt(worldPos.Y / CellSize);
 
-		if (_entAt.ContainsKey((row, col)) || IsCellBlockedForLayer1(row, col))
+		int tier = _selectedSpawnTier.Value;
+		// Решение то же, что у клика (T030): на занятой клетке превью поверх атома,
+		// если он отличается; такой же — скрыто; нельзя — красное.
+		var decision = EvaluatePlace(row, col, tier, _selectedSpawnHoleCount);
+		if (!decision.Draws || decision.Reason == PlaceDenyReason.Layer2) // красную подсветку молекулы рисует MoleculeLayer
 		{
-			_placementPreview.Visible = false; // клетка занята (ЧД или чанк с молекулой — красную подсветку молекулы рисует MoleculeLayer)
+			_placementPreview.Visible = false;
 			return;
 		}
 
-		int tier = _selectedSpawnTier.Value;
 		var baseColor = (tier >= 0 && tier < _tierPreviewColors.Length) ? _tierPreviewColors[tier] : Colors.White;
 		_placementPreview.Position = new Vector2(col * CellSize + CellSize / 2f, row * CellSize + CellSize / 2f);
-		// Нет атома в инвентаре (настоящий режим, T008) — красный, как запрет.
-		_placementPreview.Modulate = Inventory.CanAfford(tier) ? new Color(baseColor.R, baseColor.G, baseColor.B, 0.5f) : DeniedPreviewColor;
+		_placementPreview.Modulate = decision.Outcome == PlaceOutcome.Deny
+			? DeniedPreviewColor
+			: new Color(baseColor.R, baseColor.G, baseColor.B, 0.5f);
 		_placementPreview.Visible = true;
 	}
 
@@ -4586,6 +4601,49 @@ public partial class NucleusLayer : Node2D
 		return ring;
 	}
 
+	// Описание клетки для PlaceDecision (T030): единое место для клика и превью.
+	private PlaceResult EvaluatePlace(int row, int col, int tier, int holeCount)
+	{
+		_entAt.TryGetValue((row, col), out var e);
+		var tool = new PlaceTool(tier, holeCount, _currentSpinDirection, !IsSpinnerTier(tier));
+		var atom = e == null
+			? default
+			: new PlaceCellAtom(true, e.CoreTier, HoleCountOf(e), e.Dir, e.Cross != null, e.IsCargo, !IsSpinnerTier(e.CoreTier));
+		var cell = new PlaceCellFlags(
+			Open: IsCellOpen(row, col),
+			BlackHole: BlackHoles.TryGetAt(row, col, out _),
+			Star: Stars.TryGetAt(row, col, out _),
+			Layer2: _moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col),
+			Port: Ports != null && Ports.TryGetPortAtCell(row, col, out _),
+			CanAfford: Inventory.CanAfford(tier));
+		return PlaceDecision.Decide(tool, atom, cell);
+	}
+
+	// Красная вспышка отказа установки: чанк, след звезды/ЧД, порт, клетка.
+	// «Нет атома» и слой 2 — без вспышки (красное превью / подсветка молекулы).
+	private void FlashPlaceDenied(int row, int col, PlaceDenyReason reason)
+	{
+		switch (reason)
+		{
+			case PlaceDenyReason.Closed:
+				DenyIfClosed(row, col);
+				break;
+			case PlaceDenyReason.BlackHole:
+				if (BlackHoles.TryGetAt(row, col, out var hole)) _removeHoldLayer?.FlashDenied(hole.Row, hole.Col, hole.Size);
+				break;
+			case PlaceDenyReason.Star:
+				if (Stars.TryGetAt(row, col, out var star)) _removeHoldLayer?.FlashDenied(star.Row, star.Col, star.Size);
+				break;
+			case PlaceDenyReason.Port:
+				if (Ports != null && Ports.TryGetPortAtCell(row, col, out var portKey)) _portLayer?.FlashPort(portKey);
+				break;
+			case PlaceDenyReason.Cargo:
+			case PlaceDenyReason.Occupied:
+				_removeHoldLayer?.FlashDenied(row, col, 1);
+				break;
+		}
+	}
+
 	// Ставит одно ядро в клетку под worldPos (см. _UnhandledInput/ЛКМ). Если
 	// клетка уже занята — по умолчанию ничего не делает, КРОМЕ одного случая
 	// (по заданию клиента): если и старое ядро в клетке, и новое, которое
@@ -4602,44 +4660,22 @@ public partial class NucleusLayer : Node2D
 		int col = Mathf.FloorToInt(worldPos.X / CellSize);
 		int row = Mathf.FloorToInt(worldPos.Y / CellSize);
 
-		if (DenyIfClosed(row, col))
+		// Единое решение для клика и превью (T030, PlaceDecision): пусто / заменить /
+		// такой же / отказ. Проверка инвентаря — до удаления: без атома старый остаётся.
+		var decision = EvaluatePlace(row, col, tier, holeCount);
+		if (decision.Outcome == PlaceOutcome.Deny)
 		{
-			GD.Print($"[NucleusLayer] клетка ({row},{col}) в закрытом чанке — пропуск.");
+			FlashPlaceDenied(row, col, decision.Reason);
+			GD.Print($"[NucleusLayer] установка в ({row},{col}) отклонена: {decision.Reason}.");
 			return;
 		}
-		if (IsCellBlockedForLayer1(row, col))
-		{
-			GD.Print($"[NucleusLayer] клетка ({row},{col}) занята чёрной дырой (или её чанк — молекулой) — пропуск.");
-			return;
-		}
+		if (decision.Outcome == PlaceOutcome.Same) return;
 
-		if (Ports != null && Ports.TryGetPortAtCell(row, col, out var portKey))
+		bool wasCrossroad = false;
+		if (decision.Outcome == PlaceOutcome.Replace && _entAt.TryGetValue((row, col), out var existingNucleus))
 		{
-			_portLayer?.FlashPort(portKey);
-			GD.Print($"[NucleusLayer] клетка ({row},{col}) — порт чанка, ядро сюда не ставится.");
-			return;
-		}
-
-		if (_entAt.TryGetValue((row, col), out var existingNucleus))
-		{
-			if (!IsNormalTier(tier) || !IsNormalTier(existingNucleus.CoreTier) || existingNucleus.IsCargo)
-			{
-				GD.Print($"[NucleusLayer] клетка ({row},{col}) уже занята — пропуск.");
-				return;
-			}
-		}
-
-		// Настоящий режим (T008): атом Ж/К/С стоит 1 атом этого тира из инвентаря.
-		// Проверка до замены: без атома старый остаётся на месте.
-		if (!Inventory.CanAfford(tier))
-		{
-			GD.Print($"[NucleusLayer] в инвентаре нет атома тира {tier} — установка в ({row},{col}) не сделана.");
-			return;
-		}
-
-		if (existingNucleus != null)
-		{
-			GD.Print($"[NucleusLayer] клетка ({row},{col}) занята обычным ядром тира {existingNucleus.CoreTier} — заменяю на тир {tier}.");
+			GD.Print($"[NucleusLayer] клетка ({row},{col}) занята атомом тира {existingNucleus.CoreTier} — заменяю на тир {tier}.");
+			wasCrossroad = existingNucleus.Cross != null; // режим перекрёстка сохраняется (T030)
 			RefundToInventory(existingNucleus); // замена = снять старый + поставить новый
 			RemoveNucleusEntity(existingNucleus);
 		}
@@ -4662,9 +4698,15 @@ public partial class NucleusLayer : Node2D
 			LocalIndex = chunk.Nuclei.Count
 		};
 
+		if (wasCrossroad)
+		{
+			nucleus.Cross = new Crossroad(holeCount);
+			_crossSet.Add(nucleus);
+		}
 		chunk.Nuclei.Add(nucleus);
 		_entAt[(row, col)] = nucleus;
 		RegisterEntity(nucleus);
+		if (wasCrossroad) Touch(nucleus);
 		RebuildChunkMeshes(chunk);
 
 		// Симуляция не завязана на видимость чанка (см. комментарий у

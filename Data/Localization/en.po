@@ -64,17 +64,17 @@ msgstr "Mouse wheel — zoom"
 msgid "G — сетка"
 msgstr "G — grid"
 
-msgid "ЛКМ — поставить, ПКМ — убрать"
-msgstr "LMB — place, RMB — remove"
+msgid "ЛКМ — поставить или заменить, ПКМ — убрать"
+msgstr "LMB — place or replace, RMB — remove"
 
-msgid "Q — взять атом под курсором как образец"
-msgstr "Q — pick the atom under the cursor as a template"
+msgid "Q — взять атом как образец; Q по пустому — снять инструмент"
+msgstr "Q — pick an atom as a template; Q on an empty cell — drop the tool"
 
 msgid "R — направление вращения атома, выход звезды"
 msgstr "R — atom spin direction, star output side"
 
-msgid "ЛКМ по атому — перекрёсток"
-msgstr "LMB on an atom — crossroad"
+msgid "ЛКМ по атому без инструмента — перекрёсток"
+msgstr "LMB on an atom with no tool — crossroad"
 
 msgid "Ctrl / Shift + ЛКМ по звезде — забрать в инвентарь"
 msgstr "Ctrl / Shift + LMB on a star — take to inventory"
