@@ -51,6 +51,10 @@ https://claude.ai/code/artifact/9cf8f132-726d-4cf1-b623-86551e34a7c4
 - Главная сцена: `res://Main.tscn`.
 - Сборка: `dotnet build Singulario.sln` (или Build в редакторе Godot).
 - Всегда собирай проект после изменений и сообщай об ошибках компиляции.
+- Godot установлен: `D:\Godot\Godot_v4.7.2-stable_mono_win64.exe` (с окном) и
+  `D:\Godot\Godot_v4.7.2-stable_mono_win64_console.exe` (консоль, для `--headless`, самопроверки).
+  В PATH его нет — не искать, брать этот путь (в Bash: `/d/Godot/...`). Разрешён в `.claude/settings.json`
+  только `--headless`.
 
 ## Текущее состояние кода
 
