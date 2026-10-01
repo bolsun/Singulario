@@ -27,7 +27,7 @@ using Godot;
 // равномерно убывает от начального (не дальше короны) до IntakeEndFraction
 // радиуса диска, где объект исчезает (уменьшается и растворяется на последней
 // IntakeFadeFraction пути). Скорость ровная, без ускорения к центру. Направление —
-// по дрейфу поверхности и короны шейдера (по часовой на экране), IntakeArcClockwise.
+// против часовой на экране, как падение в ЧД и её диск, IntakeArcClockwise.
 // Цвет свой, без красного смещения и без вспышки (это язык ЧД, BlackHoleLayer). Идёт по времени кадра, в сохранение не попадает. Устройство как у
 // падения в ЧД (BlackHoleLayer): узлов на объект нет, у звезды заранее
 // выделенный массив из MaxIntakePerStar структур, всё летящее всех звёзд — один
@@ -87,8 +87,8 @@ public partial class StarLayer : Node2D
 	[Export] public float IntakeFadeFraction = 0.35f;
 	// Дуга подхвата (T021): сколько оборота вокруг центра за время поглощения.
 	[Export] public float IntakeArcTurns = 0.25f;
-	// Направление дуги — как дрейф ячеек и короны в star_assembler.gdshader (по часовой).
-	[Export] public bool IntakeArcClockwise = true;
+	// Направление дуги — против часовой, как падение в ЧД и её диск (одно правило для всего).
+	[Export] public bool IntakeArcClockwise = false;
 	// Радиус атома на экране (px), ниже которого атом рисуется одним кружком.
 	[Export] public float IntakeLodPixels = 5f;
 

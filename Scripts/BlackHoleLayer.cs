@@ -42,6 +42,8 @@ public partial class BlackHoleLayer : Node2D
 	[Export] public float FallSeconds = 1.6f;
 	// Сколько оборотов делает атом по пути от края до центра.
 	[Export] public float FallTurns = 1.25f;
+	// Направление закрутки — как диск в black_hole_f.gdshader (против часовой на экране).
+	[Export] public bool FallClockwise = false;
 	// Вспышка диска при попадании (кольцо и красный круг); выключена по умолчанию.
 	[Export] public bool ShowHitFlash = false;
 	[Export] public float FlashDecayPerSecond = 2.5f;
@@ -491,7 +493,7 @@ public partial class BlackHoleLayer : Node2D
 		var colors = _nucleusLayer.TierPreviewColors;
 		var cam = GetViewport().GetCamera2D();
 		float zoom = cam != null ? cam.Zoom.X : 1f;
-		float spin = FallTurns * Mathf.Tau;
+		float spin = FallTurns * Mathf.Tau * (FallClockwise ? 1f : -1f);
 		int n = 0;
 		foreach (var pair in _fx)
 		{
