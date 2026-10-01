@@ -493,7 +493,7 @@ public partial class StarLayer : Node2D
 		return firstAvailable >= 0 ? firstAvailable : System.Math.Max(0, own);
 	}
 
-	// ПКМ по любой клетке звезды (вызывает NucleusLayer.RemoveAllAtMouse).
+	// Удаление звезды по ПКМ после удержания 0,1 с × 3 (T026, RemoveHold); вызывает NucleusLayer.RemoveAllAtMouse.
 	// Недособранные ингредиенты сгорают. Настоящий режим (T011, GDD «звезду
 	// можно забрать ПКМ и переставить»): звезда и её выходной буфер — в инвентарь.
 	public void RemoveAt(int row, int col)

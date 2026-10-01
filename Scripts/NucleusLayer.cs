@@ -1385,6 +1385,15 @@ public partial class NucleusLayer : Node2D
 	// ПКМ, чтобы стереть сразу несколько ядер, не кликая по каждому отдельно.
 	private bool _rightMouseHeld;
 	private (int row, int col)? _lastRemovedCell;
+	// Удаление с удержанием (T026): логика — RemoveHold, вид — RemoveHoldLayer.
+	// Время — реальное (delta кадра), в симуляцию и StateHash не входит.
+	[Export] public float RemoveHoldSecondsPerCell = 0.1f;
+	// Диаметр круга прогресса в пикселях экрана.
+	[Export] public float RemoveHoldRingPx = 22f;
+	private readonly RemoveHold _removeHold = new();
+	private RemoveHoldLayer _removeHoldLayer;
+	// Отказ, уже показанный для объекта под курсором (вспышка раз на заход).
+	private RemoveTarget? _lastDenied;
 	// Полупрозрачный превью выбранного ядра под курсором — см.
 	// UpdatePlacementPreview. ZIndex выше нуля, чтобы быть поверх чанков
 	// (MultiMeshInstance2D чанков добавляются позже как дочерние узлы этого же
@@ -1503,6 +1512,9 @@ public partial class NucleusLayer : Node2D
 		// Кольца перекрёстков (T010) — тоже из кода, поверх атомов.
 		_crossroadLayer = new CrossroadLayer { Name = "CrossroadLayer", Layer = this };
 		GetParent().CallDeferred(Node.MethodName.AddChild, _crossroadLayer);
+		// Круг и рамки удаления с удержанием (T026).
+		_removeHoldLayer = new RemoveHoldLayer { Name = "RemoveHoldLayer", Layer = this, DiameterPx = RemoveHoldRingPx };
+		GetParent().CallDeferred(Node.MethodName.AddChild, _removeHoldLayer);
 		_starLayer = GetNodeOrNull<StarLayer>("../StarLayer");
 
 		_ready = true;
@@ -1781,12 +1793,14 @@ public partial class NucleusLayer : Node2D
 			{
 				_rightMouseHeld = true;
 				_lastRemovedCell = null; // разрешаем удаление клетки под курсором сразу же
-				TryRemoveAtMouse();
+				_lastDenied = null;
+				_removeHold.Reset();
+				TryRemoveAtMouse(0f);
 				GetViewport().SetInputAsHandled();
 			}
 			else
 			{
-				_rightMouseHeld = false;
+				StopRemoveHold();
 			}
 		}
 	}
@@ -1855,15 +1869,91 @@ public partial class NucleusLayer : Node2D
 	// NucleusLayer, просто как "не та же клетка, что в прошлый раз", реальные
 	// стирания в RemoveAllAtMouse пересчитывают координаты для каждого слоя
 	// заново по его собственному CellSize.
-	private void TryRemoveAtMouse()
+	private void TryRemoveAtMouse(float dt)
 	{
 		var worldPos = GetGlobalMousePosition();
 		int col = Mathf.FloorToInt(worldPos.X / CellSize);
 		int row = Mathf.FloorToInt(worldPos.Y / CellSize);
-		if (_lastRemovedCell.HasValue && _lastRemovedCell.Value == (row, col)) return;
+		bool sameCell = _lastRemovedCell.HasValue && _lastRemovedCell.Value == (row, col);
 
+		if (!IsCellOpen(row, col)) // закрытый чанк (T009): вспышка раз на клетку
+		{
+			_removeHold.Reset();
+			_removeHoldLayer?.SetHold(null, 0f);
+			if (!sameCell) { _lastRemovedCell = (row, col); DenyIfClosed(row, col); }
+			return;
+		}
+
+		var target = GetRemoveTargetAt(row, col, out var denied);
+		if (denied != _lastDenied)
+		{
+			_lastDenied = denied;
+			if (denied is RemoveTarget d) _removeHoldLayer?.FlashDenied(d.Row, d.Col, d.Side);
+		}
+
+		if (target is RemoveTarget t && t.Side > 1)
+		{
+			// Крупный объект: удержание с нуля на каждом заходе, без дедупликации по клетке.
+			var result = _removeHold.Update(t, dt, RemoveHoldSecondsPerCell);
+			if (result == RemoveHoldResult.Remove)
+			{
+				RemoveAllAtMouse(worldPos, row, col);
+				_lastRemovedCell = (row, col); // курсор остался на бывших клетках — не трогаем их заново
+				_removeHoldLayer?.SetHold(null, 0f);
+			}
+			else _removeHoldLayer?.SetHold(t, _removeHold.Progress);
+			return;
+		}
+
+		_removeHold.Reset();
+		_removeHoldLayer?.SetHold(null, 0f);
+		if (sameCell) return;
 		_lastRemovedCell = (row, col);
-		RemoveAllAtMouse(worldPos, row, col);
+		if (target != null) RemoveAllAtMouse(worldPos, row, col);
+	}
+
+	// Меню паузы (дерево на паузе) — сброс удержания без удаления.
+	public override void _Notification(int what)
+	{
+		if (what == NotificationPaused) StopRemoveHold();
+	}
+
+	// Сброс удержания (отпускание ПКМ, слой 2, пауза меню).
+	private void StopRemoveHold()
+	{
+		_rightMouseHeld = false;
+		_removeHold.Reset();
+		_lastDenied = null;
+		_removeHoldLayer?.SetHold(null, 0f);
+	}
+
+	// Что ПКМ удалит в клетке (только запрос). Звезда и ЧД — по следу, атом и
+	// источник — 1×1. denied — объект, который в настоящем режиме удалять нельзя
+	// (ЧД, источник без атома): вспышка следа, не цель удержания.
+	private RemoveTarget? GetRemoveTargetAt(int row, int col, out RemoveTarget? denied)
+	{
+		denied = null;
+		if (_entAt.ContainsKey((row, col))) return new RemoveTarget(0, row, col, 1);
+		if (Stars.TryGetAt(row, col, out var star))
+			return new RemoveTarget(1, star.Row, star.Col, Star.Size);
+		if (BlackHoles.TryGetAt(row, col, out var hole))
+		{
+			var t = new RemoveTarget(2, hole.Row, hole.Col, hole.Size);
+			if (Inventory.Sandbox) return t;
+			denied = t;
+			return null;
+		}
+		foreach (var layer in _energyClusterLayers)
+		{
+			int srcCol = Mathf.FloorToInt((col + 0.5f) * CellSize / layer.CellSize);
+			int srcRow = Mathf.FloorToInt((row + 0.5f) * CellSize / layer.CellSize);
+			if (!layer.HasClusterAt(srcRow, srcCol)) continue;
+			var t = new RemoveTarget(3, row, col, 1);
+			if (Inventory.Sandbox) return t;
+			denied = t;
+			return null;
+		}
+		return null;
 	}
 
 	// ПКМ убирает ЛЮБОЙ объект под курсором, а не только ядро — источники
@@ -1882,8 +1972,10 @@ public partial class NucleusLayer : Node2D
 	{
 		if (DenyIfClosed(row, col)) return; // закрытый чанк (T009)
 		RemoveNucleusAt(row, col);
-		_blackHoleLayer?.RemoveAt(row, col);
 		_starLayer?.RemoveAt(row, col);
+		// ЧД и источники — только в песочнице (T026).
+		if (!Inventory.Sandbox) return;
+		_blackHoleLayer?.RemoveAt(row, col);
 
 		foreach (var layer in _energyClusterLayers)
 		{
@@ -2036,7 +2128,7 @@ public partial class NucleusLayer : Node2D
 		else
 		{
 			_leftMouseHeld = false;
-			_rightMouseHeld = false;
+			StopRemoveHold();
 		}
 
 		RunSimulationClock(delta);
@@ -2082,7 +2174,12 @@ public partial class NucleusLayer : Node2D
 		if (renderMs > _perfRenderMsMax) _perfRenderMsMax = renderMs;
 
 		if (_leftMouseHeld) TryPlaceAtMouseIfSelected();
-		if (_rightMouseHeld) TryRemoveAtMouse();
+		if (_rightMouseHeld)
+		{
+			// Отпускание ПКМ мог съесть GUI — сверяемся с реальным состоянием.
+			if (!Input.IsMouseButtonPressed(MouseButton.Right)) StopRemoveHold();
+			else TryRemoveAtMouse((float)delta);
+		}
 		UpdatePlacementPreview();
 	}
 
