@@ -22,7 +22,7 @@ uniform vec4 body_colors[3] : source_color;  // ядро, внутреннее �
 uniform float radius = 0.247;
 uniform float light_width = 0.028;
 
-// Диск. Цвета — по возрастанию яркости: 0 — самый тёмный, n_colors-1 — самый яркий.
+// Диск. Цвета — ярче → темнее (индекс растёт с шумом и расстоянием до источника света: полоса у горизонта яркая).
 uniform vec4 disk_colors[5] : source_color;
 uniform int n_colors = 5;
 uniform float rotation = 0.0;

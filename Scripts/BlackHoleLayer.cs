@@ -54,8 +54,9 @@ public partial class BlackHoleLayer : Node2D
 	[Export] public float BhLodZoom = 0.15f;
 	// Рампа варианта F (Docs/Art/black-hole-visual-spec.md). Тело: ядро, внутреннее кольцо, край.
 	[Export] public Color[] BodyColors = { new("0a0812"), new("ff7ae0"), new("8a2d9e") };
-	// Диск: по возрастанию яркости (0 — самый тёмный; в спецификации перечислены ярче → темнее).
-	[Export] public Color[] DiskColors = { new("1b1629"), new("372d4d"), new("8a2d9e"), new("ff7ae0"), new("ffffff") };
+	// Диск: порядок спецификации, ярче → темнее. Индекс в шейдере растёт с (шум + расстояние до
+	// источника света), поэтому плотная полоса у горизонта — яркая, дуги и края — тёмные.
+	[Export] public Color[] DiskColors = { new("ffffff"), new("ff7ae0"), new("8a2d9e"), new("372d4d"), new("1b1629") };
 
 	private static readonly Color HotColor = new Color("ff7ae0");
 	private static readonly Color FlashColor = new Color("ff7ae0");
