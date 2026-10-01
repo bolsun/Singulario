@@ -430,13 +430,14 @@ public partial class NucleusLayer : Node2D
 	[Export] public float ExpansionFlightSeconds = 1.2f;
 	private CrossroadLayer _crossroadLayer;
 
-	// Атомы в режиме перекрёстка (T010) — только для отрисовки колец
-	// (CrossroadLayer), на симуляцию порядок набора не влияет.
+	// Атомы в режиме перекрёстка (T010): отрисовка (CrossroadLayer) и переворот осей
+	// (TickCrossroads, T032). На симуляцию порядок набора не влияет: Flip меняет только
+	// свой атом, Touch пополняет множество, которое проходы сортируют сами.
 	private readonly HashSet<NucleusEntity> _crossSet = new();
 	public int CrossroadCount => _crossSet.Count;
 	public IEnumerable<(Vector2 center, int exitMask)> Crossroads()
 	{
-		foreach (var n in _crossSet) yield return (EffectiveCenter(n), n.Cross.ExitMask);
+		foreach (var n in _crossSet) yield return (EffectiveCenter(n), n.Cross.OutputMask);
 	}
 
 	// Радиус видимого тела атома в пикселях мира (спрайт ядра 1:1) — от него дорожка перекрёстка (T029).
@@ -941,9 +942,9 @@ public partial class NucleusLayer : Node2D
 		// приглушённым, кольцо стоит на фазе 0. ЛКМ — стать рабочим (ActivateCargo).
 		public bool IsCargo;
 
-		// Перекрёсток (T010): не null — атом в режиме «орбитали», частицы едут по
-		// осям Cross, а кольцо Ring пустое (только число гнёзд — для ёмкости оси и
-		// возврата в обычный режим). Переключение — ToggleCrossroad.
+		// Перекрёсток (T010, T032): не null — атом в режиме «орбитали», частицы лежат
+		// на сторонах Cross, а кольцо Ring пустое (только число гнёзд — для возврата в
+		// обычный режим). Переключение — ToggleCrossroad.
 		public Crossroad Cross;
 	}
 
@@ -1247,8 +1248,8 @@ public partial class NucleusLayer : Node2D
 		_changeEpoch++;
 	}
 
-	// Поворот тиров, у которых на этом тике шаг: снятие блокировки (и шаг
-	// перекрёстка) у рабочих атомов, отметка всех (ориентация сменилась и у спящих).
+	// Поворот тиров, у которых на этом тике шаг: снятие блокировки у рабочих атомов,
+	// отметка всех (ориентация сменилась и у спящих). Перекрёстки — TickCrossroads.
 	private void RotateDueTiers(bool unlock)
 	{
 		for (int tier = 0; tier < _byTier.Count; tier++)
@@ -1708,6 +1709,15 @@ public partial class NucleusLayer : Node2D
 			return;
 		}
 
+		// R над перекрёстком (T032) — оба выхода по часовой; спина у перекрёстка нет.
+		if (nucleus.Cross != null)
+		{
+			nucleus.Cross.RotateOutputs(_globalTick);
+			Touch(nucleus);
+			GD.Print($"[NucleusLayer] перекрёсток ({nucleus.Row},{nucleus.Col}): выходы — ориентация {nucleus.Cross.OutRot}.");
+			return;
+		}
+
 		nucleus.Dir = -nucleus.Dir;
 		Touch(nucleus);
 		_currentSpinDirection = nucleus.Dir;
@@ -2124,13 +2134,12 @@ public partial class NucleusLayer : Node2D
 				count++;
 			}
 		if (nucleus.Cross != null)
-			foreach (var axis in nucleus.Cross.Axes)
-				for (int i = 0; i < axis.Count; i++)
-					if (axis.Items[i].IsItem && Inventory.IsAtomTier(axis.Items[i].ColorTier))
-					{
-						Inventory.Add(axis.Items[i].ColorTier);
-						count++;
-					}
+			for (int side = 0; side < Crossroad.SideCount; side++)
+				if (nucleus.Cross.Has(side) && nucleus.Cross.Sides[side].IsItem && Inventory.IsAtomTier(nucleus.Cross.Sides[side].ColorTier))
+				{
+					Inventory.Add(nucleus.Cross.Sides[side].ColorTier);
+					count++;
+				}
 		return count;
 	}
 
@@ -2651,6 +2660,7 @@ public partial class NucleusLayer : Node2D
 			foreach (var n in _spinners)
 				if (n.IsActiveSim) _spinnerScratch.Add(n);
 		}
+		if (_crossSet.Count > 0) TickCrossroads(); // T032: оба режима
 
 		// Вращатели и бросатели (T014) — отдельным проходом после поворота всех
 		// атомов, в том же фиксированном порядке (раньше — в общем цикле вперемешку
@@ -2935,15 +2945,15 @@ public partial class NucleusLayer : Node2D
 			BlackHoles.AbsorbParticle(slot.ColorTier);
 			particles.Push(slot.ColorTier);
 		}
-		if (n.Cross != null) // частицы в пути перекрёстка (T010)
-			foreach (var axis in n.Cross.Axes)
-				for (int i = 0; i < axis.Count; i++)
-				{
-					var cp = axis.Items[i];
-					if (cp.IsItem) { BlackHoles.AbsorbAtom(cp.ColorTier); continue; }
-					BlackHoles.AbsorbParticle(cp.ColorTier);
-					particles.Push(cp.ColorTier);
-				}
+		if (n.Cross != null) // частицы на сторонах перекрёстка (T010, T032)
+			for (int side = 0; side < Crossroad.SideCount; side++)
+			{
+				if (!n.Cross.Has(side)) continue;
+				var cp = n.Cross.Sides[side];
+				if (cp.IsItem) { BlackHoles.AbsorbAtom(cp.ColorTier); continue; }
+				BlackHoles.AbsorbParticle(cp.ColorTier);
+				particles.Push(cp.ColorTier);
+			}
 		BlackHoles.AbsorbAtom(n.CoreTier);
 		_blackHoleLayer?.OnAtomCaptured(hole, n.MoveToCenter, n.CoreTier, particles);
 		RemoveNucleusEntity(n);
@@ -3977,7 +3987,28 @@ public partial class NucleusLayer : Node2D
 			slot.Locked = false; // поворот завершил "остывание" — можно снова отдавать
 			n.Ring[i] = slot;
 		}
-		n.Cross?.Step(); // перекрёсток (T010): частицы в пути — на шаг по полукольцу
+	}
+
+	// Переворот осей перекрёстков (T032) — одно место для обоих режимов симуляции,
+	// после поворота тиров, до проходов A/B. Ось E–W — при tick mod P == 0, N–S — при
+	// P/2 (P = 8·T / дырки; событие N–S может не совпасть с тиком поворота тира).
+	// Touch при каждом событии, даже если ничего не перешло (как RotateDueTiers).
+	private void TickCrossroads()
+	{
+		foreach (var n in _crossSet)
+		{
+			if (!n.IsActiveSim || (n.IsMoving && n.IsFlying)) continue;
+			int axis = Crossroad.AxisDue(_globalTick, CrossPeriod(n));
+			if (axis < 0) continue;
+			n.Cross.Flip(axis, _globalTick);
+			Touch(n);
+		}
+	}
+
+	private int CrossPeriod(NucleusEntity n)
+	{
+		int ticks = n.CoreTier < TierTicks.Length ? TierTicks[n.CoreTier] : TierTicks[TierTicks.Length - 1];
+		return Crossroad.Period(ticks, n.Cross.HoleCount);
 	}
 
 	// НОД/НОК — вспомогательные для _pauseAlignTicks (см. поле и _Ready):
@@ -4033,7 +4064,7 @@ public partial class NucleusLayer : Node2D
 		((compassIndex - DiscreteRotationOffset(n)) % 8 + 8) % 8;
 
 	// --- сторона атома для передачи (T010): у обычного атома — физический слот,
-	// смотрящий на сторону k; у перекрёстка — вход или выход оси (k / 2 = N/E/S/W).
+	// смотрящий на сторону k; у перекрёстка — сторона k / 2 = N/E/S/W (вход или выход, T032).
 
 	// Ключ стороны в _claimed: слот 0..7 или 8 + сторона у перекрёстка.
 	private int SideKey(NucleusEntity n, int k) =>
@@ -4047,7 +4078,7 @@ public partial class NucleusLayer : Node2D
 	{
 		if (n.Cross != null)
 		{
-			bool ready = n.Cross.TryPeekExit(k / 2, out var cp);
+			bool ready = n.Cross.TryPeekOut(k / 2, out var cp);
 			content = ready ? new RingSlot { Exists = true, IsHole = false, ColorTier = cp.ColorTier, IsItem = cp.IsItem, Variant = cp.Variant } : default;
 			return ready;
 		}
@@ -4067,16 +4098,16 @@ public partial class NucleusLayer : Node2D
 	private void TakeGiven(NucleusEntity n, int k)
 	{
 		Touch(n);
-		if (n.Cross != null) { n.Cross.TakeExit(k / 2); return; }
+		if (n.Cross != null) { n.Cross.TakeOut(k / 2, _globalTick); return; }
 		n.Ring[PhysicalSlotForCompass(n, k)] = new RingSlot { Exists = true, IsHole = true };
 	}
 
 	// Положить принятое через сторону k (после CanReceive); частица блокируется
-	// до поворота, у перекрёстка — занимает вход до следующего шага.
+	// до поворота, у перекрёстка — занимает вход до ближайшего переворота оси.
 	private void PutReceived(NucleusEntity n, int k, RingSlot content)
 	{
 		Touch(n);
-		if (n.Cross != null) { n.Cross.Enter(k / 2, content.ColorTier, content.IsItem, content.Variant); return; }
+		if (n.Cross != null) { n.Cross.Enter(k / 2, content.ColorTier, content.IsItem, content.Variant, _globalTick); return; }
 		n.Ring[PhysicalSlotForCompass(n, k)] = new RingSlot
 			{ Exists = true, IsHole = false, ColorTier = content.ColorTier, Locked = true, IsItem = content.IsItem, Variant = content.Variant };
 	}
@@ -4304,10 +4335,13 @@ public partial class NucleusLayer : Node2D
 		b[o] = x; b[o + 1] = y; b[o + 2] = z; b[o + 3] = w;
 	}
 
-	// Перекрёсток (T010, вид T029): 4 неподвижные дырки на N/E/S/W (инстансы дырок 0..3,
-	// порядок как у Crossroad.ExitSide), дырка выхода занятой оси скрыта (на её месте
-	// CrossroadLayer рисует шеврон). Частицы в пути (ось 0 — инстансы 0..3, ось 1 — 4..7)
-	// идут по прямой своей оси от входа к выходу, размер постоянный, без затемнения.
+	// Перекрёсток (T010, вид T029, «тик-так» T032): дырки на двух входах (инстансы дырок 0..3 =
+	// стороны N/E/S/W), на выходах дырок нет — там CrossroadLayer рисует шеврон. Частица
+	// (инстанс = сторона) на выходе стоит у порта выхода; на входе — едет по прямой оси к
+	// выходу, только пока выход пуст, в половину периода перед переворотом своей оси:
+	// start = max(начало половины, тик входа, тик освобождения выхода), конец — тик переворота.
+	// Выход внутри половины только освобождается, поэтому частица не едет назад и не прыгает.
+	// Размер постоянный, без затемнения. Только вид — в хеш и сохранение не входит.
 	private void UpdateCrossroadVisuals(NucleusEntity n, Vector2 center, float[] holeBuf, float[] particleBuf)
 	{
 		for (int k = 0; k < 8; k++)
@@ -4316,32 +4350,32 @@ public partial class NucleusLayer : Node2D
 			HideTransform(particleBuf, (n.LocalIndex * 8 + k) * ParticleStride);
 		}
 
-		int exitMask = n.Cross.ExitMask;
+		int outMask = n.Cross.OutputMask;
 		for (int side = 0; side < 4; side++)
 		{
-			if ((exitMask & (1 << side)) != 0) continue;
+			if ((outMask & (1 << side)) != 0) continue;
 			PutTransform(holeBuf, (n.LocalIndex * 8 + side) * HoleStride, center + SideDir(side) * _orbitRadius, 1f);
 		}
 
-		int ticks = n.CoreTier < TierTicks.Length ? TierTicks[n.CoreTier] : TierTicks[TierTicks.Length - 1];
-		float fraction = ticks > 0 && _globalTick >= n.AsleepUntilTick
-			? (RingMath.TicksIntoStep(_globalTick, ticks) + _subTickFraction) / ticks
-			: 0f;
-		for (int a = 0; a < 2; a++)
+		int period = CrossPeriod(n);
+		bool awake = _globalTick >= n.AsleepUntilTick;
+		for (int side = 0; side < Crossroad.SideCount; side++)
 		{
-			var axis = n.Cross.Axes[a];
-			for (int i = 0; i < axis.Count; i++)
+			if (!n.Cross.Has(side)) continue;
+			var cp = n.Cross.Sides[side];
+			float u = 0f; // 0 — у порта своей стороны, 1 — у порта выхода оси
+			int axis = Crossroad.AxisOf(side);
+			if (awake && period > 1 && (outMask & (1 << side)) == 0 && !n.Cross.Has(n.Cross.OutputSide(axis)))
 			{
-				var cp = axis.Items[i];
-				// Та же очередь, что в Crossroad.Step: едет, только если впереди свободно.
-				int limit = i == 0 ? Crossroad.ExitPos : axis.Items[i - 1].Pos - 1;
-				float u = (cp.Pos + (cp.Pos < limit ? fraction : 0f)) / Crossroad.ExitPos;
-				float along = (2f * u - 1f) * _orbitRadius * axis.Dir;
-				var pos = center + (a == 0 ? new Vector2(along, 0f) : new Vector2(0f, along));
-				int po = (n.LocalIndex * 8 + a * 4 + i) * ParticleStride;
-				PutTransform(particleBuf, po, pos, 1f);
-				PutCustom(particleBuf, po + 8, (cp.ColorTier + 0.5f) / _tierCount, 0f, 0f, ParticleFrame(cp.IsItem, cp.Variant));
+				long d = ((Crossroad.AxisOffset(axis, period) - _globalTick) % period + period) % period;
+				long flipTick = _globalTick + (d == 0 ? period : d);
+				long start = System.Math.Max(flipTick - period / 2, System.Math.Max(cp.EnterTick, n.Cross.OutFreedTick[axis]));
+				if (flipTick > start)
+					u = Mathf.Clamp((float)(_globalTick - start + _subTickFraction) / (flipTick - start), 0f, 1f);
 			}
+			int po = (n.LocalIndex * 8 + side) * ParticleStride;
+			PutTransform(particleBuf, po, center + SideDir(side) * (_orbitRadius * (1f - 2f * u)), 1f);
+			PutCustom(particleBuf, po + 8, (cp.ColorTier + 0.5f) / _tierCount, 0f, 0f, ParticleFrame(cp.IsItem, cp.Variant));
 		}
 	}
 
@@ -4672,10 +4706,12 @@ public partial class NucleusLayer : Node2D
 		if (decision.Outcome == PlaceOutcome.Same) return;
 
 		bool wasCrossroad = false;
+		int crossOutRot = 0;
 		if (decision.Outcome == PlaceOutcome.Replace && _entAt.TryGetValue((row, col), out var existingNucleus))
 		{
 			GD.Print($"[NucleusLayer] клетка ({row},{col}) занята атомом тира {existingNucleus.CoreTier} — заменяю на тир {tier}.");
-			wasCrossroad = existingNucleus.Cross != null; // режим перекрёстка сохраняется (T030)
+			wasCrossroad = existingNucleus.Cross != null; // режим перекрёстка и ориентация выходов сохраняются (T030, T032)
+			if (wasCrossroad) crossOutRot = existingNucleus.Cross.OutRot;
 			RefundToInventory(existingNucleus); // замена = снять старый + поставить новый
 			RemoveNucleusEntity(existingNucleus);
 		}
@@ -4700,7 +4736,7 @@ public partial class NucleusLayer : Node2D
 
 		if (wasCrossroad)
 		{
-			nucleus.Cross = new Crossroad(holeCount);
+			nucleus.Cross = new Crossroad(holeCount, crossOutRot);
 			_crossSet.Add(nucleus);
 		}
 		chunk.Nuclei.Add(nucleus);
@@ -4965,6 +5001,10 @@ public partial class NucleusLayer : Node2D
 		public bool Cargo { get; set; }
 		// Перекрёсток (T010). В старых сохранениях поля нет — false, обычный режим.
 		public bool Crossroad { get; set; }
+		// Ориентация выходов перекрёстка 0..3 (T032: 0 = E,S, далее по часовой). Пишется только
+		// у перекрёстка; нет поля — 0 (E,S).
+		[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+		public int? CrossOutputs { get; set; }
 	}
 
 	private class SavedSource
@@ -5071,7 +5111,7 @@ public partial class NucleusLayer : Node2D
 	{
 		int holeCount = 0;
 		foreach (var slot in n.Ring) if (slot.Exists) holeCount++;
-		return new SavedNucleus { Row = n.Row, Col = n.Col, CoreTier = n.CoreTier, Dir = n.Dir, HoleCount = holeCount, Cargo = n.IsCargo, Crossroad = n.Cross != null };
+		return new SavedNucleus { Row = n.Row, Col = n.Col, CoreTier = n.CoreTier, Dir = n.Dir, HoleCount = holeCount, Cargo = n.IsCargo, Crossroad = n.Cross != null, CrossOutputs = n.Cross?.OutRot };
 	}
 
 	// Разбирает JSON и полностью заменяет им текущее поле (ядра, источники
@@ -5225,7 +5265,7 @@ public partial class NucleusLayer : Node2D
 			if (ok && sn.Crossroad && !sn.Cargo
 				&& _entAt.TryGetValue((sn.Row + dRow, sn.Col + dCol), out var imported) && CanBeCrossroad(imported))
 			{
-				imported.Cross = new Crossroad(HoleCountOf(imported));
+				imported.Cross = new Crossroad(HoleCountOf(imported), sn.CrossOutputs ?? 0);
 				_crossSet.Add(imported);
 				Touch(imported);
 			}
@@ -5711,7 +5751,14 @@ public partial class NucleusLayer : Node2D
 		{
 			var sb = new System.Text.StringBuilder();
 			foreach (var slot in n.Ring) sb.Append(!slot.Exists ? '.' : slot.IsHole ? 'o' : (char)('0' + slot.ColorTier + (slot.Locked ? 10 : 0)));
-			string cross = n.Cross == null ? "" : $" X{n.Cross.Axes[0].Dir}/{n.Cross.Axes[0].Count} {n.Cross.Axes[1].Dir}/{n.Cross.Axes[1].Count}";
+			string cross = "";
+			if (n.Cross != null)
+			{
+				var xs = new System.Text.StringBuilder($" X{n.Cross.OutRot}:");
+				for (int side = 0; side < Crossroad.SideCount; side++)
+					xs.Append(!n.Cross.Has(side) ? '-' : (char)('0' + n.Cross.Sides[side].ColorTier + (n.Cross.Sides[side].IsItem ? 10 : 0)));
+				cross = xs.ToString();
+			}
 			GD.Print($"[Dump{mode}] {n.Row},{n.Col} t{n.CoreTier} d{n.Dir} m{(n.IsMoving ? 1 : 0)}{(n.IsFlying ? 1 : 0)} {sb}{cross} cap{n.NextCaptureTick}");
 		}
 	}
@@ -5765,7 +5812,8 @@ public partial class NucleusLayer : Node2D
 
 				if (rng.Randf() < 0.08f)
 				{
-					n.Cross = new Crossroad(HoleCountOf(n));
+					// Ориентация без вызовов rng (T032) — все 4, остальное поле не сдвигается.
+					n.Cross = new Crossroad(HoleCountOf(n), (row + col) & 3);
 					_crossSet.Add(n);
 					continue;
 				}
@@ -5809,13 +5857,14 @@ public partial class NucleusLayer : Node2D
 			// хеш = законы, selfcheck до и после правок вида обязан совпадать.
 			foreach (var slot in n.Ring)
 				Mix((slot.Exists ? 1 : 0) | (slot.IsHole ? 2 : 0) | (slot.Locked ? 4 : 0) | (slot.IsItem ? 8 : 0) | (slot.ColorTier << 4));
+			// EnterTick/OutFreedTick перекрёстка (T032) — только вид, в хеш не входят.
 			if (n.Cross != null)
-				foreach (var axis in n.Cross.Axes)
-				{
-					Mix(axis.Dir); Mix(axis.Count);
-					for (int i = 0; i < axis.Count; i++)
-						Mix(axis.Items[i].Pos | (axis.Items[i].ColorTier << 8) | (axis.Items[i].IsItem ? 1 << 16 : 0));
-				}
+			{
+				Mix(n.Cross.OutRot); Mix(n.Cross.OccupiedMask);
+				for (int side = 0; side < Crossroad.SideCount; side++)
+					if (n.Cross.Has(side))
+						Mix(n.Cross.Sides[side].ColorTier | (n.Cross.Sides[side].IsItem ? 1 << 16 : 0));
+			}
 		}
 		foreach (long v in BlackHoles.AtomsAbsorbed) Mix(v);
 		foreach (long v in BlackHoles.ParticlesAbsorbed) Mix(v);

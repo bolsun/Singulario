@@ -70,8 +70,8 @@ msgstr "LMB — place or replace, RMB — remove"
 msgid "Q — взять атом как образец; Q по пустому — снять инструмент"
 msgstr "Q — pick an atom as a template; Q on an empty cell — drop the tool"
 
-msgid "R — направление вращения атома, выход звезды"
-msgstr "R — atom spin direction, star output side"
+msgid "R — направление вращения атома, выход звезды и выходы перекрёстка"
+msgstr "R — atom spin direction, star output side and crossroad outputs"
 
 msgid "ЛКМ по атому без инструмента — перекрёсток"
 msgstr "LMB on an atom with no tool — crossroad"
