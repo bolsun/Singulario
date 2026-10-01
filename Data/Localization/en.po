@@ -279,3 +279,37 @@ msgstr "On"
 
 msgid "Прогиб сетки: {0}"
 msgstr "Grid warp: {0}"
+
+# T027: типы звёзд и рецепты (Data/recipes.json), F9
+msgid "печь"
+msgstr "furnace"
+
+msgid "фабрика"
+msgstr "factory"
+
+msgid "сверхгигант"
+msgstr "supergiant"
+
+msgid "атом Ж"
+msgstr "atom Y"
+
+msgid "атом К"
+msgstr "atom R"
+
+msgid "атом С"
+msgstr "atom B"
+
+msgid "звезда Ж"
+msgstr "star Y"
+
+msgid "звезда К"
+msgstr "star R"
+
+msgid "звезда С"
+msgstr "star B"
+
+msgid "Рецепты перечитаны"
+msgstr "Recipes reloaded"
+
+msgid "Рецепты: ошибка в файле, см. лог"
+msgstr "Recipes: file error, see log"

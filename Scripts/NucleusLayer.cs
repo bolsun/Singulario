@@ -465,7 +465,53 @@ public partial class NucleusLayer : Node2D
 	private System.Func<StarRecipe, bool> _recipeAvailable;
 	public System.Func<StarRecipe, bool> RecipeAvailable => _recipeAvailable ??= IsRecipeAvailable;
 
+	// F9 (отладка, T027): перечитать RecipesPath без перезапуска. Ошибка — старая
+	// таблица остаётся. Успех — у всех звёзд сгорают буфер ингредиентов и работа,
+	// рецепт фабрики ищется по Id (пропал — по умолчанию), выходной буфер обрезается
+	// до новой ёмкости; звезда, которая в новом размере не помещается (центр на
+	// месте), удаляется (в настоящем режиме — в инвентарь с выходным буфером).
+	// Детерминизм от этого действия не требуется.
+	private void ReloadRecipes()
+	{
+		var catalog = ReadCatalog(out string error);
+		if (catalog == null)
+		{
+			GD.PrintErr($"[NucleusLayer] F9 рецепты: {error} Остаются прежние.");
+			_starLayer?.ShowMessage(Tr("Рецепты: ошибка в файле, см. лог"));
+			return;
+		}
+		Catalog = catalog;
+		var stars = new List<Star>(Stars.All);
+		Stars.Clear();
+		int removed = 0;
+		foreach (var star in stars)
+		{
+			int centerRow = star.Row + star.Size / 2, centerCol = star.Col + star.Size / 2;
+			int size = catalog.TypeOf(star.Type).Size;
+			int row = centerRow - size / 2, col = centerCol - size / 2;
+			string reason = _starLayer?.PlaceBlockReason(row, col, size);
+			if (reason != null)
+			{
+				removed++;
+				if (!Inventory.Sandbox)
+				{
+					while (star.Output.Count > 0) Inventory.AddItem(star.Output.Dequeue());
+					Inventory.AddStar(star.Type);
+				}
+				GD.PushWarning($"[NucleusLayer] F9 рецепты: звезда ({star.Row},{star.Col}) в размере {size}×{size} не помещается ({reason}) — удалена{(Inventory.Sandbox ? "" : ", возвращена в инвентарь")}.");
+				continue;
+			}
+			star.Rebind(catalog, row, col);
+			if (star.Choice == StarChoice.Player && star.RecipeId == null)
+				star.SetRecipe(catalog.DefaultRecipe(star.Type, RecipeAvailable));
+			Stars.Add(star);
+		}
+		GD.Print($"[NucleusLayer] F9 рецепты: {catalog.Recipes.Count} из {RecipesPath}; у {stars.Count - removed} звёзд(ы) буфер и работа сгорели{(removed > 0 ? $", удалено {removed}" : "")}.");
+		_starLayer?.ShowMessage(Tr("Рецепты перечитаны"));
+	}
+
 	// Каталог из файла; null — ошибка в error.
+
 	private StarCatalog ReadCatalog(out string error)
 	{
 		if (!FileAccess.FileExists(RecipesPath)) { error = $"файл {RecipesPath} не найден."; return null; }
@@ -1560,6 +1606,11 @@ public partial class NucleusLayer : Node2D
 			if (key.Keycode == Key.H)
 			{
 				_holesManuallyHidden = !_holesManuallyHidden;
+				GetViewport().SetInputAsHandled();
+			}
+			else if (key.Keycode == Key.F9)
+			{
+				ReloadRecipes();
 				GetViewport().SetInputAsHandled();
 			}
 			else if (key.Keycode == Key.F3 && key.ShiftPressed)
