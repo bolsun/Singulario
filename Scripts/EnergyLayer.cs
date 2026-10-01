@@ -156,6 +156,7 @@ public partial class EnergyLayer : TileMapLayer
 	}
 
 	public bool IsPlacing => _selectedEnergyTier.HasValue;
+	public bool IsTierSelected(int tier) => _selectedEnergyTier == tier;
 
 	public bool HasEnergyAt(int row, int col) => _energyAt.ContainsKey((row, col));
 	public int? EnergyTierAt(int row, int col) => _energyAt.TryGetValue((row, col), out var tier) ? tier : null;

@@ -1803,10 +1803,7 @@ public partial class NucleusLayer : Node2D
 		if (nucleus == null)
 		{
 			// Пустая клетка — снять любой инструмент (атом, звезда, ЧД, источник).
-			ClearSelection();
-			_energyLayer?.ClearSelection();
-			foreach (var clusterLayer in _energyClusterLayers) clusterLayer.ClearSelection();
-			GetViewport().GuiReleaseFocus(); // кнопка панели не остаётся подсвеченной
+			ClearAllTools();
 			GD.Print($"[NucleusLayer] пипетка: в клетке ({row},{col}) нет ядра — инструмент снят.");
 			return;
 		}
@@ -1909,6 +1906,20 @@ public partial class NucleusLayer : Node2D
 		_starLayer?.ClearTool();
 		GD.Print($"[NucleusLayer] выбрано для установки: тир {tier}, дырок {holeCount}/8, направление {(_currentSpinDirection > 0 ? "по часовой" : "против часовой")} (R — переключить). Клик (или удержание ЛКМ) по полю — поставить.");
 	}
+
+	// Снять любой инструмент слоя 1 (атом, звезда, ЧД, источник) — Q по пустой клетке
+	// и повторный клик по кнопке панели (T030).
+	public void ClearAllTools()
+	{
+		ClearSelection();
+		_energyLayer?.ClearSelection();
+		foreach (var clusterLayer in _energyClusterLayers) clusterLayer.ClearSelection();
+		GetViewport().GuiReleaseFocus(); // кнопка панели не остаётся подсвеченной
+	}
+
+	// Выбран ли ровно этот пресет атома (тир и число дырок) — для повторного клика по кнопке.
+	public bool IsSpawnPresetSelected(int tier, int holeCount) =>
+		_selectedSpawnTier == tier && _selectedSpawnHoleCount == holeCount;
 
 	// Вызывается EnergyLayer при выборе типа энергии на панели — сбрасывает
 	// выбор ядра (см. комментарий у SelectSpawnPreset).

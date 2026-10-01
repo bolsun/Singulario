@@ -306,6 +306,7 @@ public partial class StarLayer : Node2D
 
 	public void ClearTool() => _toolType = null;
 	public bool HasTool => _toolType.HasValue;
+	public bool IsToolType(int type) => _toolType == type;
 
 	// Короткая надпись по центру сверху (как у F6) — для F9 (перезагрузка рецептов).
 	public void ShowMessage(string text)
