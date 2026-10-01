@@ -1,7 +1,7 @@
 using Godot;
 
 // Вид удаления ПКМ с удержанием (T026): полоска прогресса над следом цели, рамка цели,
-// вспышка отказа. Только вид; логика — RemoveHold, ввод — NucleusLayer.
+// вспышка отказа и очистки C (T035). Только вид; логика — RemoveHold, ввод — NucleusLayer.
 // Узел создаёт NucleusLayer из кода. ProcessMode.Always — вспышка и полоска не
 // зависят от паузы меню.
 public partial class RemoveHoldLayer : Node2D
@@ -21,6 +21,7 @@ public partial class RemoveHoldLayer : Node2D
 	private float _progress;
 	private RemoveTarget _flashTarget;
 	private float _flash;
+	private Color _flashColor = DenyColor;
 
 	public override void _Ready()
 	{
@@ -37,9 +38,14 @@ public partial class RemoveHoldLayer : Node2D
 		if (changed) QueueRedraw();
 	}
 
-	public void FlashDenied(int row, int col, int side)
+	public void FlashDenied(int row, int col, int side) => Flash(row, col, side, DenyColor);
+
+	// Короткая вспышка следа (row, col, side×side) цветом color: отказ удаления — красный,
+	// очистка C (T035) — светлый. Альфа color масштабирует заливку и рамку.
+	public void Flash(int row, int col, int side, Color color)
 	{
 		_flashTarget = new RemoveTarget(0, row, col, side);
+		_flashColor = color;
 		_flash = FlashSeconds;
 		QueueRedraw();
 	}
@@ -67,8 +73,8 @@ public partial class RemoveHoldLayer : Node2D
 		{
 			float k = Mathf.Clamp(_flash / FlashSeconds, 0f, 1f);
 			var r = Footprint(_flashTarget);
-			DrawRect(r, new Color(DenyColor, 0.2f * k), true);
-			DrawRect(r, new Color(DenyColor, 0.8f * k), false, FrameWidthPx * px);
+			DrawRect(r, new Color(_flashColor, 0.2f * k * _flashColor.A), true);
+			DrawRect(r, new Color(_flashColor, 0.8f * k * _flashColor.A), false, FrameWidthPx * px);
 		}
 
 		if (_target is RemoveTarget t && _progress > 0f)

@@ -64,6 +64,9 @@ msgstr "Mouse wheel — zoom"
 msgid "G — сетка"
 msgstr "G — grid"
 
+msgid "C — очистить"
+msgstr "C — clear"
+
 msgid "ЛКМ — поставить или заменить, ПКМ — убрать"
 msgstr "LMB — place or replace, RMB — remove"
 
