@@ -71,9 +71,9 @@ public partial class NucleusLayer : Node2D
 		"res://Resources/Textures/palette_violet.png", // тир 5 — экспериментальный "бросатель", см. ThrowerCoreTier
 	};
 
-	[Export] public string HoleSpritePath = "res://Resources/Textures/hole2_16px.png";
+	[Export] public string HoleSpritePath = "res://Resources/Textures/hole_ring_16px.png";
 	[Export] public int HoleSpriteSize = 16;
-	[Export] public float HoleOpacity = 0.5f;
+	[Export] public float HoleOpacity = 1f;
 	[Export] public float OrbitDiameterCoef = 1f; // диаметр орбиты кольца = CellSize * этот коэффициент
 	// Направление вращения кольца НА МОМЕНТ ЗАПУСКА сцены — стартовое значение
 	// для _currentSpinDirection (см. поле ниже), которое дальше можно
