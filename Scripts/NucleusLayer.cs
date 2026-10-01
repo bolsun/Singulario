@@ -435,19 +435,38 @@ public partial class NucleusLayer : Node2D
 	// свой атом, Touch пополняет множество, которое проходы сортируют сами.
 	private readonly HashSet<NucleusEntity> _crossSet = new();
 	public int CrossroadCount => _crossSet.Count;
-	// Для вида (T033): центр, маска сторон-выходов, тир атома, маска сторон-выходов забитых осей.
-	public IEnumerable<(Vector2 center, int exitMask, int tier, int blockedMask)> Crossroads()
+	// Для вида (T033): центр, маска сторон-выходов, маска сторон-выходов забитых осей и тиры линий за
+	// выходами (T040): по 4 бита на сторону (side * 4), NeutralLineTier — сосед не цветной.
+	public IEnumerable<(Vector2 center, int exitMask, int blockedMask, int lineTiers)> Crossroads()
 	{
 		foreach (var n in _crossSet)
 		{
 			var c = n.Cross;
 			int period = CrossPeriod(n);
 			int blocked = 0;
+			int lineTiers = 0;
 			for (int axis = 0; axis < 2; axis++)
+			{
+				int side = c.OutputSide(axis);
 				if (c.BlockedSince[axis] >= 0 && _globalTick - c.BlockedSince[axis] >= period)
-					blocked |= 1 << c.OutputSide(axis);
-			yield return (EffectiveCenter(n), c.OutputMask, n.CoreTier, blocked);
+					blocked |= 1 << side;
+				lineTiers |= LineTierBehind(n.Row, n.Col, side) << (side * 4);
+			}
+			yield return (EffectiveCenter(n), c.OutputMask, blocked, lineTiers);
 		}
+	}
+
+	public const int NeutralLineTier = 0xF;
+	public static int LineTierOf(int lineTiers, int side) => (lineTiers >> (side * 4)) & 0xF;
+
+	// Тир линии за стороной (T040, только вид): рабочий атом Ж/К/С в соседней клетке — его тир; пусто,
+	// серый, звезда, ЧД, источник, обломок, закрытая клетка — NeutralLineTier.
+	private int LineTierBehind(int row, int col, int side)
+	{
+		int r = row + (side == 0 ? -1 : side == 2 ? 1 : 0);
+		int cl = col + (side == 1 ? 1 : side == 3 ? -1 : 0);
+		if (!IsCellOpen(r, cl) || !_entAt.TryGetValue((r, cl), out var e)) return NeutralLineTier;
+		return !e.IsCargo && IsNormalTier(e.CoreTier) ? e.CoreTier : NeutralLineTier;
 	}
 
 	// Радиус видимого тела атома в пикселях мира (спрайт ядра 1:1) — от него дорожка перекрёстка (T029).
