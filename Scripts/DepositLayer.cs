@@ -37,7 +37,7 @@ public partial class DepositLayer : Node2D
 
 	// Облако: по стадии запаса 0..3 (>75 / 50–75 / 25–50 / <25%).
 	[Export] public float[] StageRadius = { 1.0f, 0.99f, 0.97f, 0.94f };
-	[Export] public float[] StageStrength = { 0.20f, 0.15f, 0.07f, 0.04f };
+	[Export] public float[] StageStrength = { 0.18f, 0.15f, 0.12f, 0.10f };
 	// Частица видна, если её приоритет меньше порога стадии.
 	[Export] public float[] StageThreshold = { 1.01f, 0.72f, 0.46f, 0.24f };
 	[Export] public float NeighborPull = 0.1f;
@@ -50,6 +50,10 @@ public partial class DepositLayer : Node2D
 	[Export] public float SwayAngle = 0.3f;
 	[Export] public float SwayDist = 0.04f;
 	[Export] public float Squash = 0.85f;
+	// Все частицы месторождения на столько тонов темнее атомов (глубина — ещё на тон); контур и тон 1 не трогаются.
+	[Export(PropertyHint.Range, "0,2,1")] public int ToneShift = 1;
+	// Тон 0 тиров Ж/К/С (Singulario 32) — его нет в таблицах атомов, нужен для сдвига.
+	[Export] public Color[] Tone0 = { new("#5e2a1e"), new("#4a1030"), new("#1a1f5c") };
 
 	// Новый вид включён (F7). Старт — новый.
 	public bool NewLook { get; private set; } = true;
@@ -229,6 +233,11 @@ public partial class DepositLayer : Node2D
 		_material.SetShaderParameter("sway_angle", SwayAngle);
 		_material.SetShaderParameter("sway_dist", SwayDist);
 		_material.SetShaderParameter("squash", Squash);
+		_material.SetShaderParameter("tone_shift", (float)ToneShift);
+		_material.SetShaderParameter("tier_count", (float)_layer.TierCount);
+		if (Tone0?.Length >= 3)
+			_material.SetShaderParameter("tone0", new Vector3[] {
+				new(Tone0[0].R, Tone0[0].G, Tone0[0].B), new(Tone0[1].R, Tone0[1].G, Tone0[1].B), new(Tone0[2].R, Tone0[2].G, Tone0[2].B) });
 		if (_layer.PaletteAtlas != null) _material.SetShaderParameter("palette_tex", _layer.PaletteAtlas);
 
 		// Ушедшие из кадра — освободить (раскладка и меш строятся заново при возвращении).

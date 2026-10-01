@@ -35,7 +35,7 @@ public sealed class DepositLayout
 
 	// Стадия запаса 0..3 (>75 / 50–75 / 25–50 / <25%).
 	public float[] StageRadius = { 1.0f, 0.99f, 0.97f, 0.94f };
-	public float[] StageStrength = { 0.20f, 0.15f, 0.07f, 0.04f };
+	public float[] StageStrength = { 0.18f, 0.15f, 0.12f, 0.10f };
 	// Видна частица с приоритетом < порога (у стадии 0 — все).
 	public float[] StageThreshold = { 1.01f, 0.72f, 0.46f, 0.30f };
 

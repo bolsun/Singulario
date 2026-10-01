@@ -12,7 +12,8 @@ render_mode world_vertex_coords;
 //     у ядра r — угол, g — расстояние (клеток); у мостика (r, g) — вектор A→B (клеток), b — изгиб.
 // Позиция округляется до пикселя мира; спрайт — атлас из четырёх полос кадров (16/8/4/2 px) в один
 // ряд, начало полос — strip_x0; 1 арт-пиксель = 1 пиксель мира. Цвет — таблица палитр тира
-// (как nucleus_palette.gdshader); у dark уровень яркости на тон ниже (контур и тон 1 не трогаются).
+// (как nucleus_palette.gdshader); все тоны ниже на tone_shift, у dark — ещё на тон. Ниже тона 1 — тон 0 тира
+// (tone0: в таблицах атомов его нет, колонка 0 там — обводка); обводка не трогается.
 uniform sampler2D atlas_tex : filter_nearest, repeat_disable;
 uniform sampler2D palette_tex : filter_nearest, repeat_disable;
 uniform float tick = 0.0;     // GlobalTick (mod кратного всем периодам) + доля тика
@@ -22,6 +23,9 @@ uniform vec4 strip_x0 = vec4(0.0, 48.0, 72.0, 84.0); // начало полос�
 uniform float sway_angle = 0.3;     // рад
 uniform float sway_dist = 0.04;     // клеток
 uniform float squash = 0.85;        // сжатие по вертикали
+uniform float tone_shift = 1.0;     // на сколько тонов темнее атомов (у dark — ещё +1)
+uniform float tier_count = 6.0;     // строк в palette_tex (тир = строка)
+uniform vec3 tone0[3];              // тон 0 тиров Ж/К/С (Singulario 32)
 
 varying float v_row;
 varying vec2 v_region;   // x0 и сторона спрайта в пикселях атласа
@@ -62,12 +66,13 @@ void fragment() {
 	vec2 uv = vec2(UV.x, 1.0 - UV.y);
 	vec2 px = min(uv * v_region.y, vec2(v_region.y - 0.01));
 	vec4 src = texture(atlas_tex, (vec2(v_region.x, 0.0) + px) / atlas_size);
-	float idx = src.r;
-	if (v_dark > 0.5) {
-		float level = floor(src.r * 4.0 + 0.5);
-		// Палитра — 5 колонок, уровень L (src.r ≈ L/4) берёт колонку L: центр колонки L−1.
-		if (level >= 2.0) idx = (level - 0.5) / 5.0;
-	}
-	vec3 col = texture(palette_tex, vec2(idx, v_row)).rgb;
+	// Палитра — 5 колонок: 0 — обводка, 1..4 — тоны 1..4; уровень L (src.r ≈ L/4) берёт колонку L.
+	// Сдвиг: тон L − shift; 0 и ниже — тон 0 тира (uniform), обводка (L = 0) не трогается.
+	float level = floor(src.r * 4.0 + 0.5);
+	float t = level - (tone_shift + v_dark);
+	vec3 col;
+	if (level < 0.5) col = texture(palette_tex, vec2(0.1, v_row)).rgb;
+	else if (t >= 0.5) col = texture(palette_tex, vec2((t + 0.5) / 5.0, v_row)).rgb;
+	else col = tone0[clamp(int(floor(v_row * tier_count)), 0, 2)];
 	COLOR = vec4(col, src.a);
 }
