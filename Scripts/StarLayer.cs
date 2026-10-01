@@ -54,7 +54,7 @@ public partial class StarLayer : Node2D
 	// Ниже этого зума — диск тона 3 с краем тона 1, без поверхности и короны.
 	[Export] public float StarLodZoom = 0.15f;
 	// Сид на тип (Ж, К, С; З — запас), как в мастерской PixelPlanets.
-	[Export] public int[] TierSeeds = { 753, 753, 753, 753 };
+	[Export] public int[] TierSeeds = { 753, 412, 961, 753 };
 	// Шеврон выхода у давно забитой звезды: тиков на ступень пульса.
 	[Export] public int ChevronStepTicks = 24;
 
