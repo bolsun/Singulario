@@ -27,7 +27,8 @@ public enum PlaceDenyReason
 public readonly record struct PlaceTool(int Tier, int Holes, int Spin, bool IsCarrier);
 
 // Атом в клетке. Exists = false — клетка без атома, остальные поля не читаются.
-// IsCarrier — обычный переносчик Ж/К/С/серый (не вращатель/бросатель).
+// IsCarrier — атом, который инструмент может заменить: Ж/К/С (серый — решение GDD 2026-10-01 — и
+// вращатель/бросатель не заменяются).
 public readonly record struct PlaceCellAtom(bool Exists, int Tier, int Holes, int Spin, bool IsCrossroad, bool IsCargo, bool IsCarrier);
 
 // Свойства клетки, не связанные с атомом.
@@ -52,11 +53,12 @@ public static class PlaceDecision
 		if (atom.Exists)
 		{
 			if (atom.IsCargo) return Deny(PlaceDenyReason.Cargo);
-			if (!tool.IsCarrier || !atom.IsCarrier) return Deny(PlaceDenyReason.Occupied);
 			// Спин у перекрёстка не сравниваем: у него его нет (SpinOf = NoSpin).
 			bool same = atom.Tier == tool.Tier && atom.Holes == tool.Holes
 				&& (atom.IsCrossroad || atom.Spin == tool.Spin);
 			if (same) return new PlaceResult(PlaceOutcome.Same, PlaceDenyReason.None);
+			// IsCarrier атома = можно заменить инструментом (серый и замороженные — нет).
+			if (!tool.IsCarrier || !atom.IsCarrier) return Deny(PlaceDenyReason.Occupied);
 		}
 
 		if (!cell.CanAfford) return Deny(PlaceDenyReason.NoAtom);
