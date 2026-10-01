@@ -4335,10 +4335,13 @@ public partial class NucleusLayer : Node2D
 		b[o] = x; b[o + 1] = y; b[o + 2] = z; b[o + 3] = w;
 	}
 
-	// Перекрёсток (T010, вид T029): 4 неподвижные дырки на N/E/S/W (инстансы дырок 0..3,
-	// порядок как у Crossroad.ExitSide), дырка выхода занятой оси скрыта (на её месте
-	// CrossroadLayer рисует шеврон). Частицы в пути (ось 0 — инстансы 0..3, ось 1 — 4..7)
-	// идут по прямой своей оси от входа к выходу, размер постоянный, без затемнения.
+	// Перекрёсток (T010, вид T029, «тик-так» T032): дырки на двух входах (инстансы дырок 0..3 =
+	// стороны N/E/S/W), на выходах дырок нет — там CrossroadLayer рисует шеврон. Частица
+	// (инстанс = сторона) на выходе стоит у порта выхода; на входе — едет по прямой оси к
+	// выходу, только пока выход пуст, в половину периода перед переворотом своей оси:
+	// start = max(начало половины, тик входа, тик освобождения выхода), конец — тик переворота.
+	// Выход внутри половины только освобождается, поэтому частица не едет назад и не прыгает.
+	// Размер постоянный, без затемнения. Только вид — в хеш и сохранение не входит.
 	private void UpdateCrossroadVisuals(NucleusEntity n, Vector2 center, float[] holeBuf, float[] particleBuf)
 	{
 		for (int k = 0; k < 8; k++)
@@ -4354,12 +4357,24 @@ public partial class NucleusLayer : Node2D
 			PutTransform(holeBuf, (n.LocalIndex * 8 + side) * HoleStride, center + SideDir(side) * _orbitRadius, 1f);
 		}
 
+		int period = CrossPeriod(n);
+		bool awake = _globalTick >= n.AsleepUntilTick;
 		for (int side = 0; side < Crossroad.SideCount; side++)
 		{
 			if (!n.Cross.Has(side)) continue;
 			var cp = n.Cross.Sides[side];
+			float u = 0f; // 0 — у порта своей стороны, 1 — у порта выхода оси
+			int axis = Crossroad.AxisOf(side);
+			if (awake && period > 1 && (outMask & (1 << side)) == 0 && !n.Cross.Has(n.Cross.OutputSide(axis)))
+			{
+				long d = ((Crossroad.AxisOffset(axis, period) - _globalTick) % period + period) % period;
+				long flipTick = _globalTick + (d == 0 ? period : d);
+				long start = System.Math.Max(flipTick - period / 2, System.Math.Max(cp.EnterTick, n.Cross.OutFreedTick[axis]));
+				if (flipTick > start)
+					u = Mathf.Clamp((float)(_globalTick - start + _subTickFraction) / (flipTick - start), 0f, 1f);
+			}
 			int po = (n.LocalIndex * 8 + side) * ParticleStride;
-			PutTransform(particleBuf, po, center + SideDir(side) * _orbitRadius, 1f);
+			PutTransform(particleBuf, po, center + SideDir(side) * (_orbitRadius * (1f - 2f * u)), 1f);
 			PutCustom(particleBuf, po + 8, (cp.ColorTier + 0.5f) / _tierCount, 0f, 0f, ParticleFrame(cp.IsItem, cp.Variant));
 		}
 	}
