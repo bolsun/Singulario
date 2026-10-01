@@ -260,7 +260,7 @@ public partial class BlackHoleLayer : Node2D
 		return true;
 	}
 
-	// ПКМ по любой клетке ЧД (вызывает NucleusLayer.RemoveAllAtMouse).
+	// Удаление ЧД по ПКМ после удержания 0,1 с × Size, только в песочнице (T026); вызывает NucleusLayer.RemoveAllAtMouse.
 	public void RemoveAt(int row, int col)
 	{
 		if (!_ready || !_holes.TryGetAt(row, col, out var hole)) return;
