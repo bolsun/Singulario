@@ -1,7 +1,7 @@
 using Godot;
 
 // Подсказка управления внизу по центру (T012): «W, A, S, D — перемещение
-// камеры» и «G — сетка». Часть исчезает, когда игрок её выполнил: подвинул
+// камеры», «G — сетка» и «C — очистить» (T035). Часть исчезает, когда игрок её выполнил: подвинул
 // камеру WASD (CameraController.PannedByPlayer) или переключил сетку
 // (GridDraw.Shown). Состояние — NucleusLayer.Hints (сохраняется с игрой).
 // Строки — ключи перевода (русская строка), Label переводит их сам и при смене
@@ -13,6 +13,7 @@ public partial class HintLabel : VBoxContainer
 	private CameraController _camera;
 	private Label _cameraLine;
 	private Label _gridLine;
+	private Label _clearLine;
 	private bool _gridShown;
 
 	public override void _Ready()
@@ -25,6 +26,7 @@ public partial class HintLabel : VBoxContainer
 
 		_cameraLine = MakeLine("W, A, S, D — перемещение камеры");
 		_gridLine = MakeLine("G — сетка");
+		_clearLine = MakeLine("C — очистить");
 
 		SetAnchorsAndOffsetsPreset(LayoutPreset.CenterBottom, LayoutPresetMode.KeepSize);
 		GrowHorizontal = GrowDirection.Both;
@@ -61,6 +63,7 @@ public partial class HintLabel : VBoxContainer
 
 		_cameraLine.Visible = !hints.CameraDone;
 		_gridLine.Visible = !hints.GridDone;
+		_clearLine.Visible = !hints.ClearDone;
 		Visible = !hints.AllDone;
 	}
 }
