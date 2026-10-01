@@ -19,6 +19,8 @@
 //
 // Чистые данные без Godot, только целые числа. EnterTick и OutFreedTick — только для
 // вида (анимация «тик-так»), на законы не влияют, в хеш и сохранение не входят.
+// BlockedSince (T033) — тоже только вид: тик первого несостоявшегося переворота оси из-за
+// занятого выхода (−1 — не забит); затор = BlockedSince >= 0 и прошло не меньше периода P.
 //
 // Стороны: 0 N, 1 E, 2 S, 3 W (компас Adj8 / 2).
 public struct CrossParticle
@@ -44,6 +46,9 @@ public sealed class Crossroad
 
 	// T032: только вид — тик, когда выход оси освободился (начало движения частицы входа).
 	public readonly long[] OutFreedTick = new long[2];
+
+	// T033: только вид — тик, с которого ось забита (вход и выход заняты при перевороте); −1 — нет.
+	public readonly long[] BlockedSince = { -1, -1 };
 
 	public Crossroad(int holeCount, int outRot = 0)
 	{
@@ -113,13 +118,20 @@ public sealed class Crossroad
 	{
 		OccupiedMask &= ~(1 << side);
 		OutFreedTick[AxisOf(side)] = tick;
+		BlockedSince[AxisOf(side)] = -1;
 	}
 
 	// Переворот оси: частица входа → на выход, если выход пуст. true — что-то перешло.
 	public bool Flip(int axis, long tick)
 	{
 		int input = InputSide(axis), output = OutputSide(axis);
-		if (!Has(input) || Has(output)) return false;
+		if (!Has(input) || Has(output))
+		{
+			if (Has(input) && Has(output)) { if (BlockedSince[axis] < 0) BlockedSince[axis] = tick; }
+			else BlockedSince[axis] = -1;
+			return false;
+		}
+		BlockedSince[axis] = -1;
 		var p = Sides[input];
 		p.EnterTick = tick;
 		Sides[output] = p;
@@ -133,6 +145,7 @@ public sealed class Crossroad
 	{
 		int before = OutputMask;
 		OutRot = (OutRot + 1) & 3;
+		BlockedSince[0] = BlockedSince[1] = -1;
 		for (int axis = 0; axis < 2; axis++)
 		{
 			if ((before & (1 << OutputSide(axis))) != 0) continue; // роли оси не поменялись
@@ -142,5 +155,9 @@ public sealed class Crossroad
 		}
 	}
 
-	public void Clear() => OccupiedMask = 0;
+	public void Clear()
+	{
+		OccupiedMask = 0;
+		BlockedSince[0] = BlockedSince[1] = -1;
+	}
 }

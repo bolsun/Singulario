@@ -66,7 +66,7 @@ public partial class StarLayer : Node2D
 		new("1a1f5c"), new("26479e"), new("3a7fe0"), new("69b8ff"), new("c2ecff"), // С
 		new("0d3b3f"), new("146e4e"), new("25a860"), new("6ddb5e"), new("b4f2a0"), // З
 	};
-	private static readonly Color[] ChevronPulse = { new("ff6e5e"), new("d23a4a"), new("8c1c3a"), new("d23a4a") };
+	internal static readonly Color[] ChevronPulse = { new("ff6e5e"), new("d23a4a"), new("8c1c3a"), new("d23a4a") };
 
 	// Свечение во время производства — прибавка яркости (0.5 — в 1.5 раза ярче):
 	// база и размах пульсации, частота (Гц).
