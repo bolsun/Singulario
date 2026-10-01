@@ -435,9 +435,19 @@ public partial class NucleusLayer : Node2D
 	// свой атом, Touch пополняет множество, которое проходы сортируют сами.
 	private readonly HashSet<NucleusEntity> _crossSet = new();
 	public int CrossroadCount => _crossSet.Count;
-	public IEnumerable<(Vector2 center, int exitMask)> Crossroads()
+	// Для вида (T033): центр, маска сторон-выходов, тир атома, маска сторон-выходов забитых осей.
+	public IEnumerable<(Vector2 center, int exitMask, int tier, int blockedMask)> Crossroads()
 	{
-		foreach (var n in _crossSet) yield return (EffectiveCenter(n), n.Cross.OutputMask);
+		foreach (var n in _crossSet)
+		{
+			var c = n.Cross;
+			int period = CrossPeriod(n);
+			int blocked = 0;
+			for (int axis = 0; axis < 2; axis++)
+				if (c.BlockedSince[axis] >= 0 && _globalTick - c.BlockedSince[axis] >= period)
+					blocked |= 1 << c.OutputSide(axis);
+			yield return (EffectiveCenter(n), c.OutputMask, n.CoreTier, blocked);
+		}
 	}
 
 	// Радиус видимого тела атома в пикселях мира (спрайт ядра 1:1) — от него дорожка перекрёстка (T029).
@@ -4353,7 +4363,6 @@ public partial class NucleusLayer : Node2D
 		int outMask = n.Cross.OutputMask;
 		for (int side = 0; side < 4; side++)
 		{
-			if ((outMask & (1 << side)) != 0) continue;
 			PutTransform(holeBuf, (n.LocalIndex * 8 + side) * HoleStride, center + SideDir(side) * _orbitRadius, 1f);
 		}
 
