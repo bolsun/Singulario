@@ -60,6 +60,18 @@ public sealed class Crossroad
 	public static int ExitSide(int axis, int dir) =>
 		axis == 0 ? (dir > 0 ? 1 : 3) : (dir > 0 ? 2 : 0);
 
+	// Маска сторон выхода занятых осей (бит side) — для вида (T029).
+	public int ExitMask
+	{
+		get
+		{
+			int m = 0;
+			for (int a = 0; a < 2; a++)
+				if (Axes[a].Count > 0) m |= 1 << ExitSide(a, Axes[a].Dir);
+			return m;
+		}
+	}
+
 	public bool IsEmpty => Axes[0].Count == 0 && Axes[1].Count == 0;
 
 	// Есть ли место для частицы, входящей со стороны side.

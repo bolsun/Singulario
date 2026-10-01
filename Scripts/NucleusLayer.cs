@@ -71,9 +71,9 @@ public partial class NucleusLayer : Node2D
 		"res://Resources/Textures/palette_violet.png", // тир 5 — экспериментальный "бросатель", см. ThrowerCoreTier
 	};
 
-	[Export] public string HoleSpritePath = "res://Resources/Textures/hole2_16px.png";
+	[Export] public string HoleSpritePath = "res://Resources/Textures/hole_ring_16px.png";
 	[Export] public int HoleSpriteSize = 16;
-	[Export] public float HoleOpacity = 0.5f;
+	[Export] public float HoleOpacity = 1f;
 	[Export] public float OrbitDiameterCoef = 1f; // диаметр орбиты кольца = CellSize * этот коэффициент
 	// Направление вращения кольца НА МОМЕНТ ЗАПУСКА сцены — стартовое значение
 	// для _currentSpinDirection (см. поле ниже), которое дальше можно
@@ -434,10 +434,14 @@ public partial class NucleusLayer : Node2D
 	// (CrossroadLayer), на симуляцию порядок набора не влияет.
 	private readonly HashSet<NucleusEntity> _crossSet = new();
 	public int CrossroadCount => _crossSet.Count;
-	public IEnumerable<(Vector2 center, int tier)> Crossroads()
+	public IEnumerable<(Vector2 center, int exitMask)> Crossroads()
 	{
-		foreach (var n in _crossSet) yield return (EffectiveCenter(n), n.CoreTier);
+		foreach (var n in _crossSet) yield return (EffectiveCenter(n), n.Cross.ExitMask);
 	}
+
+	// Радиус видимого тела атома в пикселях мира (спрайт ядра 1:1) — от него дорожка перекрёстка (T029).
+	public float BodyRadius => SpriteSize * 0.5f;
+	public float HoleRadius => HoleSpriteSize * 5f / 16f; // кольцо дырки d10 на холсте 16
 
 	public int ChunkOf(int cell) => Mathf.FloorToInt((float)cell / ChunkSize);
 	public bool IsChunkOpen(int cx, int cy) => Inventory.Sandbox || Territory.IsOpen(cx, cy);
@@ -4285,16 +4289,23 @@ public partial class NucleusLayer : Node2D
 		b[o] = x; b[o + 1] = y; b[o + 2] = z; b[o + 3] = w;
 	}
 
-	// Перекрёсток (T010): дырок нет, 8 инстансов частиц атома — частицы в пути
-	// (ось 0 — инстансы 0..3, ось 1 — 4..7).
-	// Частица летит дугой над центром по кольцу своей оси (CrossroadLayer.RingPoint):
-	// у концов дуги — меньше и тусклее, у вершины (ближе к камере) — крупнее и ярче.
+	// Перекрёсток (T010, вид T029): 4 неподвижные дырки на N/E/S/W (инстансы дырок 0..3,
+	// порядок как у Crossroad.ExitSide), дырка выхода занятой оси скрыта (на её месте
+	// CrossroadLayer рисует шеврон). Частицы в пути (ось 0 — инстансы 0..3, ось 1 — 4..7)
+	// идут по прямой своей оси от входа к выходу, размер постоянный, без затемнения.
 	private void UpdateCrossroadVisuals(NucleusEntity n, Vector2 center, float[] holeBuf, float[] particleBuf)
 	{
 		for (int k = 0; k < 8; k++)
 		{
 			HideTransform(holeBuf, (n.LocalIndex * 8 + k) * HoleStride);
 			HideTransform(particleBuf, (n.LocalIndex * 8 + k) * ParticleStride);
+		}
+
+		int exitMask = n.Cross.ExitMask;
+		for (int side = 0; side < 4; side++)
+		{
+			if ((exitMask & (1 << side)) != 0) continue;
+			PutTransform(holeBuf, (n.LocalIndex * 8 + side) * HoleStride, center + SideDir(side) * _orbitRadius, 1f);
 		}
 
 		int ticks = n.CoreTier < TierTicks.Length ? TierTicks[n.CoreTier] : TierTicks[TierTicks.Length - 1];
@@ -4310,17 +4321,23 @@ public partial class NucleusLayer : Node2D
 				// Та же очередь, что в Crossroad.Step: едет, только если впереди свободно.
 				int limit = i == 0 ? Crossroad.ExitPos : axis.Items[i - 1].Pos - 1;
 				float u = (cp.Pos + (cp.Pos < limit ? fraction : 0f)) / Crossroad.ExitPos;
-				float phi = Mathf.Pi * (axis.Dir > 0 ? u : 1f - u);
-				float height = Mathf.Sin(phi);
-				var pos = center + CrossroadLayer.RingPoint(a, phi, _orbitRadius);
-				float scale = 0.75f + 0.45f * height;
+				float along = (2f * u - 1f) * _orbitRadius * axis.Dir;
+				var pos = center + (a == 0 ? new Vector2(along, 0f) : new Vector2(0f, along));
 				int po = (n.LocalIndex * 8 + a * 4 + i) * ParticleStride;
-				PutTransform(particleBuf, po, pos, scale);
-				float dim = 0.45f * (1f - height);
-				PutCustom(particleBuf, po + 8, (cp.ColorTier + 0.5f) / _tierCount, 0f, dim, ParticleFrame(cp.IsItem, cp.Variant));
+				PutTransform(particleBuf, po, pos, 1f);
+				PutCustom(particleBuf, po + 8, (cp.ColorTier + 0.5f) / _tierCount, 0f, 0f, ParticleFrame(cp.IsItem, cp.Variant));
 			}
 		}
 	}
+
+	// Единичный вектор стороны: 0 N, 1 E, 2 S, 3 W.
+	public static Vector2 SideDir(int side) => side switch
+	{
+		0 => new Vector2(0f, -1f),
+		1 => new Vector2(1f, 0f),
+		2 => new Vector2(0f, 1f),
+		_ => new Vector2(-1f, 0f),
+	};
 
 	private WorldChunk GetOrCreateChunk(int cx, int cy)
 	{
