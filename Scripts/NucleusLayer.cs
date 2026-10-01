@@ -1904,20 +1904,21 @@ public partial class NucleusLayer : Node2D
 					GetViewport().SetInputAsHandled();
 					return;
 				}
-				// ЛКМ по атому-переносчику без инструмента — перекрёсток ↔ обычный
-				// режим (T010).
-				if (!AnyToolSelected() && _entAt.TryGetValue(cargoCell, out var atom) && CanBeCrossroad(atom))
+				// ЛКМ по атому без инструмента — перекрёсток ↔ обычный режим (T010);
+				// можно ли — решает PlaceDecision.DecideToggle (T040).
+				if (!AnyToolSelected() && _entAt.TryGetValue(cargoCell, out var atom) && IsToggleClickTarget(atom))
 				{
-					ToggleCrossroad(atom);
+					TryToggleCrossroad(atom);
+					_lastPlacedCell = cargoCell;
 					GetViewport().SetInputAsHandled();
 					return;
 				}
 				if (!_selectedSpawnTier.HasValue) return;
 				// Такой же атом с инструментом в руке — переключить режим (T039); рука не меняется.
-				if (_entAt.TryGetValue(cargoCell, out var sameAtom) && CanBeCrossroad(sameAtom)
+				if (_entAt.TryGetValue(cargoCell, out var sameAtom) && IsToggleClickTarget(sameAtom)
 					&& EvaluatePlace(cargoCell.Item1, cargoCell.Item2, _selectedSpawnTier.Value, _selectedSpawnHoleCount).Outcome == PlaceOutcome.Same)
 				{
-					ToggleCrossroad(sameAtom);
+					TryToggleCrossroad(sameAtom);
 					_lastPlacedCell = cargoCell; // удержание ЛКМ режим не мигает
 					_leftMouseHeld = true;
 					GetViewport().SetInputAsHandled();
@@ -2273,9 +2274,34 @@ public partial class NucleusLayer : Node2D
 		return false;
 	}
 
-	// Перекрёстком может стать рабочий атом-переносчик Ж/К/С или серый.
-	private bool CanBeCrossroad(NucleusEntity n) =>
+	// Атом, по которому клик ЛКМ пробует переключить режим (не обломок, не вращатель/бросатель, не в полёте).
+	// Можно ли стать перекрёстком — решает только PlaceDecision.DecideToggle (T040).
+	private bool IsToggleClickTarget(NucleusEntity n) =>
 		!n.IsCargo && !IsSpinnerTier(n.CoreTier) && !(n.IsMoving && n.IsFlying);
+
+	private PlaceCellAtom PlaceAtomOf(NucleusEntity e) =>
+		new(true, e.CoreTier, HoleCountOf(e), e.Dir, e.Cross != null, e.IsCargo, IsNormalTier(e.CoreTier));
+
+	// В одной из 4 соседних клеток (N/E/S/W) стоит перекрёсток; сама клетка не считается (T040).
+	private bool HasCrossroadNeighbor(int row, int col) =>
+		IsCrossroadAt(row - 1, col) || IsCrossroadAt(row + 1, col)
+		|| IsCrossroadAt(row, col - 1) || IsCrossroadAt(row, col + 1);
+
+	private bool IsCrossroadAt(int row, int col) =>
+		_entAt.TryGetValue((row, col), out var e) && e.Cross != null;
+
+	// Переключение режима по правилу PlaceDecision.DecideToggle: отказ — красная вспышка клетки (T040).
+	private void TryToggleCrossroad(NucleusEntity n)
+	{
+		var decision = PlaceDecision.DecideToggle(PlaceAtomOf(n), HasCrossroadNeighbor(n.Row, n.Col));
+		if (decision.Outcome == PlaceOutcome.Toggle)
+		{
+			ToggleCrossroad(n);
+			return;
+		}
+		FlashPlaceDenied(n.Row, n.Col, decision.Reason);
+		GD.Print($"[NucleusLayer] перекрёсток в ({n.Row},{n.Col}) отклонён: {decision.Reason}.");
+	}
 
 	private static int HoleCountOf(NucleusEntity n)
 	{
@@ -4808,16 +4834,15 @@ public partial class NucleusLayer : Node2D
 	{
 		_entAt.TryGetValue((row, col), out var e);
 		var tool = new PlaceTool(tier, holeCount, _currentSpinDirection, !IsSpinnerTier(tier), _handCrossroad);
-		var atom = e == null
-			? default
-			: new PlaceCellAtom(true, e.CoreTier, HoleCountOf(e), e.Dir, e.Cross != null, e.IsCargo, IsNormalTier(e.CoreTier));
+		var atom = e == null ? default : PlaceAtomOf(e);
 		var cell = new PlaceCellFlags(
 			Open: IsCellOpen(row, col),
 			BlackHole: BlackHoles.TryGetAt(row, col, out _),
 			Star: Stars.TryGetAt(row, col, out _),
 			Layer2: _moleculeLayer != null && _moleculeLayer.IsCellTakenByLayer2(row, col),
 			Port: Ports != null && Ports.TryGetPortAtCell(row, col, out _),
-			CanAfford: Inventory.CanAfford(tier));
+			CanAfford: Inventory.CanAfford(tier),
+			CrossroadNeighbor: HasCrossroadNeighbor(row, col));
 		return PlaceDecision.Decide(tool, atom, cell);
 	}
 
@@ -4841,6 +4866,8 @@ public partial class NucleusLayer : Node2D
 				break;
 			case PlaceDenyReason.Cargo:
 			case PlaceDenyReason.Occupied:
+			case PlaceDenyReason.CrossroadAdjacent:
+			case PlaceDenyReason.CrossroadNotGray:
 				_removeHoldLayer?.FlashDenied(row, col, 1);
 				break;
 		}
@@ -5429,7 +5456,7 @@ public partial class NucleusLayer : Node2D
 				? PlaceCargo(sn.Row + dRow, sn.Col + dCol, sn.CoreTier, sn.HoleCount, sn.Dir)
 				: PlaceNucleusForImport(sn.Row + dRow, sn.Col + dCol, sn.CoreTier, sn.Dir, sn.HoleCount);
 			if (ok && sn.Crossroad && !sn.Cargo
-				&& _entAt.TryGetValue((sn.Row + dRow, sn.Col + dCol), out var imported) && CanBeCrossroad(imported))
+				&& _entAt.TryGetValue((sn.Row + dRow, sn.Col + dCol), out var imported) && IsToggleClickTarget(imported))
 			{
 				imported.Cross = new Crossroad(HoleCountOf(imported), sn.CrossOutputs ?? 0);
 				_crossSet.Add(imported);
