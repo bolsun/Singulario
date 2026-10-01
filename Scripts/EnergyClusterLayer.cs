@@ -220,6 +220,18 @@ public partial class EnergyClusterLayer : TileMapLayer
 	// Любое изменение набора клеток, включая исчерпание (T015, состав чанков для
 	// туманностей). Отдельно от Version: симуляция по нему не пересчитывается.
 	public int CellsVersion { get; private set; }
+	// Вид месторождения (T022): растёт при любом изменении CellsVersion и при смене стадии
+	// запаса скопления (облако и частицы перестраиваются). Только чтение наружу.
+	public int VisualVersion { get; private set; }
+
+	// Стадия запаса скопления клетки (0..3, см. DepletionStage); -1 — клетки нет.
+	public int StageAt(int row, int col) => _clusterOf.TryGetValue((row, col), out var c) ? c.Stage : -1;
+	// Одно ли скопление у двух клеток (обе должны быть источниками этого тира).
+	public bool SameClusterAt(int row1, int col1, int row2, int col2) =>
+		_clusterOf.TryGetValue((row1, col1), out var a) && _clusterOf.TryGetValue((row2, col2), out var b) && a == b;
+	// Старые тайлы вкл/выкл (F7, T022): клетки, выбор и логика не меняются.
+	public void SetTilesVisible(bool visible) => _tilesVisible = visible;
+	private bool _tilesVisible = true;
 
 	public bool HasClusterAt(int row, int col) => _clusterOf.ContainsKey((row, col));
 	// Выбран ли инструмент установки этого тира (для подсветки запрета, см. MoleculeLayer).
@@ -276,7 +288,7 @@ public partial class EnergyClusterLayer : TileMapLayer
 	public override void _Process(double delta)
 	{
 		// На слое 2 слой 1 не рисуется и не ставится (см. ViewLayer).
-		Visible = !ViewLayer.IsLayer2;
+		Visible = !ViewLayer.IsLayer2 && _tilesVisible;
 		if (ViewLayer.IsLayer2) { _leftMouseHeld = false; return; }
 		if (_leftMouseHeld) TryPlaceAtMouseIfSelected();
 	}
@@ -315,6 +327,7 @@ public partial class EnergyClusterLayer : TileMapLayer
 	{
 		Version++;
 		CellsVersion++;
+		VisualVersion++;
 		var key = (row, col);
 
 		// Клетка может нести частицы только одного тира одновременно (см.
@@ -488,6 +501,7 @@ public partial class EnergyClusterLayer : TileMapLayer
 			if (newStage != cluster.Stage)
 			{
 				cluster.Stage = newStage;
+				VisualVersion++;
 				ApplyStageTiles(cluster, newStage);
 			}
 		}
@@ -501,6 +515,7 @@ public partial class EnergyClusterLayer : TileMapLayer
 	// с поля.
 	private void RemoveCluster(ParticleCluster cluster)
 	{
+		VisualVersion++;
 		CellsVersion++; // исчерпание меняет набор клеток (Version не трогаем — это кандидаты захвата)
 		foreach (var cellKey in cluster.Cells)
 		{
@@ -523,6 +538,7 @@ public partial class EnergyClusterLayer : TileMapLayer
 	{
 		Version++;
 		CellsVersion++;
+		VisualVersion++;
 		var key = (row, col);
 		if (!_variantAt.Remove(key))
 		{
