@@ -43,6 +43,8 @@ public partial class StarLayer : Node2D
 	[Export] public bool UseShader = true;
 	// Цикл анимации в тиках симуляции (кратен 256): фаза = (тик mod LoopTicks) / LoopTicks.
 	[Export] public int LoopTicks = 512;
+	// Простой: тело дрейфует в IdleSlowdown раз медленнее работы (целое — цикл бесшовный), без короны.
+	[Export] public int IdleSlowdown = 4;
 	// Диаметр тела в клетках; квад с короной — CoronaScale диаметров тела.
 	[Export] public float BodyDiameterCells = 2.2f;
 	[Export] public float CoronaScale = 2f;
@@ -749,6 +751,9 @@ public partial class StarLayer : Node2D
 		long tick = _nucleusLayer.GlobalTick;
 		float phase = ((float)(tick % loop) + _nucleusLayer.SubTickFraction) / loop;
 		_shaderMaterial.SetShaderParameter("phase", phase);
+		long idleLoop = (long)loop * Mathf.Max(1, IdleSlowdown);
+		float idlePhase = ((float)(tick % idleLoop) + _nucleusLayer.SubTickFraction) / idleLoop;
+		_shaderMaterial.SetShaderParameter("idle_phase", idlePhase);
 		_shaderMaterial.SetShaderParameter("lod", zoom < StarLodZoom);
 
 		for (int i = 0; i < stars.Count; i++)

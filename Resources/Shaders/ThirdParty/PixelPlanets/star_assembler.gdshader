@@ -15,6 +15,7 @@ shader_type canvas_item;
 render_mode blend_mix;
 
 uniform float phase = 0.0;
+uniform float idle_phase = 0.0; // простой: тот же дрейф тела, цикл в IdleSlowdown раз длиннее
 uniform bool lod = false;
 uniform vec4 tones[20] : source_color; // 4 тира × тоны 0..4 (0 — самый тёмный)
 uniform float seeds[4];                 // сид на тир (как в PixelPlanets: sd % 1000 / 100)
@@ -114,7 +115,7 @@ void fragment() {
 	vec2 body = (ip - off) / bp;                    // = floor(UV_тела * bp) / bp, как в оригинале
 	bool working = v_state < 0.5;
 	bool idle = v_state > 0.5 && v_state < 1.5;
-	float t = working ? phase : 0.0;
+	float t = working ? phase : (idle ? idle_phase : 0.0);
 	float seed = seed_of_tier();
 
 	float bd = distance(body, vec2(0.5));
