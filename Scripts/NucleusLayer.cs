@@ -4608,7 +4608,7 @@ public partial class NucleusLayer : Node2D
 		var tool = new PlaceTool(tier, holeCount, _currentSpinDirection, !IsSpinnerTier(tier));
 		var atom = e == null
 			? default
-			: new PlaceCellAtom(true, e.CoreTier, HoleCountOf(e), e.Dir, e.Cross != null, e.IsCargo, !IsSpinnerTier(e.CoreTier));
+			: new PlaceCellAtom(true, e.CoreTier, HoleCountOf(e), e.Dir, e.Cross != null, e.IsCargo, IsNormalTier(e.CoreTier));
 		var cell = new PlaceCellFlags(
 			Open: IsCellOpen(row, col),
 			BlackHole: BlackHoles.TryGetAt(row, col, out _),
