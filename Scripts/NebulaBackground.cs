@@ -49,8 +49,9 @@ public partial class NebulaBackground : CanvasLayer
 	[Export] public float SoftNoise = 0.004f;
 	// Клетка дизеринга — пикселей экрана, одинакова при любом зуме.
 	[Export] public float DitherPixel = 3f;
-	// Ниже этого зума фон гаснет; полностью погашен при FadeZoom / FadeRatio.
-	[Export] public float FadeZoom = 0.1f;
+	// Ниже этого зума фон гаснет; полностью погашен при FadeZoom / FadeRatio
+	// (0,025 — вместе с сеткой чанков, GridDraw.GridHideZoom).
+	[Export] public float FadeZoom = 0.05f;
 	[Export] public float FadeRatio = 2f;
 	// Сколько ЧД светят (ближайшие к центру экрана), не больше 8.
 	[Export] public int MaxLights = 8;
