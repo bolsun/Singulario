@@ -1547,6 +1547,13 @@ public partial class NucleusLayer : Node2D
 		// T023/T024: частицы чанка берут из атласа кадр осколка или шар предмета (INSTANCE_CUSTOM.w).
 		_particleMaterial = (ShaderMaterial)_material.Duplicate();
 		_particleMaterial.SetShaderParameter("atlas_frames", (float)(_shardFrames + 1));
+		// T038: INSTANCE_CUSTOM.w = frame + 16·step + 64·shift — кадров атласа должно быть меньше 16.
+		if (_shardFrames + 1 >= 16) GD.PrintErr("NucleusLayer: кадров атласа частиц >= 16 — упаковка INSTANCE_CUSTOM.w (frame + 16·step + 64·shift) сломается.");
+		// Тон 0 для сдвига тона в перспективе — общий источник с месторождениями.
+		var tone0 = DepositLayer.DefaultTone0;
+		_particleMaterial.SetShaderParameter("tone0", new Vector3[] {
+			new(tone0[0].R, tone0[0].G, tone0[0].B), new(tone0[1].R, tone0[1].G, tone0[1].B), new(tone0[2].R, tone0[2].G, tone0[2].B) });
+		_particleMaterial.SetShaderParameter("tier_count", (float)_tierCount);
 
 		_coreQuad = new QuadMesh { Size = new Vector2(SpriteSize, SpriteSize) };
 		_holeQuad = new QuadMesh { Size = new Vector2(HoleSpriteSize, HoleSpriteSize) };
@@ -4451,7 +4458,7 @@ public partial class NucleusLayer : Node2D
 	// выходу, только пока выход пуст, в половину периода перед переворотом своей оси:
 	// start = max(начало половины, тик входа, тик освобождения выхода), конец — тик переворота.
 	// Выход внутри половины только освобождается, поэтому частица не едет назад и не прыгает.
-	// Размер постоянный, без затемнения. Только вид — в хеш и сохранение не входит.
+	// T038: к центру уменьшается и темнеет (HoleDepthStep), под телом не рисуется. Только вид — в хеш и сохранение не входит.
 	private void UpdateCrossroadVisuals(NucleusEntity n, Vector2 center, float[] holeBuf, float[] particleBuf)
 	{
 		for (int k = 0; k < 8; k++)
@@ -4483,9 +4490,30 @@ public partial class NucleusLayer : Node2D
 					u = Mathf.Clamp((float)(_globalTick - start + _subTickFraction) / (flipTick - start), 0f, 1f);
 			}
 			int po = (n.LocalIndex * 8 + side) * ParticleStride;
-			PutTransform(particleBuf, po, center + SideDir(side) * (_orbitRadius * (1f - 2f * u)), 1f);
-			PutCustom(particleBuf, po + 8, (cp.ColorTier + 0.5f) / _tierCount, 0f, 0f, ParticleFrame(cp.IsItem, cp.Variant));
+			float along = _orbitRadius * (1f - 2f * u);
+			var depth = HoleDepthStep(Mathf.Abs(along), CellSize, HoleDepthFull, HoleDepthHalf, HoleDepthHide);
+			if (depth == null) continue; // под телом атома — не рисуется (трансформ уже скрыт выше)
+			var (step, shift) = depth.Value;
+			PutTransform(particleBuf, po, center + SideDir(side) * along, 1f / (1 << step));
+			PutCustom(particleBuf, po + 8, (cp.ColorTier + 0.5f) / _tierCount, 0f, 0f,
+				ParticleFrame(cp.IsItem, cp.Variant) + 16 * step + 64 * shift);
 		}
+	}
+
+	// T038: перспектива объекта в пути (px при клетке 96, масштабируются на CellSize / 96).
+	// d — расстояние от центра атома; граница включительно сверху: d = 34 → ступень 0.
+	[Export] public float HoleDepthFull = 34f;  // d >= — ×1, как есть
+	[Export] public float HoleDepthHalf = 28f;  // d >= — ×½, на тон темнее
+	[Export] public float HoleDepthHide = 19f;  // d >= — ×¼, на 2 тона темнее; меньше — не рисуется
+
+	// Ступень (блок 2^step) и сдвиг тона по расстоянию; null — не рисовать.
+	public static (int step, int shift)? HoleDepthStep(float d, float cell, float full, float half, float hide)
+	{
+		float k = cell / 96f;
+		if (d >= full * k) return (0, 0);
+		if (d >= half * k) return (1, 1);
+		if (d >= hide * k) return (2, 2);
+		return null;
 	}
 
 	// Единичный вектор стороны: 0 N, 1 E, 2 S, 3 W.

@@ -1,8 +1,9 @@
 using Godot;
 
-// Вид перекрёстка (T010, T029, T032, T033): атом «орбитами ребром». Здесь — шевроны на обоих
+// Вид перекрёстка (T010, T029, T032, T033, T037): атом «орбитами ребром». Здесь — шевроны на обоих
 // выходах (всегда; выходы постоянные, маска Crossroad.OutputMask): между телом и дыркой, цвет — тир
 // атома (тон 3), при заторе (выход забит не меньше периода P) пульсируют красным, как у звезды.
+// На двух входах — серые шевроны остриём внутрь (InputChevronColor, без тира и пульса).
 // Дырки на всех 4 портах и частицы пишет NucleusLayer (UpdateCrossroadVisuals). Дорожки нет.
 // Только отрисовка.
 // Узел создаёт NucleusLayer в _Ready.
@@ -13,6 +14,8 @@ public partial class CrossroadLayer : Node2D
 	{
 		new Color("ffc93c"), new Color("ff6e5e"), new Color("69b8ff"), new Color("cfcde0"),
 	};
+	// Цвет шеврона входа (остриём к телу): тон дырки; запасной, если не читается, — 4d4268.
+	[Export] public Color InputChevronColor = new Color("372d4d");
 	[Export] public float ChevronLineWidth = 2f;
 	[Export] public float ChevronHeight = 8f;
 	[Export] public float ChevronHalfWidth = 8f;
@@ -58,10 +61,17 @@ public partial class CrossroadLayer : Node2D
 				var dir = NucleusLayer.SideDir(side);
 				DrawChevron(center + dir * at, dir, (blockedMask & (1 << side)) != 0 ? pulse : tierColor);
 			}
+			int inputMask = ~exitMask & 0xF;
+			for (int side = 0; side < 4; side++)
+			{
+				if ((inputMask & (1 << side)) == 0) continue;
+				var dir = NucleusLayer.SideDir(side);
+				DrawChevron(center + dir * at, -dir, InputChevronColor);
+			}
 		}
 	}
 
-	// Ломаная из 3 точек, остриём наружу (как StarLayer.DrawOutputChevron).
+	// Ломаная из 3 точек, остриём по dir (как StarLayer.DrawOutputChevron).
 	private void DrawChevron(Vector2 at, Vector2 dir, Color color)
 	{
 		var perp = new Vector2(-dir.Y, dir.X);

@@ -53,7 +53,9 @@ public partial class DepositLayer : Node2D
 	// Все частицы месторождения на столько тонов темнее атомов (глубина — ещё на тон); контур и тон 1 не трогаются.
 	[Export(PropertyHint.Range, "0,2,1")] public int ToneShift = 1;
 	// Тон 0 тиров Ж/К/С (Singulario 32) — его нет в таблицах атомов, нужен для сдвига.
-	[Export] public Color[] Tone0 = { new("#5e2a1e"), new("#4a1030"), new("#1a1f5c") };
+	// Общий источник: тот же тон 0 берёт NucleusLayer для перспективы объектов в дырках (T038).
+	public static readonly Color[] DefaultTone0 = { new("#5e2a1e"), new("#4a1030"), new("#1a1f5c") };
+	[Export] public Color[] Tone0 = (Color[])DefaultTone0.Clone();
 
 	// Новый вид включён (F7). Старт — новый.
 	public bool NewLook { get; private set; } = true;

@@ -26,15 +26,26 @@ varying float v_dim;
 // T007/T023/T024: при atlas_frames > 0 текстура — атлас из atlas_frames кадров в ряд (осколки, последним —
 // шар атома-предмета), INSTANCE_CUSTOM.w — номер кадра. 0 (по умолчанию) — вся текстура (тела, дырки, точки).
 varying float v_frame;
+// T038: перспектива объектов в дырках. INSTANCE_CUSTOM.w = frame + 16·step + 64·shift: step 0/1/2 — блок
+// 1/2/4 (квад уже уменьшен на CPU), shift 0..3 — на сколько тонов темнее (сдвиг тона, как Dark у месторождений).
+varying float v_step;
+varying float v_shift;
 uniform float atlas_frames = 0.0;
 // T015: общая проявленность (материал точек дальнего зума гасит их к туманностям).
 uniform float fade = 1.0;
+// T038: тон 0 тиров Ж/К/С (общий с DepositLayer.DefaultTone0) и число строк палитры (тир = строка).
+uniform vec3 tone0[3];
+uniform float tier_count = 6.0;
 
 void vertex() {
 	v_palette_row = INSTANCE_CUSTOM.x;
 	v_glow = INSTANCE_CUSTOM.y;
 	v_dim = INSTANCE_CUSTOM.z;
-	v_frame = INSTANCE_CUSTOM.w;
+	// +0.5 и floor — против погрешности float при разборе упаковки.
+	float packed = floor(INSTANCE_CUSTOM.w + 0.5);
+	v_frame = mod(packed, 16.0);
+	v_step = mod(floor(packed / 16.0), 4.0);
+	v_shift = floor(packed / 64.0);
 }
 
 void fragment() {
@@ -44,10 +55,47 @@ void fragment() {
 	// отрисован перевёрнутым по вертикали.
 	vec2 uv = vec2(UV.x, 1.0 - UV.y);
 
-	if (atlas_frames > 0.5) uv.x = (clamp(uv.x, 0.0, 0.999) + floor(v_frame + 0.5)) / atlas_frames;
-	vec4 src = texture(TEXTURE, uv);
-	float idx = src.r; // 0..1 — квантованный маркер уровня из index-спрайта
-	vec3 final_color = texture(palette_tex, vec2(idx, v_palette_row)).rgb;
+	vec4 src;
+	float idx;
+	vec3 final_color;
+	if (atlas_frames > 0.5) {
+		float frame = floor(v_frame + 0.5);
+		if (v_step < 0.5 && v_shift < 0.5) {
+			uv.x = (clamp(uv.x, 0.0, 0.999) + frame) / atlas_frames;
+			src = texture(TEXTURE, uv);
+		} else {
+			// T038: выходной тексель сетки side/B смотрит блок B×B кадра; берём самый тёмный непрозрачный пиксель.
+			ivec2 tsz = textureSize(TEXTURE, 0);
+			int side = tsz.y;
+			int B = v_step < 0.5 ? 1 : (v_step < 1.5 ? 2 : 4);
+			int cells = side / B;
+			ivec2 p = ivec2(floor(clamp(uv, vec2(0.0), vec2(0.999)) * float(cells)));
+			src = vec4(0.0);
+			float best = 2.0;
+			for (int j = 0; j < B; j++) {
+				for (int i = 0; i < B; i++) {
+					vec4 t = texelFetch(TEXTURE, ivec2(int(frame) * side + p.x * B + i, p.y * B + j), 0);
+					if (t.a > 0.5 && t.r < best) { best = t.r; src = t; }
+				}
+			}
+		}
+	} else {
+		src = texture(TEXTURE, uv);
+	}
+	idx = src.r; // 0..1 — квантованный маркер уровня из index-спрайта
+	if (v_shift < 0.5) {
+		final_color = texture(palette_tex, vec2(idx, v_palette_row)).rgb;
+	} else {
+		// Палитра — 5 колонок: 0 — обводка, 1..4 — тоны; уровень L берёт колонку L. Тон L − shift;
+		// ниже тона 1 — тон 0 тира Ж/К/С, у остальных строк — не темнее тона 1. Обводка не трогается.
+		float level = floor(idx * 4.0 + 0.5);
+		float t = level - floor(v_shift + 0.5);
+		int row = int(floor(v_palette_row * tier_count));
+		if (level < 0.5) final_color = texture(palette_tex, vec2(0.1, v_palette_row)).rgb;
+		else if (t >= 0.5) final_color = texture(palette_tex, vec2((t + 0.5) / 5.0, v_palette_row)).rgb;
+		else if (row >= 0 && row < 3) final_color = tone0[row];
+		else final_color = texture(palette_tex, vec2(1.5 / 5.0, v_palette_row)).rgb;
+	}
 	// Свечение (T006c): ярче с сохранением оттенка — умножение, но не выше
 	// 1 / max(r,g,b), чтобы ни один канал не упёрся в 1 и цвет не выцвел.
 	float peak = max(max(final_color.r, final_color.g), max(final_color.b, 0.001));

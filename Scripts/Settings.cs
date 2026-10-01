@@ -1,7 +1,8 @@
 using Godot;
 
 // Настройки игры (T013): язык, полный экран, громкости (заглушки — звука пока
-// нет, значение только хранится), интервал автосохранения, прогиб сетки (T019, Shift+G). Файл — SettingsPath,
+// нет, значение только хранится), интервал автосохранения, прогиб сетки (T019, Shift+G),
+// вид фона F4/F5/L (T036). Файл — SettingsPath,
 // отдельно от сохранения игры. Load + Apply — при запуске (Main), Save — при
 // каждом изменении в меню (GameMenu).
 public static class Settings
@@ -20,6 +21,10 @@ public static class Settings
 	public static double MusicVolume = 100;
 	public static int AutosaveMinutes = 5;
 	public static bool GridWarp = true; // T019: прогиб сетки под ЧД и звёздами (Shift+G)
+	// T036: вид фона — F5 мягкий свет, L свечение, F4 вариант (по имени; пусто/неизвестно — первый).
+	public static bool SoftLight;
+	public static bool Glow = true;
+	public static string NebulaVariant = "";
 
 	public static void Load()
 	{
@@ -33,6 +38,9 @@ public static class Settings
 		int minutes = (int)cfg.GetValue(Section, "autosave_minutes", AutosaveMinutes);
 		if (System.Array.IndexOf(AutosaveMinuteOptions, minutes) >= 0) AutosaveMinutes = minutes;
 		GridWarp = (bool)cfg.GetValue(Section, "grid_warp", GridWarp);
+		SoftLight = (bool)cfg.GetValue(Section, "soft_light", SoftLight);
+		Glow = (bool)cfg.GetValue(Section, "glow", Glow);
+		NebulaVariant = (string)cfg.GetValue(Section, "nebula_variant", NebulaVariant);
 	}
 
 	public static void Save()
@@ -44,6 +52,9 @@ public static class Settings
 		cfg.SetValue(Section, "music_volume", MusicVolume);
 		cfg.SetValue(Section, "autosave_minutes", AutosaveMinutes);
 		cfg.SetValue(Section, "grid_warp", GridWarp);
+		cfg.SetValue(Section, "soft_light", SoftLight);
+		cfg.SetValue(Section, "glow", Glow);
+		cfg.SetValue(Section, "nebula_variant", NebulaVariant);
 		var err = cfg.Save(SettingsPath);
 		if (err != Error.Ok) GD.PrintErr($"[Settings] не удалось сохранить {SettingsPath}: {err}");
 	}
