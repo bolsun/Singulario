@@ -434,10 +434,14 @@ public partial class NucleusLayer : Node2D
 	// (CrossroadLayer), на симуляцию порядок набора не влияет.
 	private readonly HashSet<NucleusEntity> _crossSet = new();
 	public int CrossroadCount => _crossSet.Count;
-	public IEnumerable<(Vector2 center, int tier)> Crossroads()
+	public IEnumerable<(Vector2 center, int exitMask)> Crossroads()
 	{
-		foreach (var n in _crossSet) yield return (EffectiveCenter(n), n.CoreTier);
+		foreach (var n in _crossSet) yield return (EffectiveCenter(n), n.Cross.ExitMask);
 	}
+
+	// Радиус видимого тела атома в пикселях мира (спрайт ядра 1:1) — от него дорожка перекрёстка (T029).
+	public float BodyRadius => SpriteSize * 0.5f;
+	public float HoleRadius => HoleSpriteSize * 5f / 16f; // кольцо дырки d10 на холсте 16
 
 	public int ChunkOf(int cell) => Mathf.FloorToInt((float)cell / ChunkSize);
 	public bool IsChunkOpen(int cx, int cy) => Inventory.Sandbox || Territory.IsOpen(cx, cy);
