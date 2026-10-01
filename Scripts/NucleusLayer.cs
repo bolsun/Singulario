@@ -4491,6 +4491,14 @@ public partial class NucleusLayer : Node2D
 			}
 			int po = (n.LocalIndex * 8 + side) * ParticleStride;
 			float along = _orbitRadius * (1f - 2f * u);
+			if (CrossroadOverBody)
+			{
+				// Проба: частица летит НАД телом, к центру растёт (ближе к зрителю), ступеней и затемнения нет.
+				float lift = 1f + (CrossroadLiftScale - 1f) * (1f - Mathf.Abs(along) / _orbitRadius);
+				PutTransform(particleBuf, po, center + SideDir(side) * along, lift);
+				PutCustom(particleBuf, po + 8, (cp.ColorTier + 0.5f) / _tierCount, 0f, 0f, ParticleFrame(cp.IsItem, cp.Variant));
+				continue;
+			}
 			var depth = HoleDepthStep(Mathf.Abs(along), CellSize, HoleDepthFull, HoleDepthHalf, HoleDepthHide);
 			if (depth == null) continue; // под телом атома — не рисуется (трансформ уже скрыт выше)
 			var (step, shift) = depth.Value;
@@ -4502,6 +4510,9 @@ public partial class NucleusLayer : Node2D
 
 	// T038: перспектива объекта в пути (px при клетке 96, масштабируются на CellSize / 96).
 	// d — расстояние от центра атома; граница включительно сверху: d = 34 → ступень 0.
+	// Проба художника (2026-10-02): объект в пути над телом перекрёстка вместо «под телом» (T038 при false).
+	[Export] public bool CrossroadOverBody = true;
+	[Export] public float CrossroadLiftScale = 2f; // масштаб над центром; у дырки ×1
 	[Export] public float HoleDepthFull = 34f;  // d >= — ×1, как есть
 	[Export] public float HoleDepthHalf = 28f;  // d >= — ×½, на тон темнее
 	[Export] public float HoleDepthHide = 19f;  // d >= — ×¼, на 2 тона темнее; меньше — не рисуется
