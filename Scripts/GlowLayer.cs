@@ -49,7 +49,7 @@ public partial class GlowLayer : Node
 		new("1a1f5c"), new("26479e"), new("3a7fe0"),
 		new("6e6a88"), new("9d9ab3"), new("cfcde0"),
 	};
-	[Export] public Color[] BlackHoleTones = { new("5e2a1e"), new("a8501c"), new("e8911f") };
+	[Export] public Color[] BlackHoleTones = { new("372d4d"), new("8a2d9e"), new("ff7ae0") };
 	[Export] public Color[] SingularityTones = { new("8a2d9e"), new("ff7ae0"), new("ffffff") };
 
 	public bool Enabled = true;
