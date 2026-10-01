@@ -26,7 +26,9 @@ public sealed class DepositLayout
 		public float X, Y;
 		public float Angle, Dist;
 		public float Dx, Dy, Bend;
-		public int SizeClass;       // 0 — 16 px, 1 — 8 px, 2 — 4 px
+		public int SizeClass;       // 0 — 16 px, 1 — 8 px, 2 — 4 px, 3 — 2 px
+		public int Variant;         // кадр в полосе своего размера (T024), 0..Frames[SizeClass]−1
+		public bool Dark;           // глубина (T024): на тон темнее
 		public float Phase;         // 0..1
 		public int PeriodK;         // период = 256 · PeriodK тиков
 	}
@@ -44,8 +46,16 @@ public sealed class DepositLayout
 	public float CoreDistScale = 0.55f;   // √r · scale — почти равномерно по кругу клетки
 	public int BridgeCount = 5;           // частиц на пару
 	public float BridgeBend = 0.12f;
-	public float ShareLarge = 0.15f;      // доли размеров 16 / 8 / 4 px
-	public float ShareMedium = 0.35f;
+	// Доли размеров у ядра 16 / 8 / 4 px, остаток — 2 px (T024).
+	public float ShareLarge = 0.10f;
+	public float ShareMedium = 0.25f;
+	public float ShareSmall = 0.40f;
+	// Мостик тоньше ядра: без 16 px — 8 / 4 px, остаток — 2 px.
+	public float BridgeShareMedium = 0.35f;
+	public float BridgeShareSmall = 0.40f;
+	public float DarkShare = 0.3f;        // доля частиц на тон темнее (глубина)
+	// Кадров в полосе каждого размера (16/8/4/2 px); задаёт DepositLayer по картинкам.
+	public int[] Frames = { 3, 3, 3, 1 };
 	public int CorePeriodMin = 2, CorePeriodMax = 4;       // × 256 тиков
 	public int BridgePeriodMin = 4, BridgePeriodMax = 8;
 
@@ -73,12 +83,15 @@ public sealed class DepositLayout
 				float angle = U(ref h) * MathF.Tau;
 				float dist = MathF.Sqrt(U(ref h)) * CoreDistScale;
 				float size = U(ref h), phase = U(ref h), period = U(ref h), rnd = U(ref h);
+				// T024: новые вызовы — после прежних, чтобы раскладка остального не сдвинулась.
+				float variant = U(ref h), dark = U(ref h);
 				float priority = 0.65f * (dist / MaxDist) + 0.35f * rnd;
 				if (priority >= threshold) continue;
+				int sizeClass = SizeClassOf(size);
 				particles.Add(new Particle
 				{
 					Kind = 0, X = cx, Y = cy, Angle = angle, Dist = dist, Phase = phase,
-					SizeClass = SizeClassOf(size),
+					SizeClass = sizeClass, Variant = VariantOf(variant, sizeClass), Dark = dark < DarkShare,
 					PeriodK = PeriodOf(period, CorePeriodMin, CorePeriodMax),
 				});
 			}
@@ -94,13 +107,15 @@ public sealed class DepositLayout
 				{
 					ulong h = Mix(pairHash + (ulong)(i + 1) * 0x9E3779B97F4A7C15UL);
 					float size = U(ref h), phase = U(ref h), period = U(ref h), rnd = U(ref h), bend = U(ref h);
+					float variant = U(ref h), dark = U(ref h);
 					float priority = 0.3f + 0.6f * rnd;
 					if (priority >= threshold) continue;
+					int sizeClass = size < BridgeShareMedium ? 1 : size < BridgeShareMedium + BridgeShareSmall ? 2 : 3;
 					particles.Add(new Particle
 					{
 						Kind = 1, X = cx, Y = cy, Dx = bx - cx, Dy = by - cy,
 						Bend = (bend * 2f - 1f) * BridgeBend, Phase = phase,
-						SizeClass = size < 0.5f ? 1 : 2,
+						SizeClass = sizeClass, Variant = VariantOf(variant, sizeClass), Dark = dark < DarkShare,
 						PeriodK = PeriodOf(period, BridgePeriodMin, BridgePeriodMax),
 					});
 				}
@@ -125,7 +140,14 @@ public sealed class DepositLayout
 		return (col + 0.5f + ox, row + 0.5f + oy);
 	}
 
-	private int SizeClassOf(float u) => u < ShareLarge ? 0 : u < ShareLarge + ShareMedium ? 1 : 2;
+	private int SizeClassOf(float u) =>
+		u < ShareLarge ? 0 : u < ShareLarge + ShareMedium ? 1 : u < ShareLarge + ShareMedium + ShareSmall ? 2 : 3;
+
+	private int VariantOf(float u, int sizeClass)
+	{
+		int frames = Math.Max(1, Frames[sizeClass]);
+		return Math.Min(frames - 1, (int)(u * frames));
+	}
 
 	private static int PeriodOf(float u, int min, int max) => Math.Min(max, min + (int)(u * (max - min + 1)));
 
