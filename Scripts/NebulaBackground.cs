@@ -87,8 +87,11 @@ public partial class NebulaBackground : CanvasLayer
 		};
 		_rect.SetAnchorsPreset(Control.LayoutPreset.FullRect);
 		AddChild(_rect);
+		// Вид фона из настроек (T036); Settings.Load уже вызван в Main._Ready.
+		SoftLight = Settings.SoftLight;
+		_variant = System.Math.Max(0, System.Array.FindIndex(Variants, v => v.name == Settings.NebulaVariant));
 		// Буфер свечения (T020) — финальный проход в шейдере фона.
-		_glow = new GlowLayer { Name = "GlowLayer" };
+		_glow = new GlowLayer { Name = "GlowLayer", Enabled = Settings.Glow };
 		AddChild(_glow);
 
 		// Надпись варианта — свой слой поверх поля и HUD, под меню (CanvasLayer 100).
@@ -121,16 +124,22 @@ public partial class NebulaBackground : CanvasLayer
 		{
 			_variant = (_variant + 1) % Variants.Length;
 			ApplyVariant();
+			Settings.NebulaVariant = Variants[_variant].name;
+			Settings.Save();
 			ShowLabel(string.Format(Tr("Фон: {0}"), Tr(Variants[_variant].name)));
 		}
 		else if (key.Keycode == Key.F5)
 		{
 			SoftLight = !SoftLight;
+			Settings.SoftLight = SoftLight;
+			Settings.Save();
 			ShowLabel(string.Format(Tr("Свет: {0}"), Tr(SoftLight ? "Мягкий свет" : "Дизеринг")));
 		}
 		else if (key.Keycode == Key.L)
 		{
 			_glow.Enabled = !_glow.Enabled;
+			Settings.Glow = _glow.Enabled;
+			Settings.Save();
 			ShowLabel(string.Format(Tr("Свечение: {0}"), Tr(_glow.Enabled ? "Вкл" : "Выкл")));
 		}
 		else return;
