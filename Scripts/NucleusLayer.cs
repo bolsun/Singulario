@@ -706,7 +706,15 @@ public partial class NucleusLayer : Node2D
 		// атом-переносчик тира ColorTier. Едет по линии по тем же правилам, что
 		// частица (материал на перенос не влияет). Значим, только если !IsHole.
 		public bool IsItem;
+		// T024: только вид — форма осколка (сырой байт хеша; кадр = Variant % кадров атласа).
+		// Задаётся при рождении частицы и копируется при передаче; на законы не влияет,
+		// в StateHash не входит, не сохраняется.
+		public byte Variant;
 	}
+
+	// T024: вариант частицы — детерминированный целочисленный хеш (SplitMix64), без Random.
+	private static byte ParticleVariant(long a, long b, long c) =>
+		(byte)(Rng.Mix(Rng.Mix(((ulong)(uint)a << 32) | (uint)b) ^ (ulong)c) >> 56);
 
 	private class NucleusEntity
 	{
@@ -2635,7 +2643,8 @@ public partial class NucleusLayer : Node2D
 				long got = layer.ConsumeAt(srcRow, srcCol, EnergyCaptureAmount);
 				if (got <= 0) continue;
 
-				n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = layer.Tier, Locked = true };
+				n.Ring[p] = new RingSlot { Exists = true, IsHole = false, ColorTier = layer.Tier, Locked = true,
+					Variant = ParticleVariant(srcRow, srcCol, _globalTick) };
 				Touch(n);
 				Claim(n, p);
 				n.NextCaptureTick = _globalTick + _energyCaptureTicks;
@@ -3828,7 +3837,7 @@ public partial class NucleusLayer : Node2D
 		if (n.Cross != null)
 		{
 			bool ready = n.Cross.TryPeekExit(k / 2, out var cp);
-			content = ready ? new RingSlot { Exists = true, IsHole = false, ColorTier = cp.ColorTier, IsItem = cp.IsItem } : default;
+			content = ready ? new RingSlot { Exists = true, IsHole = false, ColorTier = cp.ColorTier, IsItem = cp.IsItem, Variant = cp.Variant } : default;
 			return ready;
 		}
 		content = n.Ring[PhysicalSlotForCompass(n, k)];
@@ -3856,9 +3865,9 @@ public partial class NucleusLayer : Node2D
 	private void PutReceived(NucleusEntity n, int k, RingSlot content)
 	{
 		Touch(n);
-		if (n.Cross != null) { n.Cross.Enter(k / 2, content.ColorTier, content.IsItem); return; }
+		if (n.Cross != null) { n.Cross.Enter(k / 2, content.ColorTier, content.IsItem, content.Variant); return; }
 		n.Ring[PhysicalSlotForCompass(n, k)] = new RingSlot
-			{ Exists = true, IsHole = false, ColorTier = content.ColorTier, Locked = true, IsItem = content.IsItem };
+			{ Exists = true, IsHole = false, ColorTier = content.ColorTier, Locked = true, IsItem = content.IsItem, Variant = content.Variant };
 	}
 
 	// requireMatchingSpin=true — раньше не блокировало ничего (все ядра
@@ -4173,7 +4182,8 @@ public partial class NucleusLayer : Node2D
 					for (int k = 0; k < 8; k++)
 					{
 						bool isParticle = _rng.Randf() < ParticleFillChance;
-						ring[k] = new RingSlot { Exists = true, IsHole = !isParticle, ColorTier = particleTier, Locked = false };
+						ring[k] = new RingSlot { Exists = true, IsHole = !isParticle, ColorTier = particleTier, Locked = false,
+							Variant = ParticleVariant(worldRow, worldCol, k) };
 					}
 
 					var nucleus = new NucleusEntity
@@ -5374,7 +5384,7 @@ public partial class NucleusLayer : Node2D
 				var n = _entAt[(row, col)];
 				for (int k = 0; k < 8; k++)
 					if (rng.Randf() < ParticleFillChance)
-						n.Ring[k] = new RingSlot { Exists = true, IsHole = false, ColorTier = tier };
+						n.Ring[k] = new RingSlot { Exists = true, IsHole = false, ColorTier = tier, Variant = ParticleVariant(row, col, k) };
 				Touch(n);
 			}
 	}
@@ -5435,7 +5445,7 @@ public partial class NucleusLayer : Node2D
 				{
 					if (!n.Ring[k].Exists || rng.Randf() >= 0.5f) continue;
 					int color = tier == GrayCoreTier ? rng.RandiRange(0, 2) : tier;
-					n.Ring[k] = new RingSlot { Exists = true, IsHole = false, ColorTier = color };
+					n.Ring[k] = new RingSlot { Exists = true, IsHole = false, ColorTier = color, Variant = ParticleVariant(row, col, k) };
 				}
 				Touch(n);
 			next:;
@@ -5467,6 +5477,8 @@ public partial class NucleusLayer : Node2D
 			if (n.IsFlying) { Mix(n.FlightDir); Mix(n.FlightCellsRemaining); }
 			Mix(n.PendingFlightDir ?? -1);
 			Mix(n.NextCaptureTick); Mix(n.AsleepUntilTick);
+			// RingSlot.Variant / CrossParticle.Variant (T024) — только вид, в хеш не входят:
+			// хеш = законы, selfcheck до и после правок вида обязан совпадать.
 			foreach (var slot in n.Ring)
 				Mix((slot.Exists ? 1 : 0) | (slot.IsHole ? 2 : 0) | (slot.Locked ? 4 : 0) | (slot.IsItem ? 8 : 0) | (slot.ColorTier << 4));
 			if (n.Cross != null)
