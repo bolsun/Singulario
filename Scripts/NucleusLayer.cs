@@ -4112,6 +4112,20 @@ public partial class NucleusLayer : Node2D
 		n.Ring[PhysicalSlotForCompass(n, k)] = new RingSlot { Exists = true, IsHole = true };
 	}
 
+	// Очистка C (T035): все частицы и предметы кольца — в пустые дырки, блокировка
+	// «принято до поворота» снимается вместе с содержимым. true — было что очищать.
+	private static bool ClearRing(RingSlot[] ring)
+	{
+		bool had = false;
+		for (int i = 0; i < ring.Length; i++)
+			if (ring[i].Exists && !ring[i].IsHole)
+			{
+				ring[i] = new RingSlot { Exists = true, IsHole = true };
+				had = true;
+			}
+		return had;
+	}
+
 	// Положить принятое через сторону k (после CanReceive); частица блокируется
 	// до поворота, у перекрёстка — занимает вход до ближайшего переворота оси.
 	private void PutReceived(NucleusEntity n, int k, RingSlot content)

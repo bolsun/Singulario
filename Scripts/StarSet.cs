@@ -63,6 +63,16 @@ public sealed class Star
 		return burned;
 	}
 
+	// Очистка C (T035): входной буфер и текущая работа сгорают; выходной буфер,
+	// рецепт и сторона выхода остаются. Атомы буфера вызывающий забирает до вызова.
+	// true — было что очищать.
+	public bool ClearInput()
+	{
+		bool had = Producing || HasBuffered;
+		Burn();
+		return had;
+	}
+
 	private void Burn()
 	{
 		Array.Clear(Buffer);
