@@ -12,6 +12,9 @@ using System.Collections.Generic;
 public partial class NucleusSpawnPanel : Control
 {
 	private const int ButtonSize = 64;
+	// Строки вращателей и бросателей (заморожены, на поле не ставятся). Не const —
+	// чтобы недостижимый код не давал предупреждения.
+	private static readonly bool ShowFrozenSpinners = false;
 
 	private NucleusLayer _nucleusLayer;
 	private EnergyLayer _energyLayer;
@@ -204,50 +207,55 @@ public partial class NucleusSpawnPanel : Control
 			grid.AddChild(button);
 		}
 
-		// Ещё одна строка — экспериментальный "поворачиватель" (клеточный
-		// автомат, см. NucleusLayer.RotatorCoreTier/TriggerRotatorRotation):
-		// тоже просто ещё один тир со своей палитрой (palette_green.png), цвет
-		// подписи сэмплируется точно так же, как у остальных.
-		int rotatorTier = _nucleusLayer?.RotatorCoreTier ?? 4;
-		Color rotatorColor = (rotatorTier >= 0 && rotatorTier < _tierColors.Length) ? _tierColors[rotatorTier] : Colors.White;
-		foreach (int holeCount in HoleCounts)
+		// Вращатели и бросатели заморожены (CLAUDE.md, GDD «Заморожено») и на поле
+		// не ставятся: их строк на панели нет. Код кнопок — под ShowFrozenSpinners.
+		if (ShowFrozenSpinners)
 		{
-			var button = new Button
+			// Ещё одна строка — экспериментальный "поворачиватель" (клеточный
+			// автомат, см. NucleusLayer.RotatorCoreTier/TriggerRotatorRotation):
+			// тоже просто ещё один тир со своей палитрой (palette_green.png), цвет
+			// подписи сэмплируется точно так же, как у остальных.
+			int rotatorTier = _nucleusLayer?.RotatorCoreTier ?? 4;
+			Color rotatorColor = (rotatorTier >= 0 && rotatorTier < _tierColors.Length) ? _tierColors[rotatorTier] : Colors.White;
+			foreach (int holeCount in HoleCounts)
 			{
-				CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
-			};
-			int textHoles = holeCount;
-			SetText(button, () => Tr("Пов") + textHoles);
-			button.AddThemeColorOverride("font_color", rotatorColor);
-			button.AddThemeColorOverride("font_hover_color", rotatorColor);
-			button.AddThemeColorOverride("font_pressed_color", rotatorColor);
-			button.AddThemeColorOverride("font_focus_color", rotatorColor);
-			int capturedHoles = holeCount;
-			button.Pressed += () => OnRotatorSpawnPressed(capturedHoles);
-			grid.AddChild(button);
-		}
+				var button = new Button
+				{
+					CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
+				};
+				int textHoles = holeCount;
+				SetText(button, () => Tr("Пов") + textHoles);
+				button.AddThemeColorOverride("font_color", rotatorColor);
+				button.AddThemeColorOverride("font_hover_color", rotatorColor);
+				button.AddThemeColorOverride("font_pressed_color", rotatorColor);
+				button.AddThemeColorOverride("font_focus_color", rotatorColor);
+				int capturedHoles = holeCount;
+				button.Pressed += () => OnRotatorSpawnPressed(capturedHoles);
+				grid.AddChild(button);
+			}
 
-		// Ещё одна строка — экспериментальный "бросатель" (см.
-		// NucleusLayer.ThrowerCoreTier/EvaluateFlightStep): тоже просто ещё
-		// один тир со своей палитрой (palette_violet.png), цвет подписи
-		// сэмплируется точно так же, как у остальных.
-		int throwerTier = _nucleusLayer?.ThrowerCoreTier ?? 5;
-		Color throwerColor = (throwerTier >= 0 && throwerTier < _tierColors.Length) ? _tierColors[throwerTier] : Colors.White;
-		foreach (int holeCount in HoleCounts)
-		{
-			var button = new Button
+			// Ещё одна строка — экспериментальный "бросатель" (см.
+			// NucleusLayer.ThrowerCoreTier/EvaluateFlightStep): тоже просто ещё
+			// один тир со своей палитрой (palette_violet.png), цвет подписи
+			// сэмплируется точно так же, как у остальных.
+			int throwerTier = _nucleusLayer?.ThrowerCoreTier ?? 5;
+			Color throwerColor = (throwerTier >= 0 && throwerTier < _tierColors.Length) ? _tierColors[throwerTier] : Colors.White;
+			foreach (int holeCount in HoleCounts)
 			{
-				CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
-			};
-			int textHoles = holeCount;
-			SetText(button, () => Tr("Бр") + textHoles);
-			button.AddThemeColorOverride("font_color", throwerColor);
-			button.AddThemeColorOverride("font_hover_color", throwerColor);
-			button.AddThemeColorOverride("font_pressed_color", throwerColor);
-			button.AddThemeColorOverride("font_focus_color", throwerColor);
-			int capturedHoles = holeCount;
-			button.Pressed += () => OnThrowerSpawnPressed(capturedHoles);
-			grid.AddChild(button);
+				var button = new Button
+				{
+					CustomMinimumSize = new Vector2(ButtonSize, ButtonSize)
+				};
+				int textHoles = holeCount;
+				SetText(button, () => Tr("Бр") + textHoles);
+				button.AddThemeColorOverride("font_color", throwerColor);
+				button.AddThemeColorOverride("font_hover_color", throwerColor);
+				button.AddThemeColorOverride("font_pressed_color", throwerColor);
+				button.AddThemeColorOverride("font_focus_color", throwerColor);
+				int capturedHoles = holeCount;
+				button.Pressed += () => OnThrowerSpawnPressed(capturedHoles);
+				grid.AddChild(button);
+			}
 		}
 
 		// 4-я строка — кнопки выбора типа энергии (С/К/Ж). Пресетов "количество

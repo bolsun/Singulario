@@ -5689,12 +5689,12 @@ public partial class NucleusLayer : Node2D
 					if (layer.HasClusterAt(row, col)) goto next;
 
 				float r = rng.Randf();
-				int tier = r < 0.24f ? 0 : r < 0.48f ? 1 : r < 0.72f ? 2 : r < 0.88f ? GrayCoreTier : r < 0.94f ? RotatorCoreTier : ThrowerCoreTier;
+				// Вращатели и бросатели заморожены — на поле проверки их нет.
+				int tier = r < 0.24f ? 0 : r < 0.48f ? 1 : r < 0.72f ? 2 : GrayCoreTier;
 				int holes = holeCounts[rng.RandiRange(0, 2)];
 				int dir = rng.Randf() < 0.5f ? 1 : -1;
 				if (!PlaceNucleusForImport(row, col, tier, dir, holes)) continue;
 				var n = _entAt[(row, col)];
-				if (IsSpinnerTier(tier)) continue;
 
 				if (rng.Randf() < 0.08f)
 				{
