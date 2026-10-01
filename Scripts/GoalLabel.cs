@@ -15,6 +15,7 @@ public partial class GoalLabel : VBoxContainer
 
 	private NucleusLayer _nucleusLayer;
 	private Label _label;
+	private Label _acceptLabel;
 	private ProgressBar _bar;
 	private int _seenVersion = -1;
 	private float _flash;
@@ -42,6 +43,14 @@ public partial class GoalLabel : VBoxContainer
 		};
 		AddChild(_bar);
 
+		// T028: что ЧД принимает сейчас.
+		_acceptLabel = new Label { HorizontalAlignment = HorizontalAlignment.Center, MouseFilter = MouseFilterEnum.Ignore, AutoTranslateMode = AutoTranslateModeEnum.Disabled };
+		_acceptLabel.AddThemeColorOverride("font_color", new Color(0.85f, 0.85f, 0.9f));
+		_acceptLabel.AddThemeColorOverride("font_outline_color", Colors.Black);
+		_acceptLabel.AddThemeConstantOverride("outline_size", 4);
+		_acceptLabel.AddThemeFontSizeOverride("font_size", 14);
+		AddChild(_acceptLabel);
+
 		SetAnchorsAndOffsetsPreset(LayoutPreset.CenterTop, LayoutPresetMode.KeepSize);
 		GrowHorizontal = GrowDirection.Both;
 		OffsetTop = 38f;
@@ -66,12 +75,14 @@ public partial class GoalLabel : VBoxContainer
 		{
 			_label.Text = Tr("Заданий нет: вся карта открыта (Esc → Новая игра — начать цепочку)");
 			_bar.Visible = false;
+			_acceptLabel.Visible = false;
 			return;
 		}
 		if (goals.AllDone)
 		{
 			_label.Text = Tr(goals.StageCount > 0 ? "Все задания выполнены" : "Заданий нет");
 			_bar.Visible = false;
+			_acceptLabel.Visible = false;
 			return;
 		}
 
@@ -91,6 +102,20 @@ public partial class GoalLabel : VBoxContainer
 		_bar.Visible = true;
 		_bar.MaxValue = System.Math.Max(1, need);
 		_bar.Value = done;
+
+		// T028: что принимает ЧД (правило — GoalChain.Accepts, NucleusLayer.BlackHoleAccepts).
+		_acceptLabel.Visible = true;
+		if (_nucleusLayer.Inventory.Sandbox)
+		{
+			_acceptLabel.Text = Tr("ЧД принимает всё (песочница)");
+		}
+		else
+		{
+			_sb.Clear();
+			for (int i = 0; i < stage.Requirements.Count; i++)
+				_sb.Append(i == 0 ? "" : ", ").Append(RequirementName(stage.Requirements[i]));
+			_acceptLabel.Text = string.Format(Tr("ЧД принимает: {0}"), _sb.ToString());
+		}
 	}
 
 	private string RequirementName(GoalRequirement req)
