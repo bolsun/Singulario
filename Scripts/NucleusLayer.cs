@@ -376,6 +376,8 @@ public partial class NucleusLayer : Node2D
 	public Texture2D CoreTexture => _coreTexture;
 	public Texture2D HoleTexture => _holeTexture;
 	public int TierCount => _tierCount;
+	// Атлас палитр тиров (строка тира — (tier + 0.5) / TierCount); для слоёв вида (T022).
+	public Texture2D PaletteAtlas { get; private set; }
 	public Color[] TierPreviewColors => _tierPreviewColors;
 	public float OrbitRadius => _orbitRadius;
 	// Порты чанков (T002) — одно место истины для слоя 1 (обмен частицами в
@@ -1392,6 +1394,7 @@ public partial class NucleusLayer : Node2D
 		if (paletteAtlas == null) return;
 
 		_tierCount = PalettePaths.Length;
+		PaletteAtlas = paletteAtlas;
 		_material = new ShaderMaterial { Shader = shader };
 		_material.SetShaderParameter("palette_tex", paletteAtlas);
 		_dotMaterial = (ShaderMaterial)_material.Duplicate();
