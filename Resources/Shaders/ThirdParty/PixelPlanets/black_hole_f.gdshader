@@ -16,6 +16,9 @@ render_mode blend_mix;
 
 uniform float phase = 0.0;
 uniform bool lod = false;
+// Во сколько раз рисунок крупнее оригинала: диск доходит до границ следа (в оригинале занимает 265 из 384 px
+// квада). Пиксельная сетка не меняется — пиксель всё так же 1 пиксель мира, растёт только рисунок.
+uniform float view_scale = 1.44;
 
 // Тело.
 uniform vec4 body_colors[3] : source_color;  // ядро, внутреннее кольцо, край
@@ -154,19 +157,23 @@ void fragment() {
 	float qp = max(v_quad_px, 3.0);
 	vec2 ip = min(floor(st * qp), vec2(qp - 1.0)); // целый пиксель квада
 	vec2 pc = (ip + 0.5) / qp;                      // его центр в долях квада
+	vec2 pc_raw = pc;
+	pc = vec2(0.5) + (pc - vec2(0.5)) / view_scale;  // координаты рисунка (крупнее сетки)
 
 	// Тело — средняя треть квада: свои координаты 0..1 по тому же пикселю.
 	float bp = qp / 3.0;
 	vec2 body = (ip + 0.5 - bp) / bp;
+	body = vec2(0.5) + (body - vec2(0.5)) / view_scale;
 	float bd = distance(body, vec2(0.5));
-	float ring_w = max(light_width, 2.0 / bp);
+	float px_body = 1.0 / (bp * view_scale);        // арт-пиксель в координатах рисунка тела
+	float ring_w = max(light_width, 2.0 * px_body);
 
 	vec4 res = vec4(0.0);
 	if (lod) {
-		float rw = max(light_width, 1.0 / bp);
+		float rw = max(light_width, px_body);
 		if (bd <= radius) res = bd > radius - rw ? body_colors[1] : body_colors[0];
 		// Горизонтальная полоса диска (не уже пикселя).
-		if (abs(pc.x - 0.5) < 0.45 && abs(pc.y - 0.5) <= max(0.012, 0.5 / qp) + 0.0001) res = disk_colors[2];
+		if (abs(pc.x - 0.5) < 0.45 && abs(pc_raw.y - 0.5) <= max(0.012, 0.5 / qp) + 0.0001) res = disk_colors[2];
 	} else {
 		if (bd <= radius) {
 			res = body_colors[0];
