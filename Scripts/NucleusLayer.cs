@@ -1468,6 +1468,12 @@ public partial class NucleusLayer : Node2D
 	// ПКМ, чтобы стереть сразу несколько ядер, не кликая по каждому отдельно.
 	private bool _rightMouseHeld;
 	private (int row, int col)? _lastRemovedCell;
+	// Очистка C (T035, см. TryClearAtMouse): зажатая C с движением мыши — протяжка,
+	// каждая клетка — один раз за нажатие.
+	private bool _clearKeyHeld;
+	private (int row, int col)? _lastClearedCell;
+	// Цвет вспышки следа при очистке C (отказ удаления — красный).
+	[Export] public Color ClearFlashColor = new Color(1f, 1f, 1f, 0.6f);
 	// Удаление с удержанием (T026): логика — RemoveHold, вид — RemoveHoldLayer.
 	// Время — реальное (delta кадра), в симуляцию и StateHash не входит.
 	[Export] public float RemoveHoldSecondsPerCell = 0.2f;
@@ -1849,6 +1855,20 @@ public partial class NucleusLayer : Node2D
 	// требует выбранного пресета на панели.
 	public override void _UnhandledInput(InputEvent @event)
 	{
+		// C — очистка объекта под курсором (T035); здесь, а не в _Input, — чтобы
+		// буква в поле ввода не очищала поле. Протяжка — в _Process.
+		if (@event is InputEventKey key && key.Keycode == Key.C)
+		{
+			if (key.Pressed && !key.Echo && !key.CtrlPressed && !key.AltPressed && !key.MetaPressed && !ViewLayer.IsLayer2)
+			{
+				_clearKeyHeld = true;
+				_lastClearedCell = null; // клетка под курсором очищается сразу же
+				TryClearAtMouse();
+				GetViewport().SetInputAsHandled();
+			}
+			else if (!key.Pressed) _clearKeyHeld = false;
+			return;
+		}
 		if (@event is not InputEventMouseButton mb) return;
 		// На слое 2 клики обрабатывает только слой молекул (см. ViewLayer).
 		if (ViewLayer.IsLayer2) return;
@@ -2032,7 +2052,7 @@ public partial class NucleusLayer : Node2D
 	// Меню паузы (дерево на паузе) — сброс удержания без удаления.
 	public override void _Notification(int what)
 	{
-		if (what == NotificationPaused) StopRemoveHold();
+		if (what == NotificationPaused) { StopRemoveHold(); _clearKeyHeld = false; }
 	}
 
 	// Сброс удержания (отпускание ПКМ, слой 2, пауза меню).
@@ -2151,6 +2171,66 @@ public partial class NucleusLayer : Node2D
 					count++;
 				}
 		return count;
+	}
+
+	// --- очистка C (T035) ---
+
+	// Каждый кадр, пока C зажата (см. _UnhandledInput/_Process): та же клетка
+	// повторно не очищается, пока курсор из неё не ушёл.
+	private void TryClearAtMouse()
+	{
+		var worldPos = GetGlobalMousePosition();
+		int col = Mathf.FloorToInt(worldPos.X / CellSize);
+		int row = Mathf.FloorToInt(worldPos.Y / CellSize);
+		if (_lastClearedCell.HasValue && _lastClearedCell.Value == (row, col)) return;
+		_lastClearedCell = (row, col);
+		if (!IsCellOpen(row, col)) return;
+		if (ClearAt(row, col) is RemoveTarget t)
+		{
+			Hints.MarkClear();
+			_removeHoldLayer?.Flash(t.Row, t.Col, t.Side, ClearFlashColor);
+		}
+	}
+
+	// Очищает содержимое объекта в клетке: звезда — входной буфер и работа, атом —
+	// кольцо, перекрёсток — стороны. Обломок, вращатель/бросатель, атом в полёте,
+	// ЧД, источник, пустая клетка — ничего. Атомы-предметы в настоящем режиме — в
+	// инвентарь, частицы сгорают. Возвращает след очищенного объекта (для вспышки)
+	// или null, если очищать было нечего.
+	private RemoveTarget? ClearAt(int row, int col)
+	{
+		if (Stars.TryGetAt(row, col, out var star))
+		{
+			if (!star.Producing && !star.HasBuffered) return null;
+			// Атомы буфера — в инвентарь; ингредиенты текущей работы уже потрачены.
+			if (!Inventory.Sandbox)
+				for (int tier = 0; tier < StarCatalog.ColorCount; tier++)
+				{
+					int count = star.Buffer[StarCatalog.SlotOf(IngredientKind.Atom, tier)];
+					if (count > 0) Inventory.Add(tier, count);
+				}
+			star.ClearInput();
+			// Приём в звезду (FeedStarsFromNeighbors) обходит все звёзды каждый тик — Touch не нужен.
+			return new RemoveTarget(1, star.Row, star.Col, star.Size);
+		}
+
+		if (!_entAt.TryGetValue((row, col), out var n)) return null;
+		if (n.IsCargo || IsSpinnerTier(n.CoreTier) || (n.IsMoving && n.IsFlying)) return null;
+		int refunded = RefundItemsToInventory(n);
+		bool had;
+		if (n.Cross != null) { had = !n.Cross.IsEmpty; n.Cross.Clear(); } // режим и выходы (OutRot) остаются
+		else had = ClearRing(n.Ring);
+		if (!had) return null;
+		// Содержимое изменилось в обход передачи: атом и соседи (могли стоять в
+		// заторе на полной дырке) — в проходы следующего тика.
+		Touch(n);
+		for (int idx = 0; idx < OrthogonalSlots.Length; idx++)
+		{
+			var (dr, dc) = Adj8[OrthogonalSlots[idx]];
+			if (_entAt.TryGetValue((n.Row + dr, n.Col + dc), out var y)) Touch(y);
+		}
+		if (refunded > 0) GD.Print($"[NucleusLayer] очищен атом ({row},{col}). В инвентарь: {refunded}.");
+		return new RemoveTarget(0, row, col, 1);
 	}
 
 	// --- перекрёсток (T010) ---
@@ -2295,6 +2375,12 @@ public partial class NucleusLayer : Node2D
 			// Отпускание ПКМ мог съесть GUI — сверяемся с реальным состоянием.
 			if (!Input.IsMouseButtonPressed(MouseButton.Right)) StopRemoveHold();
 			else TryRemoveAtMouse((float)delta);
+		}
+		if (_clearKeyHeld)
+		{
+			// Отпускание C могли съесть GUI или переход на слой 2 — сверяемся с реальным состоянием.
+			if (!Input.IsKeyPressed(Key.C) || ViewLayer.IsLayer2) _clearKeyHeld = false;
+			else TryClearAtMouse();
 		}
 		UpdatePlacementPreview();
 	}
@@ -4908,6 +4994,7 @@ public partial class NucleusLayer : Node2D
 	{
 		public bool Camera { get; set; } // W, A, S, D выполнено
 		public bool Grid { get; set; }   // G выполнено
+		public bool Clear { get; set; } = true; // C выполнено (T035); в старых сохранениях поля нет — пройдено
 	}
 
 	private class SavedGoals
@@ -5071,7 +5158,7 @@ public partial class NucleusLayer : Node2D
 				Stage = Goals.Stage, Baseline = new List<long>(Goals.Baseline),
 				Recipes = Goals.SortedRecipes(Catalog), Seed = Goals.Seed,
 			},
-			Hints = new SavedHints { Camera = Hints.CameraDone, Grid = Hints.GridDone },
+			Hints = new SavedHints { Camera = Hints.CameraDone, Grid = Hints.GridDone, Clear = Hints.ClearDone },
 		};
 		if (!Territory.AllOpen)
 		{
@@ -5181,7 +5268,7 @@ public partial class NucleusLayer : Node2D
 		// Задания — после объектов: счётчики ЧД уже восстановлены.
 		RestoreGoals(data.Goals, Inventory.Sandbox);
 		// Подсказка (T012): нет поля — пройдена.
-		Hints.Set(data.Hints?.Camera ?? true, data.Hints?.Grid ?? true);
+		Hints.Set(data.Hints?.Camera ?? true, data.Hints?.Grid ?? true, data.Hints?.Clear ?? true);
 		error = null;
 		return true;
 	}
